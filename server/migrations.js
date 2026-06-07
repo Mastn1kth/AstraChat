@@ -1,5 +1,12 @@
 export const migrations = [
   {
+    id: '20260607_pinned_messages',
+    sql: `
+      ALTER TABLE chats
+        ADD COLUMN IF NOT EXISTS pinned_message_id UUID REFERENCES messages(id) ON DELETE SET NULL;
+    `,
+  },
+  {
     id: '20260607_messenger_foundation',
     sql: `
       CREATE TABLE IF NOT EXISTS chat_user_settings (

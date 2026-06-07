@@ -32,6 +32,7 @@ import {
   chatFolderChatSettingsSchema,
   chatFolderSchema,
   chatSettingsSchema,
+  pinMessageSchema,
   createChatSchema,
   editMessageSchema,
   encryptionKeySchema,
@@ -707,7 +708,7 @@ app.delete('/api/users/me', requireAuth, async (request, response) => {
 
 app.get('/api/chats', requireAuth, async (request, response) => {
   const result = await db.query(
-    `SELECT c.id, c.type, c.title, c.created_at, cm.role,
+    `SELECT c.id, c.type, c.title, c.created_at, c.pinned_message_id, cm.role,
             cus.pinned, cus.pinned_at, cus.muted_until, cus.archived, cus.archived_at
      FROM chats c
      JOIN chat_members cm ON cm.chat_id = c.id
@@ -732,6 +733,7 @@ app.get('/api/chats', requireAuth, async (request, response) => {
       return {
         ...chat,
         settings: publicChatSettings(chat),
+        pinnedMessageId: chat.pinned_message_id || null,
         members: members.rows.map((member) => ({
           ...publicUser(member),
           role: member.role,
@@ -879,7 +881,6 @@ const SYSTEM_FOLDERS = [
   { id: 'personal', title: 'Personal', filter: 'private' },
   { id: 'groups', title: 'Groups', filter: 'group' },
   { id: 'channels', title: 'Channels', filter: 'channel' },
-  { id: 'bots', title: 'Bots', filter: 'bot' },
   { id: 'archived', title: 'Archived', filter: 'archived' },
 ]
 
@@ -1222,6 +1223,15 @@ app.get('/api/chats/:chatId/messages', requireAuth, async (request, response) =>
     response.status(404).json({ error: 'Chat not found' })
     return
   }
+  const limit = Math.min(100, Math.max(1, parseInt(request.query.limit, 10) || 50))
+  const before = request.query.before ? String(request.query.before) : null
+  const params = [request.params.chatId, request.user.id]
+  let beforeClause = ''
+  if (before) {
+    params.push(before)
+    beforeClause = `AND m.created_at < $${params.length}`
+  }
+  params.push(limit + 1)
   const result = await db.query(
     `SELECT m.id, m.chat_id, m.sender_id, m.media_id, m.reply_to_id, m.ciphertext, m.iv,
             m.auth_tag, m.encryption_version, m.created_at, m.edited_at, m.deleted_at,
@@ -1241,10 +1251,14 @@ app.get('/api/chats/:chatId/messages', requireAuth, async (request, response) =>
          SELECT 1 FROM message_user_deletions mud
          WHERE mud.message_id = m.id AND mud.user_id = $2
        )
-     ORDER BY m.created_at ASC
-     LIMIT 500`,
-    [request.params.chatId, request.user.id],
+       ${beforeClause}
+     ORDER BY m.created_at DESC
+     LIMIT $${params.length}`,
+    params,
   )
+  const hasMore = result.rows.length > limit
+  const pageRows = hasMore ? result.rows.slice(0, limit) : result.rows
+  pageRows.reverse()
   const reactionResult = await db.query(
     `SELECT mr.message_id, mr.emoji, COUNT(*)::integer AS count
      FROM message_reactions mr
@@ -1268,7 +1282,7 @@ app.get('/api/chats/:chatId/messages', requireAuth, async (request, response) =>
     [request.params.chatId],
   )
   const readMessages = new Set(readResult.rows.map((read) => read.message_id))
-  const messages = result.rows.map((message) => ({
+  const messages = pageRows.map((message) => ({
     id: message.id,
     chatId: message.chat_id,
     senderId: message.sender_id,
@@ -1305,7 +1319,7 @@ app.get('/api/chats/:chatId/messages', requireAuth, async (request, response) =>
         }
       : null,
   }))
-  response.json({ messages })
+  response.json({ messages, hasMore })
 })
 
 app.post('/api/chats/:chatId/messages', requireAuth, async (request, response) => {
@@ -1563,6 +1577,39 @@ app.post('/api/chats/:chatId/clear-history', requireAuth, async (request, respon
     [request.params.chatId, request.user.id, clearedAt],
   )
   response.json({ chatId: request.params.chatId, clearedAt })
+})
+
+app.patch('/api/chats/:chatId/pinned-message', requireAuth, async (request, response) => {
+  const chat = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!chat) {
+    response.status(404).json({ error: 'Chat not found' })
+    return
+  }
+  const input = parseBody(pinMessageSchema, request.body)
+
+  if (input.messageId) {
+    const msgResult = await db.query(
+      'SELECT id FROM messages WHERE id = $1 AND chat_id = $2 AND deleted_at IS NULL LIMIT 1',
+      [input.messageId, request.params.chatId],
+    )
+    if (!msgResult.rows.length) {
+      response.status(404).json({ error: 'Message not found' })
+      return
+    }
+  }
+
+  await db.query('UPDATE chats SET pinned_message_id = $1 WHERE id = $2', [
+    input.messageId,
+    request.params.chatId,
+  ])
+
+  const payload = {
+    type: 'chat:pinned-message',
+    chatId: request.params.chatId,
+    messageId: input.messageId,
+  }
+  await sendToChat(request.params.chatId, payload)
+  response.json(payload)
 })
 
 app.post('/api/chats/:chatId/messages/:messageId/reactions', requireAuth, async (request, response) => {

@@ -65,6 +65,10 @@ export const chatFolderChatSettingsSchema = z.object({
   pinned: z.boolean(),
 })
 
+export const pinMessageSchema = z.object({
+  messageId: z.string().uuid().nullable(),
+})
+
 export const encryptionKeySchema = z.object({
   encryptionPublicKey: publicKeySchema,
 })
