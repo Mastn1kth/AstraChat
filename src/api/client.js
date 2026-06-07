@@ -103,6 +103,10 @@ export function getChats() {
   return request('/api/chats')
 }
 
+export function searchEverything(query = '') {
+  return request(`/api/search?q=${encodeURIComponent(query)}`)
+}
+
 export function createChat(input) {
   return request('/api/chats', {
     method: 'POST',
@@ -110,8 +114,51 @@ export function createChat(input) {
   })
 }
 
+export function updateChatSettings(chatId, input) {
+  return request(`/api/chats/${encodeURIComponent(chatId)}/settings`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
+export function getChatFolders() {
+  return request('/api/chat-folders')
+}
+
+export function createChatFolder(input) {
+  return request('/api/chat-folders', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function updateChatFolder(folderId, input) {
+  return request(`/api/chat-folders/${encodeURIComponent(folderId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
+export function deleteChatFolder(folderId) {
+  return request(`/api/chat-folders/${encodeURIComponent(folderId)}`, { method: 'DELETE' })
+}
+
+export function updateChatFolderChat(folderId, chatId, input) {
+  return request(
+    `/api/chat-folders/${encodeURIComponent(folderId)}/chats/${encodeURIComponent(chatId)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    },
+  )
+}
+
 export function getChatMessages(chatId) {
   return request(`/api/chats/${encodeURIComponent(chatId)}/messages`)
+}
+
+export function searchChatMessages(chatId, query = '') {
+  return request(`/api/chats/${encodeURIComponent(chatId)}/search?q=${encodeURIComponent(query)}`)
 }
 
 export function sendChatMessage(chatId, input) {
@@ -136,6 +183,17 @@ export function deleteChatMessage(chatId, messageId) {
     `/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}`,
     { method: 'DELETE' },
   )
+}
+
+export function deleteChatMessageForMe(chatId, messageId) {
+  return request(
+    `/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/delete-for-me`,
+    { method: 'POST' },
+  )
+}
+
+export function clearChatHistory(chatId) {
+  return request(`/api/chats/${encodeURIComponent(chatId)}/clear-history`, { method: 'POST' })
 }
 
 export function toggleMessageReaction(chatId, messageId, emoji) {
