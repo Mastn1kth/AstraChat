@@ -429,6 +429,7 @@ export default function App() {
   const [selectedChatId, setSelectedChatId] = useState(() => state.chats.find((chat) => !chat.archived)?.id || '')
   const [selectedFolderId, setSelectedFolderId] = useState('all')
   const [hasMoreMessages, setHasMoreMessages] = useState({})
+  const [unreadFromId, setUnreadFromId] = useState({}) // chatId → first unread message id
   const [selectedMessageIds, setSelectedMessageIds] = useState(new Set())
   const [sidebarSearch, setSidebarSearch] = useState('')
   const [messageSearch, setMessageSearch] = useState('')
@@ -700,6 +701,39 @@ export default function App() {
         return
       }
 
+      if (payload.type === 'chat:info-updated' && payload.chatId) {
+        setState((current) => ({
+          ...current,
+          contacts: current.contacts.map((c) =>
+            c.id === `entity-${payload.chatId}` ? { ...c, name: payload.title } : c,
+          ),
+        }))
+        return
+      }
+
+      if (payload.type === 'chat:member-added' && payload.chatId) {
+        // Reload workspace so member lists and encryption keys are fresh
+        loadServerWorkspace(state.user.id).catch(() => {})
+        return
+      }
+
+      if (payload.type === 'chat:member-removed' && payload.chatId) {
+        if (payload.userId === state.user.id) {
+          // We were removed — drop the chat from local state
+          setState((current) => ({
+            ...current,
+            chats: current.chats.filter((c) => c.id !== payload.chatId),
+          }))
+          if (selectedChatIdRef.current === payload.chatId) {
+            setSelectedChatId('')
+            setUi((current) => ({ ...current, mobilePane: 'list' }))
+          }
+        } else {
+          loadServerWorkspace(state.user.id).catch(() => {})
+        }
+        return
+      }
+
       if (payload.type === 'message:new' && payload.message?.chatId) {
         void normalizeServerMessage(payload.message, state.user.id).then((message) => {
           setState((current) => {
@@ -707,10 +741,16 @@ export default function App() {
             const currentMessages = current.messages[chatId] || []
             if (currentMessages.some((item) => item.id === message.id)) return current
 
+            const isActiveChat = selectedChatIdRef.current === chatId
+            // Track first unread message id for the separator
+            if (!isActiveChat && payload.message.senderId !== current.user?.id) {
+              setUnreadFromId((prev) => prev[chatId] ? prev : { ...prev, [chatId]: message.id })
+            }
+
             return {
               ...current,
               chats: current.chats.map((chat) =>
-                chat.id === chatId && selectedChatIdRef.current !== chatId
+                chat.id === chatId && !isActiveChat
                   ? { ...chat, unread: (chat.unread || 0) + 1 }
                   : chat,
               ),
@@ -1036,6 +1076,20 @@ export default function App() {
     return () => window.removeEventListener('astrachat:toast', handler)
   }, [showToast])
 
+  useEffect(() => {
+    const handleUpdate = () => showToast('Update available — reload to apply.')
+    const handleOpenChat = (e) => {
+      const chatId = e.detail?.chatId
+      if (chatId) selectChatRef.current?.(chatId)
+    }
+    window.addEventListener('astrachat:update-ready', handleUpdate)
+    window.addEventListener('astrachat:open-chat', handleOpenChat)
+    return () => {
+      window.removeEventListener('astrachat:update-ready', handleUpdate)
+      window.removeEventListener('astrachat:open-chat', handleOpenChat)
+    }
+  }, [])
+
   const chatSummaries = useMemo(() => {
     return state.chats
       .map((chat) => {
@@ -1239,6 +1293,12 @@ export default function App() {
       ...current,
       chats: current.chats.map((chat) => (chat.id === chatId ? { ...chat, unread: 0 } : chat)),
     }))
+    setUnreadFromId((current) => {
+      if (!current[chatId]) return current
+      const next = { ...current }
+      delete next[chatId]
+      return next
+    })
     if (chat?.backend) {
       loadMessagesFromServer(chatId)
       sendSocketEvent({ type: 'chat:read', chatId })
@@ -2366,6 +2426,7 @@ export default function App() {
       onForwardMessage={forwardMessageToChat}
       onSelectMessage={(id) => setSelectedMessageId((current) => (current === id ? '' : id))}
       hasMoreMessages={hasMoreMessages[selectedChatId] || false}
+      unreadFromId={unreadFromId[selectedChatId] || null}
       selectedMessageIds={selectedMessageIds}
       onLoadMoreMessages={loadMoreMessages}
       onToggleMessageSelection={toggleMessageSelection}

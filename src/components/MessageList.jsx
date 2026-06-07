@@ -24,6 +24,7 @@ export default function MessageList({
   onForwardMessage,
   onPinMessage,
   onRetryMessage,
+  unreadFromId,
 }) {
   const listRef = useRef(null)
   const bottomRef = useRef(null)
@@ -106,6 +107,8 @@ export default function MessageList({
         const matched =
           search.trim() && message.text?.toLowerCase().includes(search.trim().toLowerCase())
 
+        const showUnreadSeparator = unreadFromId && message.id === unreadFromId
+
         return (
           <div
             key={message.id}
@@ -116,6 +119,7 @@ export default function MessageList({
             }}
           >
             {showDivider && <div className="date-divider">{formatDateDivider(message.time)}</div>}
+            {showUnreadSeparator && <div className="unread-separator"><span>New messages</span></div>}
             <MessageBubble
               message={message}
               highlighted={message.id === highlightId}

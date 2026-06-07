@@ -41,6 +41,7 @@ export default function AppShell({
   onForwardSelectedMessages,
   onPinMessage,
   onRetryMessage,
+  unreadFromId,
   onSelectChat,
   onSelectFolder,
   onSidebarSearch,
@@ -245,6 +246,7 @@ export default function AppShell({
               onForwardMessage={setForwardMessage}
               onPinMessage={onPinMessage}
               onRetryMessage={onRetryMessage}
+              unreadFromId={unreadFromId}
             />
             {multiSelectMode ? (
               <div className="multiselect-bar">

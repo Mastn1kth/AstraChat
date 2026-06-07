@@ -57,8 +57,8 @@ Goal: move mock Telegram-like surfaces to real server-backed behavior.
 - [x] Multi-select messages (checkbox mode, bulk forward/delete bar).
 - [x] Clear history and delete-for-me.
 - [ ] Link previews with disable-preview option.
-- [ ] Message formatting: bold, italic, code, quote, spoiler.
-- [ ] Date separators and unread separators.
+- [x] Message formatting: bold, italic, code, quote, spoiler (inline parser + format toolbar in Composer).
+- [x] Unread message separator (shows "New messages" divider when reopening a chat with unread).
 - [ ] Shared media/files/links gallery.
 
 ## Phase 3 - Groups and Channels
@@ -133,6 +133,8 @@ Goal: stop treating local MVP infrastructure as production.
 - [ ] Push notification service.
 - [ ] Backups and restore procedure.
 - [ ] Observability: structured logs, metrics, health checks and alerts.
+- [x] PWA manifest + service worker (offline caching, installable, push notification stub).
+- [ ] VAPID push notification service (server-side push to offline users).
 - [ ] Docker/deploy setup.
 
 ## Definition of Done

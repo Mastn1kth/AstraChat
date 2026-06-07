@@ -3384,6 +3384,74 @@ textarea::placeholder {
   background: #2a3035;
 }
 
+/* ── Composer format bar ───────────────────────────────────────────────────── */
+.format-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 10px;
+  background: var(--bg-secondary, #f0f2f5);
+  border-bottom: 1px solid var(--border, #e0e0e0);
+  flex-wrap: wrap;
+}
+.format-bar button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 28px;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  color: var(--text-secondary, #707579);
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 0.12s, color 0.12s;
+}
+.format-bar button:hover {
+  background: var(--bg-hover, #e4e6ea);
+  color: #3390ec;
+}
+.format-quote-icon { font-size: 18px; font-weight: 700; line-height: 1; }
+.format-bar-hint {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-secondary, #aaa);
+  white-space: nowrap;
+}
+
+[data-theme='dark'] .format-bar {
+  background: #1e2428;
+  border-bottom-color: #2a3035;
+}
+
+/* ── Unread messages separator ─────────────────────────────────────────────── */
+.unread-separator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px;
+  margin: 4px 0;
+}
+.unread-separator::before,
+.unread-separator::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #3390ec;
+  opacity: 0.4;
+}
+.unread-separator span {
+  font-size: 12px;
+  color: #3390ec;
+  font-weight: 500;
+  white-space: nowrap;
+  padding: 2px 8px;
+  background: rgba(51, 144, 236, 0.1);
+  border-radius: 10px;
+}
+
 /* ── Text formatting ───────────────────────────────────────────────────────── */
 .message-text strong { font-weight: 600; }
 .message-text em { font-style: italic; }

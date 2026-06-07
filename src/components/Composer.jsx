@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { FileText, FileVideo2, Image, LoaderCircle, Mic, Music, Paperclip, Send, Smile, Trash2, X } from 'lucide-react'
+import { Bold, Code, FileText, FileVideo2, Image, Italic, LoaderCircle, Mic, Music, Paperclip, Send, Smile, Strikethrough, Trash2, X } from 'lucide-react'
 import IconButton from './IconButton'
 
 const emojiSet = [
@@ -67,6 +67,7 @@ export default function Composer({
   const [sending, setSending] = useState(false)
   const [recording, setRecording] = useState(false)
   const [recordSeconds, setRecordSeconds] = useState(0)
+  const [formatBarOpen, setFormatBarOpen] = useState(false)
   const inputRef = useRef(null)
   const fileInputRef = useRef(null)
   const emojiPopoverRef = useRef(null)
@@ -142,6 +143,23 @@ export default function Composer({
     }
   }, [])
 
+  // Wrap selected text in formatting markers (or insert markers at cursor)
+  const wrapSelection = useCallback((prefix, suffix) => {
+    const el = inputRef.current
+    if (!el) return
+    const start = el.selectionStart
+    const end = el.selectionEnd
+    const selected = value.slice(start, end)
+    const newValue = value.slice(0, start) + prefix + selected + suffix + value.slice(end)
+    setValue(newValue)
+    const newCursor = selected ? start + prefix.length : start + prefix.length
+    const newEnd = selected ? end + prefix.length : start + prefix.length
+    window.requestAnimationFrame(() => {
+      el.focus()
+      el.setSelectionRange(newCursor, newEnd)
+    })
+  }, [value])
+
   function clearDraft() {
     if (!draftKey) return
     try {
@@ -186,6 +204,15 @@ export default function Composer({
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
       submit()
+      return
+    }
+    // Formatting shortcuts
+    if (event.ctrlKey || event.metaKey) {
+      if (event.key === 'b') { event.preventDefault(); wrapSelection('**', '**'); return }
+      if (event.key === 'i') { event.preventDefault(); wrapSelection('_', '_'); return }
+      if (event.key === 'e') { event.preventDefault(); wrapSelection('`', '`'); return }
+      if (event.key === 'u' && event.shiftKey) { event.preventDefault(); wrapSelection('> ', ''); return }
+      if (event.key === 'x' && event.shiftKey) { event.preventDefault(); wrapSelection('||', '||'); return }
     }
   }
 
@@ -338,6 +365,19 @@ export default function Composer({
         </div>
       )}
 
+      {formatBarOpen && !recording && (
+        <div className="format-bar">
+          <button type="button" title="Bold (Ctrl+B)" onClick={() => wrapSelection('**', '**')}><Bold size={15} /></button>
+          <button type="button" title="Italic (Ctrl+I)" onClick={() => wrapSelection('_', '_')}><Italic size={15} /></button>
+          <button type="button" title="Code (Ctrl+E)" onClick={() => wrapSelection('`', '`')}><Code size={15} /></button>
+          <button type="button" title="Spoiler (Ctrl+Shift+X)" onClick={() => wrapSelection('||', '||')}><Strikethrough size={15} /></button>
+          <button type="button" title="Quote (Ctrl+Shift+U)" onClick={() => wrapSelection('> ', '')}>
+            <span className="format-quote-icon">&ldquo;</span>
+          </button>
+          <span className="format-bar-hint">Ctrl+B · Ctrl+I · Ctrl+E</span>
+        </div>
+      )}
+
       {recording ? (
         <div className="composer-row recording-row">
           <button className="recording-cancel" onClick={() => stopRecording(false)} aria-label="Cancel recording">
@@ -355,6 +395,13 @@ export default function Composer({
         <div className="composer-row">
           <IconButton label="Emoji, stickers and GIF" onClick={() => setEmojiOpen((open) => !open)}>
             <Smile size={21} />
+          </IconButton>
+          <IconButton
+            label="Text formatting"
+            onClick={() => setFormatBarOpen((open) => !open)}
+            className={formatBarOpen ? 'is-active' : ''}
+          >
+            <Bold size={19} />
           </IconButton>
           <IconButton label="Attachment" onClick={() => fileInputRef.current?.click()}>
             <Paperclip size={21} />
