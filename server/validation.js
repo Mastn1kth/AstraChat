@@ -29,14 +29,40 @@ export const createChatSchema = z.object({
 
 export const messageSchema = z.object({
   text: z.string().max(64000).default(''),
+  searchText: z.string().trim().max(64000).default(''),
   mediaId: z.string().uuid().optional(),
   replyToId: z.string().uuid().optional(),
+  forwardedFromMessageId: z.string().uuid().optional(),
 }).refine((message) => message.text.trim().length > 0 || message.mediaId, {
   message: 'Message text or media is required',
 })
 
 export const editMessageSchema = z.object({
   text: z.string().trim().min(1).max(64000),
+  searchText: z.string().trim().max(64000).default(''),
+})
+
+export const chatSettingsSchema = z.object({
+  pinned: z.boolean().optional(),
+  muted: z.boolean().optional(),
+  mutedUntil: z.string().datetime().nullable().optional(),
+  archived: z.boolean().optional(),
+})
+
+export const chatFolderSchema = z.object({
+  title: z.string().trim().min(1).max(48),
+  icon: z.string().trim().max(32).default(''),
+  chatIds: z.array(z.string().uuid()).max(200).default([]),
+})
+
+export const updateChatFolderSchema = z.object({
+  title: z.string().trim().min(1).max(48).optional(),
+  icon: z.string().trim().max(32).optional(),
+  chatIds: z.array(z.string().uuid()).max(200).optional(),
+})
+
+export const chatFolderChatSettingsSchema = z.object({
+  pinned: z.boolean(),
 })
 
 export const encryptionKeySchema = z.object({

@@ -29,6 +29,9 @@ import { compressAvatar, compressImage, compressVideo, getMediaKind, mediaUpload
 import {
   callSchema,
   changePasswordSchema,
+  chatFolderChatSettingsSchema,
+  chatFolderSchema,
+  chatSettingsSchema,
   createChatSchema,
   editMessageSchema,
   encryptionKeySchema,
@@ -38,6 +41,7 @@ import {
   profileSchema,
   reactionSchema,
   registerSchema,
+  updateChatFolderSchema,
 } from './validation.js'
 
 const app = express()
@@ -100,6 +104,38 @@ function parseBooleanFormValue(value) {
 
 function isDatabaseTrue(value) {
   return value === true || value === 'true' || value === 't' || value === 1 || value === '1'
+}
+
+const INDEFINITE_MUTE_UNTIL = '9999-12-31T23:59:59.000Z'
+
+function normalizeSearchText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 64000)
+}
+
+function normalizeSearchQuery(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 120)
+}
+
+function normalizeFolderTitle(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+function isFutureTimestamp(value) {
+  if (!value) return false
+  const time = new Date(value).getTime()
+  return Number.isFinite(time) && time > Date.now()
+}
+
+function publicChatSettings(row = {}) {
+  const mutedUntil = row.muted_until || null
+  return {
+    pinned: isDatabaseTrue(row.pinned),
+    pinnedAt: row.pinned_at || null,
+    muted: isFutureTimestamp(mutedUntil),
+    mutedUntil,
+    archived: isDatabaseTrue(row.archived),
+    archivedAt: row.archived_at || null,
+  }
 }
 
 function parseOptionalInteger(value) {
@@ -205,6 +241,46 @@ async function isChatMember(chatId, userId) {
     [chatId, userId],
   )
   return result.rows.length > 0
+}
+
+async function requireChatMemberRow(chatId, userId) {
+  const result = await db.query(
+    `SELECT c.id, c.type, c.title, cm.role
+     FROM chats c
+     JOIN chat_members cm ON cm.chat_id = c.id
+     WHERE c.id = $1 AND cm.user_id = $2
+     LIMIT 1`,
+    [chatId, userId],
+  )
+  return result.rows[0] || null
+}
+
+async function ensureChatSettings(chatId, userId) {
+  const result = await db.query(
+    `INSERT INTO chat_user_settings (chat_id, user_id)
+     VALUES ($1, $2)
+     ON CONFLICT (chat_id, user_id) DO UPDATE SET updated_at = chat_user_settings.updated_at
+     RETURNING pinned, pinned_at, muted_until, archived, archived_at`,
+    [chatId, userId],
+  )
+  return result.rows[0]
+}
+
+async function validateMemberChatIds(userId, chatIds) {
+  const uniqueChatIds = [...new Set(chatIds)]
+  if (!uniqueChatIds.length) return []
+  const result = await db.query(
+    `SELECT chat_id
+     FROM chat_members
+     WHERE user_id = $1 AND chat_id = ANY($2::uuid[])`,
+    [userId, uniqueChatIds],
+  )
+  if (result.rows.length !== uniqueChatIds.length) {
+    const error = new Error('One or more chats are not available')
+    error.status = 400
+    throw error
+  }
+  return uniqueChatIds
 }
 
 async function getReactionCounts(messageId) {
@@ -631,11 +707,14 @@ app.delete('/api/users/me', requireAuth, async (request, response) => {
 
 app.get('/api/chats', requireAuth, async (request, response) => {
   const result = await db.query(
-    `SELECT c.id, c.type, c.title, c.created_at, cm.role
+    `SELECT c.id, c.type, c.title, c.created_at, cm.role,
+            cus.pinned, cus.pinned_at, cus.muted_until, cus.archived, cus.archived_at
      FROM chats c
      JOIN chat_members cm ON cm.chat_id = c.id
+     LEFT JOIN chat_user_settings cus
+       ON cus.chat_id = c.id AND cus.user_id = cm.user_id
      WHERE cm.user_id = $1
-     ORDER BY c.created_at DESC`,
+     ORDER BY COALESCE(cus.pinned_at, c.created_at) DESC, c.created_at DESC`,
     [request.user.id],
   )
 
@@ -652,6 +731,7 @@ app.get('/api/chats', requireAuth, async (request, response) => {
       )
       return {
         ...chat,
+        settings: publicChatSettings(chat),
         members: members.rows.map((member) => ({
           ...publicUser(member),
           role: member.role,
@@ -683,7 +763,15 @@ app.post('/api/chats', requireAuth, async (request, response) => {
       [request.user.id, input.memberIds[0]],
     )
     if (existing.rows[0]) {
-      response.json({ chat: { id: existing.rows[0].id, ...input }, existing: true })
+      const settings = await ensureChatSettings(existing.rows[0].id, request.user.id)
+      response.json({
+        chat: {
+          id: existing.rows[0].id,
+          ...input,
+          settings: publicChatSettings(settings),
+        },
+        existing: true,
+      })
       return
     }
   }
@@ -705,9 +793,428 @@ app.post('/api/chats', requireAuth, async (request, response) => {
         'INSERT INTO chat_members (chat_id, user_id, role) VALUES ($1, $2, $3)',
         [chatId, memberId, memberId === request.user.id ? 'owner' : 'member'],
       )
+      await tx.query(
+        `INSERT INTO chat_user_settings (chat_id, user_id)
+         VALUES ($1, $2)
+         ON CONFLICT (chat_id, user_id) DO NOTHING`,
+        [chatId, memberId],
+      )
     }
   })
-  response.status(201).json({ chat: { id: chatId, ...input } })
+  response.status(201).json({
+    chat: {
+      id: chatId,
+      ...input,
+      settings: publicChatSettings(),
+    },
+  })
+})
+
+app.patch('/api/chats/:chatId/settings', requireAuth, async (request, response) => {
+  const chat = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!chat) {
+    response.status(404).json({ error: 'Chat not found' })
+    return
+  }
+
+  const input = parseBody(chatSettingsSchema, request.body)
+  const current = await ensureChatSettings(request.params.chatId, request.user.id)
+  const now = new Date().toISOString()
+
+  const pinned = input.pinned ?? isDatabaseTrue(current.pinned)
+  const pinnedAt = input.pinned === undefined
+    ? current.pinned_at || null
+    : input.pinned
+      ? now
+      : null
+
+  const archived = input.archived ?? isDatabaseTrue(current.archived)
+  const archivedAt = input.archived === undefined
+    ? current.archived_at || null
+    : input.archived
+      ? now
+      : null
+
+  let mutedUntil = current.muted_until || null
+  if (Object.prototype.hasOwnProperty.call(input, 'mutedUntil')) {
+    mutedUntil = input.mutedUntil
+  }
+  if (Object.prototype.hasOwnProperty.call(input, 'muted')) {
+    mutedUntil = input.muted ? (input.mutedUntil || INDEFINITE_MUTE_UNTIL) : null
+  }
+
+  const result = await db.query(
+    `UPDATE chat_user_settings
+     SET pinned = $1,
+         pinned_at = $2,
+         muted_until = $3,
+         archived = $4,
+         archived_at = $5,
+         updated_at = NOW()
+     WHERE chat_id = $6 AND user_id = $7
+     RETURNING pinned, pinned_at, muted_until, archived, archived_at`,
+    [
+      pinned,
+      pinnedAt,
+      mutedUntil,
+      archived,
+      archivedAt,
+      request.params.chatId,
+      request.user.id,
+    ],
+  )
+
+  const settings = publicChatSettings(result.rows[0])
+  sendToUser(request.user.id, {
+    type: 'chat:settings',
+    chatId: request.params.chatId,
+    settings,
+  })
+  response.json({ chatId: request.params.chatId, settings })
+})
+
+const SYSTEM_FOLDERS = [
+  { id: 'all', title: 'All', filter: 'all' },
+  { id: 'unread', title: 'Unread', filter: 'unread' },
+  { id: 'personal', title: 'Personal', filter: 'private' },
+  { id: 'groups', title: 'Groups', filter: 'group' },
+  { id: 'channels', title: 'Channels', filter: 'channel' },
+  { id: 'bots', title: 'Bots', filter: 'bot' },
+  { id: 'archived', title: 'Archived', filter: 'archived' },
+]
+
+app.get('/api/chat-folders', requireAuth, async (request, response) => {
+  const foldersResult = await db.query(
+    `SELECT id, title, icon, sort_order, created_at, updated_at
+     FROM chat_folders
+     WHERE user_id = $1
+     ORDER BY sort_order, created_at`,
+    [request.user.id],
+  )
+  const chatsResult = await db.query(
+    `SELECT folder_id, chat_id, pinned, pinned_at, added_at
+     FROM chat_folder_chats
+     WHERE user_id = $1
+     ORDER BY COALESCE(pinned_at, added_at) DESC, added_at DESC`,
+    [request.user.id],
+  )
+  const chatsByFolder = new Map()
+  chatsResult.rows.forEach((row) => {
+    const rows = chatsByFolder.get(row.folder_id) || []
+    rows.push({
+      chatId: row.chat_id,
+      pinned: isDatabaseTrue(row.pinned),
+      pinnedAt: row.pinned_at || null,
+      addedAt: row.added_at,
+    })
+    chatsByFolder.set(row.folder_id, rows)
+  })
+
+  response.json({
+    systemFolders: SYSTEM_FOLDERS,
+    folders: foldersResult.rows.map((folder) => ({
+      id: folder.id,
+      title: folder.title,
+      icon: folder.icon,
+      sortOrder: folder.sort_order,
+      createdAt: folder.created_at,
+      updatedAt: folder.updated_at,
+      chats: chatsByFolder.get(folder.id) || [],
+    })),
+  })
+})
+
+app.post('/api/chat-folders', requireAuth, async (request, response) => {
+  const input = parseBody(chatFolderSchema, request.body)
+  const chatIds = await validateMemberChatIds(request.user.id, input.chatIds)
+  const folderId = randomUUID()
+  const normalizedTitle = normalizeFolderTitle(input.title)
+  const sortResult = await db.query(
+    'SELECT COALESCE(MAX(sort_order), 0)::integer AS sort_order FROM chat_folders WHERE user_id = $1',
+    [request.user.id],
+  )
+  const sortOrder = Number(sortResult.rows[0]?.sort_order || 0) + 1
+
+  try {
+    await db.transaction(async (tx) => {
+      await tx.query(
+        `INSERT INTO chat_folders
+          (id, user_id, title, normalized_title, icon, sort_order)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [folderId, request.user.id, input.title, normalizedTitle, input.icon, sortOrder],
+      )
+      for (const chatId of chatIds) {
+        await tx.query(
+          `INSERT INTO chat_folder_chats (folder_id, chat_id, user_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (folder_id, chat_id) DO NOTHING`,
+          [folderId, chatId, request.user.id],
+        )
+      }
+    })
+  } catch (error) {
+    if (error.code === '23505') {
+      response.status(409).json({ error: 'Folder title already exists' })
+      return
+    }
+    throw error
+  }
+
+  response.status(201).json({
+    folder: {
+      id: folderId,
+      title: input.title,
+      icon: input.icon,
+      sortOrder,
+      chats: chatIds.map((chatId) => ({ chatId, pinned: false, pinnedAt: null })),
+    },
+  })
+})
+
+app.patch('/api/chat-folders/:folderId', requireAuth, async (request, response) => {
+  const input = parseBody(updateChatFolderSchema, request.body)
+  const existing = await db.query(
+    `SELECT id, title, icon, sort_order
+     FROM chat_folders
+     WHERE id = $1 AND user_id = $2
+     LIMIT 1`,
+    [request.params.folderId, request.user.id],
+  )
+  if (!existing.rows.length) {
+    response.status(404).json({ error: 'Folder not found' })
+    return
+  }
+
+  const chatIds = input.chatIds ? await validateMemberChatIds(request.user.id, input.chatIds) : null
+  const nextTitle = input.title ?? existing.rows[0].title
+  const nextIcon = input.icon ?? existing.rows[0].icon
+
+  try {
+    await db.transaction(async (tx) => {
+      await tx.query(
+        `UPDATE chat_folders
+         SET title = $1,
+             normalized_title = $2,
+             icon = $3,
+             updated_at = NOW()
+         WHERE id = $4 AND user_id = $5`,
+        [
+          nextTitle,
+          normalizeFolderTitle(nextTitle),
+          nextIcon,
+          request.params.folderId,
+          request.user.id,
+        ],
+      )
+      if (chatIds) {
+        await tx.query(
+          'DELETE FROM chat_folder_chats WHERE folder_id = $1 AND user_id = $2',
+          [request.params.folderId, request.user.id],
+        )
+        for (const chatId of chatIds) {
+          await tx.query(
+            `INSERT INTO chat_folder_chats (folder_id, chat_id, user_id)
+             VALUES ($1, $2, $3)`,
+            [request.params.folderId, chatId, request.user.id],
+          )
+        }
+      }
+    })
+  } catch (error) {
+    if (error.code === '23505') {
+      response.status(409).json({ error: 'Folder title already exists' })
+      return
+    }
+    throw error
+  }
+
+  response.json({
+    folder: {
+      id: request.params.folderId,
+      title: nextTitle,
+      icon: nextIcon,
+      sortOrder: existing.rows[0].sort_order,
+      chats: chatIds?.map((chatId) => ({ chatId, pinned: false, pinnedAt: null })) || undefined,
+    },
+  })
+})
+
+app.delete('/api/chat-folders/:folderId', requireAuth, async (request, response) => {
+  const result = await db.query(
+    'DELETE FROM chat_folders WHERE id = $1 AND user_id = $2 RETURNING id',
+    [request.params.folderId, request.user.id],
+  )
+  if (!result.rows.length) {
+    response.status(404).json({ error: 'Folder not found' })
+    return
+  }
+  response.status(204).end()
+})
+
+app.patch('/api/chat-folders/:folderId/chats/:chatId', requireAuth, async (request, response) => {
+  const input = parseBody(chatFolderChatSettingsSchema, request.body)
+  const folderResult = await db.query(
+    `SELECT id
+     FROM chat_folders
+     WHERE id = $1 AND user_id = $2
+     LIMIT 1`,
+    [request.params.folderId, request.user.id],
+  )
+  if (!folderResult.rows.length) {
+    response.status(404).json({ error: 'Folder not found' })
+    return
+  }
+  if (!(await isChatMember(request.params.chatId, request.user.id))) {
+    response.status(404).json({ error: 'Chat not found' })
+    return
+  }
+
+  const pinnedAt = input.pinned ? new Date().toISOString() : null
+  const result = await db.query(
+    `UPDATE chat_folder_chats
+     SET pinned = $1, pinned_at = $2
+     WHERE folder_id = $3 AND chat_id = $4 AND user_id = $5
+     RETURNING folder_id, chat_id, pinned, pinned_at, added_at`,
+    [
+      input.pinned,
+      pinnedAt,
+      request.params.folderId,
+      request.params.chatId,
+      request.user.id,
+    ],
+  )
+  if (!result.rows.length) {
+    response.status(404).json({ error: 'Chat is not in this folder' })
+    return
+  }
+
+  const row = result.rows[0]
+  response.json({
+    folderId: row.folder_id,
+    chat: {
+      chatId: row.chat_id,
+      pinned: isDatabaseTrue(row.pinned),
+      pinnedAt: row.pinned_at || null,
+      addedAt: row.added_at,
+    },
+  })
+})
+
+app.get('/api/search', requireAuth, async (request, response) => {
+  const query = normalizeSearchQuery(request.query.q)
+  if (!query) {
+    response.json({ query, users: [], chats: [], messages: [] })
+    return
+  }
+
+  const [usersResult, chatsResult, messagesResult] = await Promise.all([
+    db.query(
+      `SELECT id, login, username, name, bio, avatar, last_seen_at, encryption_public_key
+       FROM users
+       WHERE id <> $1
+         AND (username ILIKE '%' || $2 || '%' OR name ILIKE '%' || $2 || '%')
+       ORDER BY name
+       LIMIT 20`,
+      [request.user.id, query],
+    ),
+    db.query(
+      `SELECT DISTINCT c.id, c.type, c.title, c.created_at
+       FROM chats c
+       JOIN chat_members mine ON mine.chat_id = c.id AND mine.user_id = $1
+       LEFT JOIN chat_members cm ON cm.chat_id = c.id
+       LEFT JOIN users u ON u.id = cm.user_id
+       WHERE c.title ILIKE '%' || $2 || '%'
+          OR u.username ILIKE '%' || $2 || '%'
+          OR u.name ILIKE '%' || $2 || '%'
+       ORDER BY c.created_at DESC
+       LIMIT 25`,
+      [request.user.id, query],
+    ),
+    db.query(
+      `SELECT m.id, m.chat_id, m.sender_id, m.created_at, m.search_text,
+              c.type AS chat_type, c.title AS chat_title
+       FROM messages m
+       JOIN chat_members mine ON mine.chat_id = m.chat_id AND mine.user_id = $1
+       JOIN chats c ON c.id = m.chat_id
+       LEFT JOIN chat_history_clears chc
+         ON chc.chat_id = m.chat_id AND chc.user_id = $1
+       WHERE m.deleted_at IS NULL
+         AND m.search_text <> ''
+         AND m.search_text ILIKE '%' || $2 || '%'
+         AND (chc.cleared_at IS NULL OR m.created_at > chc.cleared_at)
+         AND NOT EXISTS (
+           SELECT 1 FROM message_user_deletions mud
+           WHERE mud.message_id = m.id AND mud.user_id = $1
+         )
+       ORDER BY m.created_at DESC
+       LIMIT 50`,
+      [request.user.id, query],
+    ),
+  ])
+
+  response.json({
+    query,
+    users: usersResult.rows.map(publicUser),
+    chats: chatsResult.rows.map((chat) => ({
+      id: chat.id,
+      type: chat.type,
+      title: chat.title,
+      createdAt: chat.created_at,
+    })),
+    messages: messagesResult.rows.map((message) => ({
+      id: message.id,
+      chatId: message.chat_id,
+      senderId: message.sender_id,
+      createdAt: message.created_at,
+      preview: message.search_text,
+      chat: {
+        type: message.chat_type,
+        title: message.chat_title,
+      },
+    })),
+    messageSearchLimitedByEncryption: true,
+  })
+})
+
+app.get('/api/chats/:chatId/search', requireAuth, async (request, response) => {
+  if (!(await isChatMember(request.params.chatId, request.user.id))) {
+    response.status(404).json({ error: 'Chat not found' })
+    return
+  }
+  const query = normalizeSearchQuery(request.query.q)
+  if (!query) {
+    response.json({ query, messages: [], messageSearchLimitedByEncryption: true })
+    return
+  }
+  const result = await db.query(
+    `SELECT m.id, m.chat_id, m.sender_id, m.created_at, m.search_text
+     FROM messages m
+     LEFT JOIN chat_history_clears chc
+       ON chc.chat_id = m.chat_id AND chc.user_id = $2
+     WHERE m.chat_id = $1
+       AND m.deleted_at IS NULL
+       AND m.search_text <> ''
+       AND m.search_text ILIKE '%' || $3 || '%'
+       AND (chc.cleared_at IS NULL OR m.created_at > chc.cleared_at)
+       AND NOT EXISTS (
+         SELECT 1 FROM message_user_deletions mud
+         WHERE mud.message_id = m.id AND mud.user_id = $2
+       )
+     ORDER BY m.created_at DESC
+     LIMIT 100`,
+    [request.params.chatId, request.user.id, query],
+  )
+  response.json({
+    query,
+    messages: result.rows.map((message) => ({
+      id: message.id,
+      chatId: message.chat_id,
+      senderId: message.sender_id,
+      createdAt: message.created_at,
+      preview: message.search_text,
+    })),
+    messageSearchLimitedByEncryption: true,
+  })
 })
 
 app.get('/api/chats/:chatId/messages', requireAuth, async (request, response) => {
@@ -718,6 +1225,7 @@ app.get('/api/chats/:chatId/messages', requireAuth, async (request, response) =>
   const result = await db.query(
     `SELECT m.id, m.chat_id, m.sender_id, m.media_id, m.reply_to_id, m.ciphertext, m.iv,
             m.auth_tag, m.encryption_version, m.created_at, m.edited_at, m.deleted_at,
+            m.forwarded_from_message_id, m.forwarded_from_chat_id,
             mf.kind AS media_kind, mf.original_name AS media_name,
             mf.mime_type AS media_mime_type, mf.plain_size AS media_size,
             mf.original_size AS media_original_size, mf.width AS media_width,
@@ -725,10 +1233,17 @@ app.get('/api/chats/:chatId/messages', requireAuth, async (request, response) =>
             mf.media_envelope AS media_envelope, mf.duration_ms AS media_duration
      FROM messages m
      LEFT JOIN media_files mf ON mf.id = m.media_id
+     LEFT JOIN chat_history_clears chc
+       ON chc.chat_id = m.chat_id AND chc.user_id = $2
      WHERE m.chat_id = $1
+       AND (chc.cleared_at IS NULL OR m.created_at > chc.cleared_at)
+       AND NOT EXISTS (
+         SELECT 1 FROM message_user_deletions mud
+         WHERE mud.message_id = m.id AND mud.user_id = $2
+       )
      ORDER BY m.created_at ASC
      LIMIT 500`,
-    [request.params.chatId],
+    [request.params.chatId, request.user.id],
   )
   const reactionResult = await db.query(
     `SELECT mr.message_id, mr.emoji, COUNT(*)::integer AS count
@@ -768,6 +1283,9 @@ app.get('/api/chats/:chatId/messages', requireAuth, async (request, response) =>
     editedAt: message.edited_at,
     deletedAt: message.deleted_at,
     replyToId: message.reply_to_id,
+    forwarded: Boolean(message.forwarded_from_message_id),
+    forwardedFromMessageId: message.forwarded_from_message_id,
+    forwardedFromChatId: message.forwarded_from_chat_id,
     reactions: reactionsByMessage.get(message.id) || {},
     status: readMessages.has(message.id) ? 'read' : 'sent',
     media: message.media_id
@@ -808,6 +1326,26 @@ app.post('/api/chats/:chatId/messages', requireAuth, async (request, response) =
       return
     }
   }
+  let forwardedFromChatId = null
+  if (input.forwardedFromMessageId) {
+    const forwardResult = await db.query(
+      `SELECT m.id, m.chat_id
+       FROM messages m
+       JOIN chat_members cm ON cm.chat_id = m.chat_id AND cm.user_id = $2
+       WHERE m.id = $1 AND m.deleted_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM message_user_deletions mud
+           WHERE mud.message_id = m.id AND mud.user_id = $2
+         )
+       LIMIT 1`,
+      [input.forwardedFromMessageId, request.user.id],
+    )
+    if (!forwardResult.rows.length) {
+      response.status(400).json({ error: 'Forwarded message is not available' })
+      return
+    }
+    forwardedFromChatId = forwardResult.rows[0].chat_id
+  }
   let media = null
   if (input.mediaId) {
     const mediaResult = await db.query(
@@ -829,18 +1367,22 @@ app.post('/api/chats/:chatId/messages', requireAuth, async (request, response) =
   const messageId = randomUUID()
   await db.query(
     `INSERT INTO messages
-      (id, chat_id, sender_id, media_id, reply_to_id, ciphertext, iv, auth_tag, encryption_version)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      (id, chat_id, sender_id, media_id, reply_to_id, forwarded_from_message_id,
+       forwarded_from_chat_id, ciphertext, iv, auth_tag, encryption_version, search_text)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
     [
       messageId,
       request.params.chatId,
       request.user.id,
       input.mediaId || null,
       input.replyToId || null,
+      input.forwardedFromMessageId || null,
+      forwardedFromChatId,
       encrypted.ciphertext,
       encrypted.iv,
       encrypted.authTag,
       encrypted.version,
+      normalizeSearchText(input.searchText),
     ],
   )
   const publicMessage = {
@@ -850,6 +1392,9 @@ app.post('/api/chats/:chatId/messages', requireAuth, async (request, response) =
     text: input.text,
     createdAt: new Date().toISOString(),
     replyToId: input.replyToId || null,
+    forwarded: Boolean(input.forwardedFromMessageId),
+    forwardedFromMessageId: input.forwardedFromMessageId || null,
+    forwardedFromChatId,
     reactions: {},
     status: 'sent',
     media: media
@@ -905,14 +1450,20 @@ app.patch('/api/chats/:chatId/messages/:messageId', requireAuth, async (request,
   const editedAt = new Date().toISOString()
   await db.query(
     `UPDATE messages
-     SET ciphertext = $1, iv = $2, auth_tag = $3, encryption_version = $4, edited_at = $5
-     WHERE id = $6`,
+     SET ciphertext = $1,
+         iv = $2,
+         auth_tag = $3,
+         encryption_version = $4,
+         edited_at = $5,
+         search_text = $6
+     WHERE id = $7`,
     [
       encrypted.ciphertext,
       encrypted.iv,
       encrypted.authTag,
       encrypted.version,
       editedAt,
+      normalizeSearchText(input.searchText),
       request.params.messageId,
     ],
   )
@@ -963,6 +1514,55 @@ app.delete('/api/chats/:chatId/messages/:messageId', requireAuth, async (request
   }
   await sendToChat(request.params.chatId, payload)
   response.json(payload)
+})
+
+app.post('/api/chats/:chatId/messages/:messageId/delete-for-me', requireAuth, async (request, response) => {
+  if (!(await isChatMember(request.params.chatId, request.user.id))) {
+    response.status(404).json({ error: 'Chat not found' })
+    return
+  }
+  const messageResult = await db.query(
+    `SELECT id FROM messages
+     WHERE id = $1 AND chat_id = $2
+     LIMIT 1`,
+    [request.params.messageId, request.params.chatId],
+  )
+  if (!messageResult.rows.length) {
+    response.status(404).json({ error: 'Message not found' })
+    return
+  }
+
+  const deletedAt = new Date().toISOString()
+  await db.query(
+    `INSERT INTO message_user_deletions (message_id, user_id, deleted_at)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (message_id, user_id)
+     DO UPDATE SET deleted_at = EXCLUDED.deleted_at`,
+    [request.params.messageId, request.user.id, deletedAt],
+  )
+  response.json({
+    chatId: request.params.chatId,
+    messageId: request.params.messageId,
+    deletedForMe: true,
+    deletedAt,
+  })
+})
+
+app.post('/api/chats/:chatId/clear-history', requireAuth, async (request, response) => {
+  if (!(await isChatMember(request.params.chatId, request.user.id))) {
+    response.status(404).json({ error: 'Chat not found' })
+    return
+  }
+
+  const clearedAt = new Date().toISOString()
+  await db.query(
+    `INSERT INTO chat_history_clears (chat_id, user_id, cleared_at)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (chat_id, user_id)
+     DO UPDATE SET cleared_at = EXCLUDED.cleared_at`,
+    [request.params.chatId, request.user.id, clearedAt],
+  )
+  response.json({ chatId: request.params.chatId, clearedAt })
 })
 
 app.post('/api/chats/:chatId/messages/:messageId/reactions', requireAuth, async (request, response) => {
@@ -1301,7 +1901,14 @@ wss.on('connection', (socket, _request, user) => {
         }
         const unread = await db.query(
           `SELECT id FROM messages
-           WHERE chat_id = $1 AND sender_id <> $2 AND deleted_at IS NULL
+           LEFT JOIN chat_history_clears chc
+             ON chc.chat_id = messages.chat_id AND chc.user_id = $2
+           WHERE messages.chat_id = $1 AND sender_id <> $2 AND deleted_at IS NULL
+             AND (chc.cleared_at IS NULL OR messages.created_at > chc.cleared_at)
+             AND NOT EXISTS (
+               SELECT 1 FROM message_user_deletions mud
+               WHERE mud.message_id = messages.id AND mud.user_id = $2
+             )
              AND NOT EXISTS (
                SELECT 1 FROM message_reads mr
                WHERE mr.message_id = messages.id AND mr.user_id = $2
