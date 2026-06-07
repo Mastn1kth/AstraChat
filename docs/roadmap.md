@@ -34,7 +34,7 @@ Goal: make the existing messenger core reliable locally.
 - [x] 1:1 audio/video call signaling.
 - [ ] Backend pagination for long message history.
 - [ ] Robust optimistic UI retry queue.
-- [ ] Persist pinned/muted/archived chat state on backend.
+- [x] Persist pinned/muted/archived chat state on backend.
 - [ ] Add integration tests for auth, chats, messages, media and WebSocket flows.
 - [ ] Add e2e tests for the main user workflows.
 
@@ -46,15 +46,15 @@ Goal: move mock Telegram-like surfaces to real server-backed behavior.
 - [ ] QR login.
 - [ ] Two-factor password.
 - [ ] Contact list and contact import mock boundary.
-- [ ] Chat folders: All, Unread, Personal, Groups, Channels, Bots, Archived.
-- [ ] Archive chats.
-- [ ] Pinned chats and pinned messages.
-- [ ] Mute/unmute per chat with optional mute-until date.
-- [ ] Global search across users, chats and messages.
-- [ ] In-chat message search with jump-to-message.
-- [ ] Forward single and selected messages.
+- [ ] Chat folders: All, Unread, Personal, Groups, Channels, Archived. Backend contract exists; full UI is still missing.
+- [x] Archive chats.
+- [ ] Pinned chats and pinned messages. Backend pinned chats exist; pinned messages are still missing.
+- [ ] Mute/unmute per chat with optional mute-until date. Backend mute exists; full UI for mute-until is still missing.
+- [ ] Global search across users, chats and messages. Users/chats are server-backed; message search is limited by encrypted payloads unless `searchText` is provided.
+- [ ] In-chat message search with jump-to-message. Local loaded-message jump exists; server-side encrypted history search is limited by `searchText`.
+- [ ] Forward single and selected messages. Single-message backend metadata exists; multi-select is still missing.
 - [ ] Multi-select messages.
-- [ ] Clear history and delete-for-me.
+- [x] Clear history and delete-for-me.
 - [ ] Link previews with disable-preview option.
 - [ ] Message formatting: bold, italic, code, quote, spoiler.
 - [ ] Date separators and unread separators.
@@ -101,21 +101,15 @@ Goal: close the gap around expressive messaging.
 - [ ] Location/live location UI contract.
 - [ ] Contact card messages.
 
-## Phase 5 - Calls, Stories, Bots and Mini Apps
+## Phase 5 - Calls and Stories
 
-Goal: implement the larger Telegram-like product areas with honest mock boundaries while backend pieces are missing.
+Goal: implement real-time group calls and ephemeral stories.
 
 - [ ] Group voice chat.
 - [ ] Group video chat.
 - [ ] Call participants and call history.
 - [ ] Screen sharing with real media track support where available.
 - [ ] Stories list, viewer and privacy settings.
-- [ ] Bot accounts.
-- [ ] Bot commands and inline/reply keyboards.
-- [ ] Bot permissions in groups.
-- [ ] Mini app container, permissions and close/back flow.
-- [ ] Mock payments API contract.
-- [ ] Premium/stars module as a separate optional subsystem.
 
 ## Phase 6 - Security and Production Architecture
 
