@@ -153,8 +153,19 @@ export function updateChatFolderChat(folderId, chatId, input) {
   )
 }
 
-export function getChatMessages(chatId) {
-  return request(`/api/chats/${encodeURIComponent(chatId)}/messages`)
+export function getChatMessages(chatId, { before, limit } = {}) {
+  const params = new URLSearchParams()
+  if (before) params.set('before', before)
+  if (limit) params.set('limit', String(limit))
+  const qs = params.toString()
+  return request(`/api/chats/${encodeURIComponent(chatId)}/messages${qs ? `?${qs}` : ''}`)
+}
+
+export function pinChatMessage(chatId, messageId) {
+  return request(`/api/chats/${encodeURIComponent(chatId)}/pinned-message`, {
+    method: 'PATCH',
+    body: JSON.stringify({ messageId }),
+  })
 }
 
 export function searchChatMessages(chatId, query = '') {

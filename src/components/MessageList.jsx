@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown } from 'lucide-react'
+import { ArrowDown, ChevronUp } from 'lucide-react'
 import MessageBubble from './MessageBubble'
 import { formatDateDivider } from '../utils/formatters'
 
@@ -9,7 +9,12 @@ export default function MessageList({
   currentUser,
   search,
   selectedMessageId,
+  selectedMessageIds,
+  multiSelectMode,
+  hasMore,
   onSelectMessage,
+  onToggleMessageSelection,
+  onLoadMore,
   onStartReply,
   onStartEdit,
   onDeleteMessage,
@@ -17,6 +22,7 @@ export default function MessageList({
   onReact,
   onOpenMedia,
   onForwardMessage,
+  onPinMessage,
 }) {
   const listRef = useRef(null)
   const bottomRef = useRef(null)
@@ -87,6 +93,11 @@ export default function MessageList({
 
   return (
     <section className="message-list" ref={listRef} onScroll={handleScroll}>
+      {hasMore && (
+        <button className="load-more-button" onClick={onLoadMore}>
+          <ChevronUp size={15} /> Load earlier messages
+        </button>
+      )}
       {messages.map((message, index) => {
         const dateKey = new Date(message.time).toDateString()
         const previousDateKey = index > 0 ? new Date(messages[index - 1].time).toDateString() : ''
@@ -97,6 +108,7 @@ export default function MessageList({
         return (
           <div
             key={message.id}
+            data-message-id={message.id}
             ref={(element) => {
               if (element) messageRefs.current[message.id] = element
               else delete messageRefs.current[message.id]
@@ -106,6 +118,8 @@ export default function MessageList({
             <MessageBubble
               message={message}
               highlighted={message.id === highlightId}
+              multiSelectMode={multiSelectMode}
+              multiSelected={selectedMessageIds?.has(message.id)}
               onJumpToReply={jumpToMessage}
               replyMessage={(() => {
                 if (!message.replyToId) return null
@@ -120,7 +134,13 @@ export default function MessageList({
               isOwn={message.senderId === currentUser.id}
               selected={message.id === selectedMessageId}
               matched={Boolean(matched)}
-              onSelect={() => onSelectMessage(message.id)}
+              onSelect={() => {
+                if (multiSelectMode) {
+                  onToggleMessageSelection(message.id)
+                } else {
+                  onSelectMessage(message.id)
+                }
+              }}
               onStartReply={() => onStartReply(message)}
               onStartEdit={() => onStartEdit(message)}
               onDelete={() => onDeleteMessage(message.id)}
@@ -128,6 +148,8 @@ export default function MessageList({
               onReact={(emoji) => onReact(message.id, emoji)}
               onOpenMedia={onOpenMedia}
               onForward={() => onForwardMessage(message)}
+              onPin={() => onPinMessage(message.id)}
+              onToggleSelect={() => onToggleMessageSelection(message.id)}
             />
           </div>
         )

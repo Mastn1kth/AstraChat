@@ -20,6 +20,7 @@ import {
   getSessions,
   getChatMessages,
   getChats,
+  pinChatMessage,
   getCurrentSession,
   loginAccount,
   logoutAccount,
@@ -423,6 +424,8 @@ export default function App() {
   })
   const [selectedChatId, setSelectedChatId] = useState(() => state.chats.find((chat) => !chat.archived)?.id || '')
   const [selectedFolderId, setSelectedFolderId] = useState('all')
+  const [hasMoreMessages, setHasMoreMessages] = useState({})
+  const [selectedMessageIds, setSelectedMessageIds] = useState(new Set())
   const [sidebarSearch, setSidebarSearch] = useState('')
   const [messageSearch, setMessageSearch] = useState('')
   const [replyToId, setReplyToId] = useState('')
@@ -634,6 +637,16 @@ export default function App() {
                   archivedAt: payload.settings.archivedAt || null,
                 }
               : chat,
+          ),
+        }))
+        return
+      }
+
+      if (payload.type === 'chat:pinned-message' && payload.chatId) {
+        setState((current) => ({
+          ...current,
+          chats: current.chats.map((chat) =>
+            chat.id === payload.chatId ? { ...chat, pinnedMessageId: payload.messageId } : chat,
           ),
         }))
         return
@@ -862,6 +875,7 @@ export default function App() {
           mutedUntil: chatSettings.mutedUntil || null,
           archived: Boolean(chatSettings.archived),
           archivedAt: chatSettings.archivedAt || null,
+          pinnedMessageId: chat.pinnedMessageId || null,
           unread: 0,
           createdAt: chat.created_at,
         }
@@ -1158,23 +1172,34 @@ export default function App() {
     }
   }
 
-  async function loadMessagesFromServer(chatId) {
+  async function loadMessagesFromServer(chatId, { before, append } = {}) {
     try {
-      const { messages: serverMessages } = await getChatMessages(chatId)
+      const { messages: serverMessages, hasMore } = await getChatMessages(chatId, { before, limit: 50 })
       const normalizedMessages = await Promise.all(
         serverMessages.map((message) => normalizeServerMessage(message, state.user.id)),
       )
+      setHasMoreMessages((current) => ({ ...current, [chatId]: Boolean(hasMore) }))
       setState((current) => ({
         ...current,
         messages: {
           ...current.messages,
-          [chatId]: normalizedMessages,
+          [chatId]: append
+            ? [...normalizedMessages, ...(current.messages[chatId] || [])]
+            : normalizedMessages,
         },
       }))
-      sendSocketEvent({ type: 'chat:read', chatId })
+      if (!append) sendSocketEvent({ type: 'chat:read', chatId })
     } catch (error) {
       showToast(error.message || 'Could not load messages.')
     }
+  }
+
+  async function loadMoreMessages() {
+    if (!selectedChat?.backend) return
+    const currentMessages = state.messages[selectedChat.id] || []
+    if (!currentMessages.length) return
+    const oldest = currentMessages[0]
+    await loadMessagesFromServer(selectedChat.id, { before: oldest.time, append: true })
   }
 
   function selectChat(chatId) {
@@ -1182,6 +1207,7 @@ export default function App() {
     setSelectedChatId(chatId)
     setMessageSearch('')
     setSelectedMessageId('')
+    setSelectedMessageIds(new Set())
     setReplyToId('')
     setEditingMessageId('')
     setUi((current) => ({
@@ -1595,6 +1621,85 @@ export default function App() {
         ),
       }))
       showToast(error.message || 'Archive state was not saved.')
+    }
+  }
+
+  async function pinMessage(messageId) {
+    if (!selectedChat?.backend) return
+    const nextId = messageId || null
+    setState((current) => ({
+      ...current,
+      chats: current.chats.map((chat) =>
+        chat.id === selectedChat.id ? { ...chat, pinnedMessageId: nextId } : chat,
+      ),
+    }))
+    try {
+      await pinChatMessage(selectedChat.id, nextId)
+      showToast(nextId ? 'Message pinned.' : 'Message unpinned.')
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        chats: current.chats.map((chat) =>
+          chat.id === selectedChat.id ? { ...chat, pinnedMessageId: selectedChat.pinnedMessageId } : chat,
+        ),
+      }))
+      showToast(error.message || 'Could not update pinned message.')
+    }
+  }
+
+  async function muteChat(chatId, mutedUntil) {
+    const chat = state.chats.find((item) => item.id === chatId)
+    if (!chat) return
+    const isMuting = mutedUntil !== null
+    setState((current) => ({
+      ...current,
+      chats: current.chats.map((item) =>
+        item.id === chatId ? { ...item, muted: isMuting, mutedUntil: mutedUntil || null } : item,
+      ),
+    }))
+    if (!chat.backend) return
+    try {
+      const { settings } = await updateChatSettings(chatId, { muted: isMuting, mutedUntil })
+      applyServerChatSettings(chatId, settings)
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        chats: current.chats.map((item) =>
+          item.id === chatId ? { ...item, muted: chat.muted, mutedUntil: chat.mutedUntil } : item,
+        ),
+      }))
+      showToast(error.message || 'Mute setting was not saved.')
+    }
+  }
+
+  function toggleMessageSelection(messageId) {
+    setSelectedMessageIds((current) => {
+      const next = new Set(current)
+      if (next.has(messageId)) next.delete(messageId)
+      else next.add(messageId)
+      return next
+    })
+  }
+
+  function clearMessageSelection() {
+    setSelectedMessageIds(new Set())
+  }
+
+  async function deleteSelectedMessages() {
+    if (!selectedChat || !selectedMessageIds.size) return
+    const ids = [...selectedMessageIds]
+    clearMessageSelection()
+    for (const messageId of ids) {
+      await deleteMessage(messageId)
+    }
+  }
+
+  async function forwardSelectedMessages(targetChatId) {
+    if (!selectedChat || !selectedMessageIds.size) return
+    const msgs = (state.messages[selectedChat.id] || []).filter((m) => selectedMessageIds.has(m.id))
+    clearMessageSelection()
+    for (const msg of msgs) {
+      await forwardMessageToChat(msg, targetChatId)
     }
   }
 
@@ -2147,7 +2252,16 @@ export default function App() {
       onReact={reactToMessage}
       onForwardMessage={forwardMessageToChat}
       onSelectMessage={(id) => setSelectedMessageId((current) => (current === id ? '' : id))}
+      hasMoreMessages={hasMoreMessages[selectedChatId] || false}
+      selectedMessageIds={selectedMessageIds}
+      onLoadMoreMessages={loadMoreMessages}
+      onToggleMessageSelection={toggleMessageSelection}
+      onClearMessageSelection={clearMessageSelection}
+      onDeleteSelectedMessages={deleteSelectedMessages}
+      onForwardSelectedMessages={forwardSelectedMessages}
+      onPinMessage={pinMessage}
       onTogglePin={(chatId) => toggleChatField(chatId, 'pinned')}
+      onMuteChat={muteChat}
       onToggleMute={(chatId) => toggleChatField(chatId, 'muted')}
       onArchiveChat={archiveChat}
       onCreateFolder={createFolder}

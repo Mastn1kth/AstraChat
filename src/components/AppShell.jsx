@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Pin, X } from 'lucide-react'
 import Sidebar from './Sidebar'
 import ChatHeader from './ChatHeader'
 import MessageList from './MessageList'
@@ -31,6 +32,14 @@ export default function AppShell({
   selectedMessageId,
   toast,
   callController,
+  hasMoreMessages,
+  selectedMessageIds,
+  onLoadMoreMessages,
+  onToggleMessageSelection,
+  onClearMessageSelection,
+  onDeleteSelectedMessages,
+  onForwardSelectedMessages,
+  onPinMessage,
   onSelectChat,
   onSelectFolder,
   onSidebarSearch,
@@ -48,6 +57,7 @@ export default function AppShell({
   onForwardMessage,
   onSelectMessage,
   onTogglePin,
+  onMuteChat,
   onToggleMute,
   onArchiveChat,
   onCreateFolder,
@@ -85,6 +95,13 @@ export default function AppShell({
   const wordStreamEnabled = settings.wordStream.enabled && wordStreamWords.length > 0
   const [openMedia, setOpenMedia] = useState(null)
   const [forwardMessage, setForwardMessage] = useState(null)
+  const [forwardingSelected, setForwardingSelected] = useState(false)
+  const multiSelectMode = selectedMessageIds.size > 0
+
+  const pinnedMessageId = selectedChat?.pinnedMessageId || null
+  const pinnedMessage = pinnedMessageId
+    ? messages.find((m) => m.id === pinnedMessageId) || null
+    : null
 
   return (
     <div
@@ -141,17 +158,44 @@ export default function AppShell({
               onOpenProfile={onOpenProfile}
               onToggleSearch={onToggleSearch}
               onTogglePin={() => onTogglePin(selectedChat.id)}
+              onMuteChat={(mutedUntil) => onMuteChat(selectedChat.id, mutedUntil)}
               onToggleMute={() => onToggleMute(selectedChat.id)}
               onArchive={() => onArchiveChat(selectedChat.id)}
               onOpenCall={onOpenCall}
             />
+            {pinnedMessageId && (
+              <div className="pinned-message-bar" onClick={() => {
+                const el = document.querySelector(`[data-message-id="${pinnedMessageId}"]`)
+                el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+              }}>
+                <Pin size={14} className="pinned-icon" />
+                <span className="pinned-text">
+                  {pinnedMessage ? (pinnedMessage.text || 'Media message') : 'Pinned message'}
+                </span>
+                <button
+                  className="pinned-close"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onPinMessage(null)
+                  }}
+                  aria-label="Unpin message"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )}
             <MessageList
               messages={messages}
               contact={selectedContact}
               currentUser={user}
               search={messageSearch}
               selectedMessageId={selectedMessageId}
+              selectedMessageIds={selectedMessageIds}
+              multiSelectMode={multiSelectMode}
+              hasMore={hasMoreMessages}
               onSelectMessage={onSelectMessage}
+              onToggleMessageSelection={onToggleMessageSelection}
+              onLoadMore={onLoadMoreMessages}
               onStartReply={onStartReply}
               onStartEdit={onStartEdit}
               onDeleteMessage={onDeleteMessage}
@@ -159,20 +203,43 @@ export default function AppShell({
               onReact={onReact}
               onOpenMedia={setOpenMedia}
               onForwardMessage={setForwardMessage}
+              onPinMessage={onPinMessage}
             />
-            <Composer
-              key={`${selectedChat.id}-${editingMessage?.id || 'compose'}`}
-              chatId={selectedChat.id}
-              replyTo={replyTo}
-              editingMessage={editingMessage}
-              onSend={onSendMessage}
-              onSendAttachment={onSendAttachment}
-              onTyping={onTyping}
-              onCancelReply={onCancelReply}
-              onCancelEdit={onCancelEdit}
-              onAttach={(message) => onUpdateSettings({ toast: message })}
-              onMockSend={onSendMockMessage}
-            />
+            {multiSelectMode ? (
+              <div className="multiselect-bar">
+                <button onClick={onClearMessageSelection} className="multiselect-cancel">
+                  <X size={16} /> Cancel
+                </button>
+                <span>{selectedMessageIds.size} selected</span>
+                <div className="multiselect-actions">
+                  <button
+                    onClick={() => {
+                      setForwardingSelected(true)
+                      setForwardMessage({ _multi: true })
+                    }}
+                  >
+                    Forward
+                  </button>
+                  <button className="danger" onClick={onDeleteSelectedMessages}>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <Composer
+                key={`${selectedChat.id}-${editingMessage?.id || 'compose'}`}
+                chatId={selectedChat.id}
+                replyTo={replyTo}
+                editingMessage={editingMessage}
+                onSend={onSendMessage}
+                onSendAttachment={onSendAttachment}
+                onTyping={onTyping}
+                onCancelReply={onCancelReply}
+                onCancelEdit={onCancelEdit}
+                onAttach={(message) => onUpdateSettings({ toast: message })}
+                onMockSend={onSendMockMessage}
+              />
+            )}
           </>
         ) : (
           <section className="empty-chat">
@@ -246,10 +313,18 @@ export default function AppShell({
       <ForwardModal
         message={forwardMessage}
         chats={chatSummaries}
-        onClose={() => setForwardMessage(null)}
-        onForward={(chatId) => {
-          onForwardMessage(forwardMessage, chatId)
+        onClose={() => {
           setForwardMessage(null)
+          setForwardingSelected(false)
+        }}
+        onForward={(chatId) => {
+          if (forwardingSelected) {
+            onForwardSelectedMessages(chatId)
+          } else {
+            onForwardMessage(forwardMessage, chatId)
+          }
+          setForwardMessage(null)
+          setForwardingSelected(false)
         }}
       />
     </div>

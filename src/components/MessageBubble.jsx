@@ -1,4 +1,4 @@
-import { Check, CheckCheck, Copy, Download, Edit3, FileText, Forward, Mic, Play, Reply, SmilePlus, Trash2 } from 'lucide-react'
+import { Check, CheckCheck, CheckSquare, Copy, Download, Edit3, FileText, Forward, Mic, Pin, Play, Reply, SmilePlus, Square, Trash2 } from 'lucide-react'
 import { formatMessageTime } from '../utils/formatters'
 
 const reactions = ['\u{1F44D}', '\u{1F499}', '\u{1F602}', '\u{1F525}']
@@ -34,6 +34,8 @@ export default function MessageBubble({
   selected,
   matched,
   highlighted,
+  multiSelectMode,
+  multiSelected,
   onJumpToReply,
   onSelect,
   onStartReply,
@@ -43,11 +45,13 @@ export default function MessageBubble({
   onReact,
   onOpenMedia,
   onForward,
+  onPin,
+  onToggleSelect,
 }) {
   const reactionEntries = Object.entries(message.reactions || {}).filter(([, count]) => count > 0)
 
   return (
-    <div className={`message-row ${isOwn ? 'own' : 'incoming'} ${selected ? 'selected' : ''}`}>
+    <div className={`message-row ${isOwn ? 'own' : 'incoming'} ${selected ? 'selected' : ''} ${multiSelectMode ? 'multi-select-mode' : ''} ${multiSelected ? 'multi-selected' : ''}`}>
       <div
         className={`message-bubble ${matched ? 'matched' : ''} ${highlighted ? 'flash' : ''}`}
         onClick={onSelect}
@@ -152,7 +156,17 @@ export default function MessageBubble({
         </div>
       )}
 
-      {selected && !message.deleted && (
+      {multiSelectMode && (
+        <button
+          className={`message-select-checkbox ${multiSelected ? 'checked' : ''}`}
+          onClick={(event) => { event.stopPropagation(); onToggleSelect() }}
+          aria-label={multiSelected ? 'Deselect message' : 'Select message'}
+        >
+          {multiSelected ? <CheckSquare size={18} /> : <Square size={18} />}
+        </button>
+      )}
+
+      {selected && !message.deleted && !multiSelectMode && (
         <div className={`message-context ${isOwn ? 'context-own' : ''}`}>
           <button onClick={onStartReply}>
             <Reply size={15} /> Reply
@@ -166,6 +180,14 @@ export default function MessageBubble({
           <button onClick={onForward}>
             <Forward size={15} /> Forward
           </button>
+          <button onClick={onToggleSelect}>
+            <CheckSquare size={15} /> Select
+          </button>
+          {onPin && (
+            <button onClick={onPin}>
+              <Pin size={15} /> Pin
+            </button>
+          )}
           {isOwn && (
             <button onClick={onStartEdit}>
               <Edit3 size={15} /> Edit
