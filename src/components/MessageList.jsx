@@ -23,6 +23,7 @@ export default function MessageList({
   onOpenMedia,
   onForwardMessage,
   onPinMessage,
+  onRetryMessage,
 }) {
   const listRef = useRef(null)
   const bottomRef = useRef(null)
@@ -150,6 +151,7 @@ export default function MessageList({
               onForward={() => onForwardMessage(message)}
               onPin={() => onPinMessage(message.id)}
               onToggleSelect={() => onToggleMessageSelection(message.id)}
+              onRetry={onRetryMessage ? () => onRetryMessage(message.id) : undefined}
             />
           </div>
         )

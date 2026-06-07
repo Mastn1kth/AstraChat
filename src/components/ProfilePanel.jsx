@@ -1,13 +1,15 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Archive,
   Bell,
   BellOff,
-  Bot,
   Image,
   Link as LinkIcon,
+  Loader2,
   Play,
+  Plus,
   Shield,
+  Trash2,
   Users,
   Pin,
   X,
@@ -28,24 +30,53 @@ export default function ProfilePanel({
   chat,
   contacts,
   messages,
+  currentUserId,
   onMockAction,
   onClose,
   onTogglePin,
   onToggleMute,
   onArchive,
   onOpenMedia,
+  onLoadGroupMembers,
+  onAddGroupMember,
+  onRemoveGroupMember,
+  onUpdateGroupInfo,
 }) {
   const [sharedTab, setSharedTab] = useState('media')
+  const [members, setMembers] = useState(null) // null = not loaded
+  const [membersLoading, setMembersLoading] = useState(false)
+  const [addingMember, setAddingMember] = useState(false)
+  const [addMemberId, setAddMemberId] = useState('')
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [titleInput, setTitleInput] = useState(contact.name || '')
+
+  const isBackendGroup = chat.backend && (contact.type === 'group' || contact.type === 'channel')
+  const isOwnerOrAdmin = contact.role === 'owner' || contact.role === 'admin'
+
+  // Load members for backend groups when panel opens
+  useEffect(() => {
+    if (!isBackendGroup || !onLoadGroupMembers) return
+    setMembersLoading(true)
+    onLoadGroupMembers(chat.id)
+      .then((list) => setMembers(list || []))
+      .catch(() => setMembers([]))
+      .finally(() => setMembersLoading(false))
+  }, [chat.id, isBackendGroup, onLoadGroupMembers])
+
   const title =
-    contact.type === 'group' ? 'Group profile' : contact.type === 'channel' ? 'Channel profile' : contact.type === 'bot' ? 'Bot profile' : 'Contact profile'
+    contact.type === 'group' ? 'Group profile' :
+    contact.type === 'channel' ? 'Channel profile' :
+    'Contact profile'
+
+  // Fallback member names from local contacts (for non-backend groups)
   const memberNames = (contact.members || [])
     .map((id) => {
       if (!id) return null
       const found = contacts.find((item) => item.id === id)
-      // 'me' is the local mock id; server ids are UUIDs — use name lookup as the primary source
       return found?.name ?? (id === 'me' ? 'You' : null)
     })
     .filter(Boolean)
+
   const sharedMedia = useMemo(
     () =>
       messages
@@ -71,6 +102,42 @@ export default function ProfilePanel({
     [messages],
   )
 
+  async function handleAddMember(e) {
+    e.preventDefault()
+    if (!addMemberId.trim()) return
+    try {
+      await onAddGroupMember(chat.id, addMemberId.trim())
+      setAddMemberId('')
+      setAddingMember(false)
+      // Reload member list
+      const list = await onLoadGroupMembers(chat.id)
+      setMembers(list || [])
+    } catch {
+      // toast shown by App.jsx
+    }
+  }
+
+  async function handleRemoveMember(userId) {
+    if (!window.confirm('Remove this member?')) return
+    try {
+      await onRemoveGroupMember(chat.id, userId)
+      setMembers((current) => (current || []).filter((m) => m.id !== userId))
+    } catch {
+      // toast shown by App.jsx
+    }
+  }
+
+  async function handleSaveTitle(e) {
+    e.preventDefault()
+    if (!titleInput.trim()) return
+    try {
+      await onUpdateGroupInfo(chat.id, { title: titleInput.trim() })
+      setEditingTitle(false)
+    } catch {
+      // toast shown by App.jsx
+    }
+  }
+
   return (
     <aside className="side-panel profile-panel">
       <header>
@@ -81,45 +148,118 @@ export default function ProfilePanel({
       </header>
       <div className="profile-hero">
         <Avatar contact={contact} size="lg" />
-        <h2>{contact.name}</h2>
+        {editingTitle && isOwnerOrAdmin ? (
+          <form className="group-title-form" onSubmit={handleSaveTitle}>
+            <input
+              autoFocus
+              value={titleInput}
+              onChange={(e) => setTitleInput(e.target.value)}
+              placeholder="Group name"
+              maxLength={64}
+            />
+            <button type="submit">Save</button>
+            <button type="button" onClick={() => setEditingTitle(false)}>Cancel</button>
+          </form>
+        ) : (
+          <h2
+            className={isBackendGroup && isOwnerOrAdmin ? 'editable-title' : ''}
+            onClick={() => isBackendGroup && isOwnerOrAdmin && setEditingTitle(true)}
+            title={isBackendGroup && isOwnerOrAdmin ? 'Click to rename' : ''}
+          >
+            {contact.name}
+          </h2>
+        )}
         <p className={contact.status === 'online' ? 'online-text' : ''}>{contact.lastSeen}</p>
       </div>
+
       <dl className="profile-data">
-        <div>
-          <dt>Username</dt>
-          <dd>{contact.username}</dd>
-        </div>
-        <div>
-          <dt>Phone</dt>
-          <dd>{contact.phone || 'Hidden / not applicable'}</dd>
-        </div>
-        <div>
-          <dt>About</dt>
-          <dd>{contact.bio}</dd>
-        </div>
+        {contact.username && (
+          <div>
+            <dt>Username</dt>
+            <dd>{contact.username}</dd>
+          </div>
+        )}
+        {contact.phone && (
+          <div>
+            <dt>Phone</dt>
+            <dd>{contact.phone}</dd>
+          </div>
+        )}
+        {contact.bio && (
+          <div>
+            <dt>About</dt>
+            <dd>{contact.bio}</dd>
+          </div>
+        )}
         <div>
           <dt>Type</dt>
           <dd>{contact.type || 'private'}</dd>
         </div>
-        {contact.type === 'group' && (
-          <div>
-            <dt>Members and roles</dt>
-            <dd>{memberNames.join(', ')}. Current user role: {contact.role || 'member'}.</dd>
-          </div>
-        )}
         {contact.type === 'channel' && (
           <div>
-            <dt>Channel controls</dt>
-            <dd>{contact.subscribers || 0} subscribers, linked discussion and scheduled posts are mock UI states.</dd>
-          </div>
-        )}
-        {contact.type === 'bot' && (
-          <div>
-            <dt>Bot commands</dt>
-            <dd>/start, /help, /settings. Callbacks and mini app button are mocked locally.</dd>
+            <dt>Subscribers</dt>
+            <dd>{contact.subscribers || 0}</dd>
           </div>
         )}
       </dl>
+
+      {/* Group members section */}
+      {(contact.type === 'group' || contact.type === 'channel') && (
+        <section className="group-members-section">
+          <div className="group-members-header">
+            <strong><Users size={15} /> Members</strong>
+            {isBackendGroup && isOwnerOrAdmin && (
+              <button
+                className="add-member-btn"
+                onClick={() => setAddingMember((v) => !v)}
+                title="Add member"
+              >
+                <Plus size={15} />
+              </button>
+            )}
+          </div>
+
+          {addingMember && (
+            <form className="add-member-form" onSubmit={handleAddMember}>
+              <input
+                autoFocus
+                value={addMemberId}
+                onChange={(e) => setAddMemberId(e.target.value)}
+                placeholder="User ID to add"
+              />
+              <button type="submit">Add</button>
+              <button type="button" onClick={() => setAddingMember(false)}>✕</button>
+            </form>
+          )}
+
+          {membersLoading ? (
+            <div className="members-loading"><Loader2 size={16} className="spin" /> Loading…</div>
+          ) : members ? (
+            <ul className="members-list">
+              {members.map((m) => (
+                <li key={m.id} className="member-item">
+                  <span className="member-name">
+                    {m.name}
+                    <small className="member-role">{m.role}</small>
+                  </span>
+                  {isOwnerOrAdmin && m.id !== currentUserId && (
+                    <button
+                      className="remove-member-btn"
+                      onClick={() => handleRemoveMember(m.id)}
+                      title="Remove member"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : !isBackendGroup ? (
+            <p className="members-local">{memberNames.join(', ') || 'No members'}</p>
+          ) : null}
+        </section>
+      )}
+
       <div className="panel-actions">
         <button onClick={onTogglePin}>
           <Pin size={17} /> {chat.pinned ? 'Unpin chat' : 'Pin chat'}
@@ -132,21 +272,17 @@ export default function ProfilePanel({
           <Archive size={17} /> {chat.archived ? 'Unarchive' : 'Archive'}
         </button>
         {contact.type === 'group' && (
-          <button onClick={() => onMockAction('[mock] group admin panel: roles, bans, slow mode, anti-spam')}>
-            <Shield size={17} /> Group admin settings
+          <button onClick={() => onMockAction('[mock] group admin panel: bans, slow mode, anti-spam')}>
+            <Shield size={17} /> Admin settings
           </button>
         )}
         {contact.type === 'channel' && (
-          <button onClick={() => onMockAction('[mock] channel stats: views, growth, reposts, discussion moderation')}>
-            <Users size={17} /> Channel statistics
-          </button>
-        )}
-        {contact.type === 'bot' && (
-          <button onClick={() => onMockAction('[mock] bot mini app opened with user data permissions')}>
-            <Bot size={17} /> Open mini app
+          <button onClick={() => onMockAction('[mock] channel stats: views, growth, reposts')}>
+            <Users size={17} /> Statistics
           </button>
         )}
       </div>
+
       <section className="shared-panel">
         <div className="shared-tabs">
           <button className={sharedTab === 'media' ? 'active' : ''} onClick={() => setSharedTab('media')}>

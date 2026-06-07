@@ -1,5 +1,44 @@
-import { Check, CheckCheck, CheckSquare, Copy, Download, Edit3, FileText, Forward, Mic, Pin, Play, Reply, SmilePlus, Square, Trash2 } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { AlertCircle, Check, CheckCheck, CheckSquare, Copy, Download, Edit3, ExternalLink, FileText, Forward, Mic, Pin, Play, RefreshCw, Reply, SmilePlus, Square, Trash2 } from 'lucide-react'
 import { formatMessageTime } from '../utils/formatters'
+import FormattedText from '../utils/textFormat'
+import { getLinkPreview } from '../api/client'
+
+const URL_REGEX = /\bhttps?:\/\/[^\s<>"']+/g
+const linkPreviewCache = new Map()
+
+function extractFirstUrl(text) {
+  if (!text) return null
+  const match = text.match(URL_REGEX)
+  return match ? match[0].replace(/[),.;!?]+$/, '') : null
+}
+
+function useLinkPreview(url) {
+  const [preview, setPreview] = useState(undefined) // undefined=loading, null=none
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
+  useEffect(() => {
+    if (!url) { setPreview(null); return }
+    if (linkPreviewCache.has(url)) { setPreview(linkPreviewCache.get(url)); return }
+    setPreview(undefined)
+    getLinkPreview(url)
+      .then((data) => {
+        if (!mountedRef.current) return
+        const result = (data?.title || data?.description) ? data : null
+        linkPreviewCache.set(url, result)
+        setPreview(result)
+      })
+      .catch(() => {
+        if (!mountedRef.current) return
+        linkPreviewCache.set(url, null)
+        setPreview(null)
+      })
+  }, [url])
+  return preview
+}
 
 const reactions = ['\u{1F44D}', '\u{1F499}', '\u{1F602}', '\u{1F525}']
 
@@ -22,8 +61,40 @@ function StatusIcon({ status }) {
   if (status === 'sending') return <span className="sending-dot" />
   if (status === 'sent') return <Check size={14} />
   if (status === 'delivered') return <CheckCheck size={14} />
-  if (status === 'failed') return <span className="failed-status">!</span>
+  if (status === 'failed') return <AlertCircle size={14} className="failed-icon" />
   return <CheckCheck size={14} className="read-check" />
+}
+
+function LinkPreviewCard({ url, preview }) {
+  if (!preview) return null
+  return (
+    <a
+      className="link-preview-card"
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {preview.image && (
+        <img
+          className="link-preview-image"
+          src={preview.image}
+          alt=""
+          loading="lazy"
+          onError={(e) => { e.currentTarget.style.display = 'none' }}
+        />
+      )}
+      <div className="link-preview-body">
+        {preview.siteName && <span className="link-preview-site">{preview.siteName}</span>}
+        {preview.title && <strong className="link-preview-title">{preview.title}</strong>}
+        {preview.description && <span className="link-preview-desc">{preview.description}</span>}
+        <span className="link-preview-url">
+          <ExternalLink size={11} />{' '}
+          {(() => { try { return new URL(url).hostname } catch { return url } })()}
+        </span>
+      </div>
+    </a>
+  )
 }
 
 export default function MessageBubble({
@@ -47,13 +118,26 @@ export default function MessageBubble({
   onForward,
   onPin,
   onToggleSelect,
+  onRetry,
 }) {
   const reactionEntries = Object.entries(message.reactions || {}).filter(([, count]) => count > 0)
+  const firstUrl = !message.deleted && message.text ? extractFirstUrl(message.text) : null
+  const linkPreview = useLinkPreview(firstUrl)
 
   return (
     <div className={`message-row ${isOwn ? 'own' : 'incoming'} ${selected ? 'selected' : ''} ${multiSelectMode ? 'multi-select-mode' : ''} ${multiSelected ? 'multi-selected' : ''}`}>
+      {multiSelectMode && (
+        <button
+          className={`message-select-checkbox ${multiSelected ? 'checked' : ''}`}
+          onClick={(event) => { event.stopPropagation(); onToggleSelect() }}
+          aria-label={multiSelected ? 'Deselect message' : 'Select message'}
+        >
+          {multiSelected ? <CheckSquare size={18} /> : <Square size={18} />}
+        </button>
+      )}
+
       <div
-        className={`message-bubble ${matched ? 'matched' : ''} ${highlighted ? 'flash' : ''}`}
+        className={`message-bubble ${matched ? 'matched' : ''} ${highlighted ? 'flash' : ''} ${message.status === 'failed' ? 'failed' : ''}`}
         onClick={onSelect}
         onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') onSelect()
@@ -135,14 +219,28 @@ export default function MessageBubble({
         ) : message.text ? (
           <>
             {message.forwarded && <small className="forwarded-label">Forwarded</small>}
-            <span className="message-text">{message.text}</span>
+            <span className="message-text">
+              <FormattedText text={message.text} />
+            </span>
           </>
         ) : null}
+
+        {linkPreview && <LinkPreviewCard url={firstUrl} preview={linkPreview} />}
+
         <span className="message-meta">
           {message.mock && <small>mock</small>}
           {message.edited && <small>edited</small>}
           <time>{formatMessageTime(message.time)}</time>
           {isOwn && <StatusIcon status={message.status} />}
+          {isOwn && message.status === 'failed' && onRetry && (
+            <button
+              className="retry-button"
+              onClick={(e) => { e.stopPropagation(); onRetry() }}
+              title="Retry sending"
+            >
+              <RefreshCw size={12} />
+            </button>
+          )}
         </span>
       </div>
 
@@ -154,16 +252,6 @@ export default function MessageBubble({
             </button>
           ))}
         </div>
-      )}
-
-      {multiSelectMode && (
-        <button
-          className={`message-select-checkbox ${multiSelected ? 'checked' : ''}`}
-          onClick={(event) => { event.stopPropagation(); onToggleSelect() }}
-          aria-label={multiSelected ? 'Deselect message' : 'Select message'}
-        >
-          {multiSelected ? <CheckSquare size={18} /> : <Square size={18} />}
-        </button>
       )}
 
       {selected && !message.deleted && !multiSelectMode && (
@@ -191,6 +279,11 @@ export default function MessageBubble({
           {isOwn && (
             <button onClick={onStartEdit}>
               <Edit3 size={15} /> Edit
+            </button>
+          )}
+          {isOwn && message.status === 'failed' && onRetry && (
+            <button onClick={onRetry}>
+              <RefreshCw size={15} /> Retry
             </button>
           )}
           <button className="danger" onClick={onDelete}>

@@ -245,3 +245,31 @@ export function createServerCall(input) {
     body: JSON.stringify(input),
   })
 }
+
+export function getLinkPreview(url) {
+  return request(`/api/link-preview?url=${encodeURIComponent(url)}`)
+}
+
+export function getChatMembers(chatId) {
+  return request(`/api/chats/${encodeURIComponent(chatId)}/members`)
+}
+
+export function addChatMember(chatId, userId) {
+  return request(`/api/chats/${encodeURIComponent(chatId)}/members`, {
+    method: 'POST',
+    body: JSON.stringify({ userId }),
+  })
+}
+
+export function removeChatMember(chatId, userId) {
+  return request(`/api/chats/${encodeURIComponent(chatId)}/members/${encodeURIComponent(userId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function updateChatInfo(chatId, input) {
+  return request(`/api/chats/${encodeURIComponent(chatId)}/info`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}

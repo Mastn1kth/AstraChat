@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Pin, X } from 'lucide-react'
 import Sidebar from './Sidebar'
 import ChatHeader from './ChatHeader'
@@ -40,6 +40,7 @@ export default function AppShell({
   onDeleteSelectedMessages,
   onForwardSelectedMessages,
   onPinMessage,
+  onRetryMessage,
   onSelectChat,
   onSelectFolder,
   onSidebarSearch,
@@ -73,6 +74,10 @@ export default function AppShell({
   onLoadSessions,
   onTerminateOtherSessions,
   onTerminateSession,
+  onLoadGroupMembers,
+  onAddGroupMember,
+  onRemoveGroupMember,
+  onUpdateGroupInfo,
   onCreateChat,
   onCreateSpace,
   onSendMockMessage,
@@ -96,6 +101,8 @@ export default function AppShell({
   const [openMedia, setOpenMedia] = useState(null)
   const [forwardMessage, setForwardMessage] = useState(null)
   const [forwardingSelected, setForwardingSelected] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
+  const dragCounterRef = useRef(0)
   const multiSelectMode = selectedMessageIds.size > 0
 
   const pinnedMessageId = selectedChat?.pinnedMessageId || null
@@ -103,12 +110,45 @@ export default function AppShell({
     ? messages.find((m) => m.id === pinnedMessageId) || null
     : null
 
+  function handleDragEnter(e) {
+    if (!hasChat) return
+    e.preventDefault()
+    dragCounterRef.current += 1
+    if (dragCounterRef.current === 1) setDragOver(true)
+  }
+  function handleDragLeave() {
+    dragCounterRef.current -= 1
+    if (dragCounterRef.current === 0) setDragOver(false)
+  }
+  function handleDragOver(e) { e.preventDefault() }
+  function handleDrop(e) {
+    e.preventDefault()
+    dragCounterRef.current = 0
+    setDragOver(false)
+    if (!hasChat || multiSelectMode) return
+    const file = e.dataTransfer.files?.[0]
+    if (!file) return
+    if (file.size > 100 * 1024 * 1024) return
+    onSendAttachment(file, '')
+  }
+
   return (
     <div
       className={`app-shell ${ui.mobilePane === 'chat' ? 'show-chat' : 'show-list'} ${
         wordStreamEnabled ? 'word-stream-enabled' : ''
       }`}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
     >
+      {dragOver && hasChat && (
+        <div className="drag-overlay">
+          <div className="drag-overlay-inner">
+            <span>Drop to send file</span>
+          </div>
+        </div>
+      )}
       <WordStreamBackground words={wordStreamWords} settings={settings.wordStream} />
       <Sidebar
         chats={chatSummaries}
@@ -204,6 +244,7 @@ export default function AppShell({
               onOpenMedia={setOpenMedia}
               onForwardMessage={setForwardMessage}
               onPinMessage={onPinMessage}
+              onRetryMessage={onRetryMessage}
             />
             {multiSelectMode ? (
               <div className="multiselect-bar">
@@ -271,12 +312,17 @@ export default function AppShell({
           chat={selectedChat}
           contacts={contacts}
           messages={messages}
+          currentUserId={user.id}
           onMockAction={onSendMockMessage}
           onClose={onCloseProfile}
           onTogglePin={() => onTogglePin(selectedChat.id)}
           onToggleMute={() => onToggleMute(selectedChat.id)}
           onArchive={() => onArchiveChat(selectedChat.id)}
           onOpenMedia={setOpenMedia}
+          onLoadGroupMembers={onLoadGroupMembers}
+          onAddGroupMember={onAddGroupMember}
+          onRemoveGroupMember={onRemoveGroupMember}
+          onUpdateGroupInfo={onUpdateGroupInfo}
         />
       )}
 

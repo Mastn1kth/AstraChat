@@ -1101,6 +1101,165 @@ app.patch('/api/chat-folders/:folderId/chats/:chatId', requireAuth, async (reque
   })
 })
 
+// ── Link preview ───────────────────────────────────────────────────────────────
+const linkPreviewCache = new Map() // url → { title, description, image, siteName, cachedAt }
+const LINK_PREVIEW_TTL_MS = 5 * 60 * 1000
+
+app.get('/api/link-preview', requireAuth, async (request, response) => {
+  const url = String(request.query.url || '').trim()
+  if (!url || !/^https?:\/\//i.test(url)) {
+    response.status(400).json({ error: 'Invalid URL' })
+    return
+  }
+
+  const cached = linkPreviewCache.get(url)
+  if (cached && Date.now() - cached.cachedAt < LINK_PREVIEW_TTL_MS) {
+    const { cachedAt: _, ...rest } = cached
+    response.json(rest)
+    return
+  }
+
+  try {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 5000)
+    const fetchResponse = await fetch(url, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'AstraChatBot/1.0 (+https://astrachat.app)' },
+      redirect: 'follow',
+    })
+    clearTimeout(timeoutId)
+
+    const contentType = fetchResponse.headers.get('content-type') || ''
+    if (!contentType.includes('text/html')) {
+      response.json({ title: null, description: null, image: null, siteName: null })
+      return
+    }
+
+    const html = await fetchResponse.text()
+
+    function metaContent(property, name) {
+      const byProperty = html.match(
+        new RegExp(`<meta[^>]+property=["']${property}["'][^>]+content=["']([^"']+)["']`, 'i'),
+      ) || html.match(
+        new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${property}["']`, 'i'),
+      )
+      if (byProperty) return byProperty[1]
+      if (!name) return null
+      const byName = html.match(
+        new RegExp(`<meta[^>]+name=["']${name}["'][^>]+content=["']([^"']+)["']`, 'i'),
+      ) || html.match(
+        new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+name=["']${name}["']`, 'i'),
+      )
+      return byName ? byName[1] : null
+    }
+
+    const titleTag = html.match(/<title[^>]*>([^<]{1,200})<\/title>/i)
+    const preview = {
+      title: metaContent('og:title') || metaContent('twitter:title') || (titleTag ? titleTag[1].trim() : null),
+      description: metaContent('og:description', 'description') || metaContent('twitter:description'),
+      image: metaContent('og:image') || metaContent('twitter:image'),
+      siteName: metaContent('og:site_name'),
+    }
+
+    // Trim long strings
+    if (preview.title) preview.title = preview.title.slice(0, 120)
+    if (preview.description) preview.description = preview.description.slice(0, 240)
+
+    linkPreviewCache.set(url, { ...preview, cachedAt: Date.now() })
+    response.json(preview)
+  } catch {
+    response.json({ title: null, description: null, image: null, siteName: null })
+  }
+})
+
+// ── Group member management ─────────────────────────────────────────────────
+app.get('/api/chats/:chatId/members', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+  const result = await db.query(
+    `SELECT u.id, u.name, u.username, u.avatar, u.last_seen_at, cm.role, cm.joined_at
+     FROM chat_members cm
+     JOIN users u ON u.id = cm.user_id
+     WHERE cm.chat_id = $1
+     ORDER BY cm.joined_at ASC`,
+    [request.params.chatId],
+  )
+  response.json({ members: result.rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    username: r.username,
+    avatar: r.avatar,
+    lastSeenAt: r.last_seen_at,
+    role: r.role,
+    joinedAt: r.joined_at,
+  })) })
+})
+
+app.post('/api/chats/:chatId/members', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+  if (!['owner', 'admin'].includes(row.role)) {
+    response.status(403).json({ error: 'Only admins can add members' })
+    return
+  }
+  const { userId } = request.body
+  if (!userId || typeof userId !== 'string') {
+    response.status(400).json({ error: 'userId is required' })
+    return
+  }
+  // Verify user exists
+  const userResult = await db.query('SELECT id, name, username FROM users WHERE id = $1', [userId])
+  if (!userResult.rows.length) { response.status(404).json({ error: 'User not found' }); return }
+  await db.query(
+    `INSERT INTO chat_members (chat_id, user_id, role)
+     VALUES ($1, $2, 'member')
+     ON CONFLICT (chat_id, user_id) DO NOTHING`,
+    [request.params.chatId, userId],
+  )
+  // Insert default chat_user_settings if needed
+  await db.query(
+    `INSERT INTO chat_user_settings (chat_id, user_id)
+     VALUES ($1, $2)
+     ON CONFLICT (chat_id, user_id) DO NOTHING`,
+    [request.params.chatId, userId],
+  )
+  const payload = { type: 'chat:member-added', chatId: request.params.chatId, userId }
+  await sendToChat(request.params.chatId, payload)
+  response.json({ member: { id: userId, name: userResult.rows[0].name, username: userResult.rows[0].username } })
+})
+
+app.delete('/api/chats/:chatId/members/:userId', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+  const isSelf = request.params.userId === request.user.id
+  if (!isSelf && !['owner', 'admin'].includes(row.role)) {
+    response.status(403).json({ error: 'Only admins can remove members' })
+    return
+  }
+  await db.query(
+    'DELETE FROM chat_members WHERE chat_id = $1 AND user_id = $2',
+    [request.params.chatId, request.params.userId],
+  )
+  const payload = { type: 'chat:member-removed', chatId: request.params.chatId, userId: request.params.userId }
+  await sendToChat(request.params.chatId, payload)
+  response.json({ ok: true })
+})
+
+app.patch('/api/chats/:chatId/info', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+  if (!['owner', 'admin'].includes(row.role)) {
+    response.status(403).json({ error: 'Only admins can update group info' })
+    return
+  }
+  const title = String(request.body.title || '').trim().slice(0, 64)
+  if (!title) { response.status(400).json({ error: 'Title is required' }); return }
+  await db.query('UPDATE chats SET title = $1 WHERE id = $2', [title, request.params.chatId])
+  const payload = { type: 'chat:info-updated', chatId: request.params.chatId, title }
+  await sendToChat(request.params.chatId, payload)
+  response.json({ chat: { id: request.params.chatId, title } })
+})
+
 app.get('/api/search', requireAuth, async (request, response) => {
   const query = normalizeSearchQuery(request.query.q)
   if (!query) {

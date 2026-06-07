@@ -19,6 +19,10 @@ import {
   getChatFolders,
   getSessions,
   getChatMessages,
+  getChatMembers,
+  addChatMember,
+  removeChatMember,
+  updateChatInfo,
   getChats,
   pinChatMessage,
   getCurrentSession,
@@ -452,6 +456,7 @@ export default function App() {
   const pendingReadIdsRef = useRef(new Set())
   const stateRef = useRef(state)
   const selectChatRef = useRef(null)
+  const loadMessagesRef = useRef(null)
   const [presence, setPresence] = useState({})
   const [typingByChat, setTypingByChat] = useState({})
   const [socketVersion, setSocketVersion] = useState(0)
@@ -531,6 +536,11 @@ export default function App() {
     selectChatRef.current = selectChat
   })
 
+  // Keep fresh reference to loadMessages for WS reconnect use.
+  useEffect(() => {
+    loadMessagesRef.current = loadMessagesFromServer
+  })
+
   useEffect(() => {
     let active = true
     getCurrentSession()
@@ -589,6 +599,14 @@ export default function App() {
           })
           return next
         })
+        // Reload messages for the active chat on reconnect to catch missed messages
+        const activeChatId = selectedChatIdRef.current
+        if (activeChatId) {
+          const activeChat = stateRef.current?.chats?.find((c) => c.id === activeChatId)
+          if (activeChat?.backend) {
+            loadMessagesRef.current?.(activeChatId)
+          }
+        }
         return
       }
 
@@ -1703,6 +1721,101 @@ export default function App() {
     }
   }
 
+  async function retryMessage(messageId) {
+    if (!selectedChat) return
+    const message = (state.messages[selectedChat.id] || []).find((m) => m.id === messageId)
+    if (!message || message.status !== 'failed') return
+
+    // Mark as sending again
+    setState((current) => ({
+      ...current,
+      messages: {
+        ...current.messages,
+        [selectedChat.id]: (current.messages[selectedChat.id] || []).map((m) =>
+          m.id === messageId ? { ...m, status: 'sending' } : m,
+        ),
+      },
+    }))
+
+    try {
+      const payloadText = await encryptTextForChat(message.text || '', selectedChat)
+      const { message: serverMessage } = await sendChatMessage(selectedChat.id, {
+        text: payloadText,
+        replyToId: message.replyToId,
+      })
+      const normalized = await normalizeServerMessage(serverMessage, state.user.id)
+      setState((current) => ({
+        ...current,
+        messages: {
+          ...current.messages,
+          [selectedChat.id]: (current.messages[selectedChat.id] || []).map((m) =>
+            m.id === messageId ? normalized : m,
+          ),
+        },
+      }))
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        messages: {
+          ...current.messages,
+          [selectedChat.id]: (current.messages[selectedChat.id] || []).map((m) =>
+            m.id === messageId ? { ...m, status: 'failed' } : m,
+          ),
+        },
+      }))
+      showToast(error.message || 'Retry failed.')
+    }
+  }
+
+  async function loadGroupMembers(chatId) {
+    try {
+      const { members } = await getChatMembers(chatId)
+      return members
+    } catch {
+      return []
+    }
+  }
+
+  async function addGroupMember(chatId, userId) {
+    try {
+      const { member } = await addChatMember(chatId, userId)
+      // Refresh server workspace to update member lists
+      await loadServerWorkspace(state.user.id)
+      showToast('Member added.')
+      return member
+    } catch (error) {
+      showToast(error.message || 'Could not add member.')
+      throw error
+    }
+  }
+
+  async function removeGroupMember(chatId, userId) {
+    try {
+      await removeChatMember(chatId, userId)
+      await loadServerWorkspace(state.user.id)
+      showToast('Member removed.')
+    } catch (error) {
+      showToast(error.message || 'Could not remove member.')
+      throw error
+    }
+  }
+
+  async function updateGroupInfo(chatId, { title }) {
+    try {
+      const { chat } = await updateChatInfo(chatId, { title })
+      setState((current) => ({
+        ...current,
+        contacts: current.contacts.map((c) =>
+          c.id === `entity-${chatId}` ? { ...c, name: chat.title } : c,
+        ),
+      }))
+      showToast('Group updated.')
+    } catch (error) {
+      showToast(error.message || 'Could not update group.')
+      throw error
+    }
+  }
+
   function upsertChatFolder(folder) {
     setState((current) => {
       const normalized = normalizeChatFolders({ ...current.chatFolders, folders: [folder] }).folders[0]
@@ -2260,6 +2373,11 @@ export default function App() {
       onDeleteSelectedMessages={deleteSelectedMessages}
       onForwardSelectedMessages={forwardSelectedMessages}
       onPinMessage={pinMessage}
+      onRetryMessage={retryMessage}
+      onLoadGroupMembers={loadGroupMembers}
+      onAddGroupMember={addGroupMember}
+      onRemoveGroupMember={removeGroupMember}
+      onUpdateGroupInfo={updateGroupInfo}
       onTogglePin={(chatId) => toggleChatField(chatId, 'pinned')}
       onMuteChat={muteChat}
       onToggleMute={(chatId) => toggleChatField(chatId, 'muted')}
