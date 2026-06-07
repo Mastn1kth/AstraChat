@@ -1,0 +1,243 @@
+import { useState } from 'react'
+import Sidebar from './Sidebar'
+import ChatHeader from './ChatHeader'
+import MessageList from './MessageList'
+import Composer from './Composer'
+import SearchPanel from './SearchPanel'
+import ContactModal from './ContactModal'
+import CreateSpaceModal from './CreateSpaceModal'
+import ProfilePanel from './ProfilePanel'
+import CallModal from './CallModal'
+import WordStreamBackground from './WordStreamBackground'
+import MediaViewer from './MediaViewer'
+import ForwardModal from './ForwardModal'
+
+export default function AppShell({
+  chatSummaries,
+  contacts,
+  user,
+  settings,
+  wordStreamWords,
+  selectedChat,
+  selectedContact,
+  messages,
+  messageSearch,
+  sidebarSearch,
+  ui,
+  replyTo,
+  editingMessage,
+  selectedMessageId,
+  toast,
+  callController,
+  onSelectChat,
+  onSidebarSearch,
+  onMessageSearch,
+  onSendMessage,
+  onSendAttachment,
+  onTyping,
+  onStartReply,
+  onStartEdit,
+  onCancelReply,
+  onCancelEdit,
+  onDeleteMessage,
+  onCopyMessage,
+  onReact,
+  onForwardMessage,
+  onSelectMessage,
+  onTogglePin,
+  onToggleMute,
+  onArchiveChat,
+  onExportEncryptionKey,
+  onImportEncryptionKey,
+  onUploadAvatar,
+  onRemoveAvatar,
+  onChangePassword,
+  onDeleteAccount,
+  onLoadSessions,
+  onTerminateOtherSessions,
+  onTerminateSession,
+  onCreateChat,
+  onCreateSpace,
+  onSendMockMessage,
+  onOpenContacts,
+  onCloseContacts,
+  onOpenCreateSpace,
+  onCloseCreateSpace,
+  onUpdateSettings,
+  onUpdateUser,
+  onOpenProfile,
+  onCloseProfile,
+  onToggleSearch,
+  onToggleMenu,
+  onOpenCall,
+  onResetState,
+  onLogout,
+  onBackToList,
+}) {
+  const hasChat = selectedChat && selectedContact
+  const wordStreamEnabled = settings.wordStream.enabled && wordStreamWords.length > 0
+  const [openMedia, setOpenMedia] = useState(null)
+  const [forwardMessage, setForwardMessage] = useState(null)
+
+  return (
+    <div
+      className={`app-shell ${ui.mobilePane === 'chat' ? 'show-chat' : 'show-list'} ${
+        wordStreamEnabled ? 'word-stream-enabled' : ''
+      }`}
+    >
+      <WordStreamBackground words={wordStreamWords} settings={settings.wordStream} />
+      <Sidebar
+        chats={chatSummaries}
+        contacts={contacts}
+        user={user}
+        settings={settings}
+        selectedChatId={selectedChat?.id}
+        search={sidebarSearch}
+        menuOpen={ui.menuOpen}
+        onSearch={onSidebarSearch}
+        onSelectChat={onSelectChat}
+        onOpenCreateSpace={onOpenCreateSpace}
+        onCreateChat={onCreateChat}
+        onUpdateSettings={onUpdateSettings}
+        onUpdateUser={onUpdateUser}
+        onResetState={onResetState}
+        onLogout={onLogout}
+        onToggleMenu={onToggleMenu}
+        onTogglePin={onTogglePin}
+        onToggleMute={onToggleMute}
+        onArchiveChat={onArchiveChat}
+        onExportEncryptionKey={onExportEncryptionKey}
+        onImportEncryptionKey={onImportEncryptionKey}
+        onUploadAvatar={onUploadAvatar}
+        onRemoveAvatar={onRemoveAvatar}
+        onChangePassword={onChangePassword}
+        onDeleteAccount={onDeleteAccount}
+        onLoadSessions={onLoadSessions}
+        onTerminateOtherSessions={onTerminateOtherSessions}
+        onTerminateSession={onTerminateSession}
+      />
+
+      <main className="chat-area" data-chat-bg={settings.chatBackground || 'default'}>
+        {hasChat ? (
+          <>
+            <ChatHeader
+              contact={selectedContact}
+              chat={selectedChat}
+              onBack={onBackToList}
+              onOpenProfile={onOpenProfile}
+              onToggleSearch={onToggleSearch}
+              onTogglePin={() => onTogglePin(selectedChat.id)}
+              onToggleMute={() => onToggleMute(selectedChat.id)}
+              onArchive={() => onArchiveChat(selectedChat.id)}
+              onOpenCall={onOpenCall}
+            />
+            <MessageList
+              messages={messages}
+              contact={selectedContact}
+              currentUser={user}
+              search={messageSearch}
+              selectedMessageId={selectedMessageId}
+              onSelectMessage={onSelectMessage}
+              onStartReply={onStartReply}
+              onStartEdit={onStartEdit}
+              onDeleteMessage={onDeleteMessage}
+              onCopyMessage={onCopyMessage}
+              onReact={onReact}
+              onOpenMedia={setOpenMedia}
+              onForwardMessage={setForwardMessage}
+            />
+            <Composer
+              key={`${selectedChat.id}-${editingMessage?.id || 'compose'}`}
+              chatId={selectedChat.id}
+              replyTo={replyTo}
+              editingMessage={editingMessage}
+              onSend={onSendMessage}
+              onSendAttachment={onSendAttachment}
+              onTyping={onTyping}
+              onCancelReply={onCancelReply}
+              onCancelEdit={onCancelEdit}
+              onAttach={(message) => onUpdateSettings({ toast: message })}
+              onMockSend={onSendMockMessage}
+            />
+          </>
+        ) : (
+          <section className="empty-chat">
+            <div className="empty-mark">A</div>
+            <h1>AstraChat</h1>
+            <p>Select a private conversation or start a new one from contacts.</p>
+            <button className="primary-button" onClick={onOpenContacts}>
+              New private chat
+            </button>
+          </section>
+        )}
+      </main>
+
+      {ui.searchOpen && hasChat && (
+        <SearchPanel
+          query={messageSearch}
+          messages={messages}
+          contact={selectedContact}
+          currentUser={user}
+          onQuery={onMessageSearch}
+          onClose={onToggleSearch}
+          onSelect={onSelectMessage}
+        />
+      )}
+
+      {ui.profileOpen && hasChat && (
+        <ProfilePanel
+          contact={selectedContact}
+          chat={selectedChat}
+          contacts={contacts}
+          messages={messages}
+          onMockAction={onSendMockMessage}
+          onClose={onCloseProfile}
+          onTogglePin={() => onTogglePin(selectedChat.id)}
+          onToggleMute={() => onToggleMute(selectedChat.id)}
+          onArchive={() => onArchiveChat(selectedChat.id)}
+          onOpenMedia={setOpenMedia}
+        />
+      )}
+
+      {ui.contactsOpen && (
+        <ContactModal
+          contacts={contacts}
+          chats={chatSummaries}
+          onCreateChat={onCreateChat}
+          onClose={onCloseContacts}
+        />
+      )}
+
+      {ui.createSpace && (
+        <CreateSpaceModal mode={ui.createSpace} onCreate={onCreateSpace} onClose={onCloseCreateSpace} />
+      )}
+
+      {callController.call && (
+        <CallModal
+          call={callController.call}
+          localStream={callController.localStream}
+          remoteStream={callController.remoteStream}
+          onAccept={callController.acceptCall}
+          onEnd={callController.endCall}
+          onDismiss={callController.dismissCall}
+          onToggleMute={callController.toggleMute}
+          onToggleCamera={callController.toggleCamera}
+          onToggleSpeaker={callController.toggleSpeaker}
+          onToggleScreenShare={callController.toggleScreenShare}
+        />
+      )}
+
+      {toast && <div className="toast">{toast}</div>}
+      <MediaViewer media={openMedia} onClose={() => setOpenMedia(null)} />
+      <ForwardModal
+        message={forwardMessage}
+        chats={chatSummaries}
+        onClose={() => setForwardMessage(null)}
+        onForward={(chatId) => {
+          onForwardMessage(forwardMessage, chatId)
+          setForwardMessage(null)
+        }}
+      />
+    </div>
+  )
+}
