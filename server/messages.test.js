@@ -118,7 +118,7 @@ async function createChat(db, creatorId, type = 'private') {
 
 async function addMember(db, chatId, userId) {
   await db.query(
-    `INSERT INTO chat_members (chat_id, user_id) ON CONFLICT DO NOTHING VALUES ($1, $2)`,
+    `INSERT INTO chat_members (chat_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
     [chatId, userId],
   )
 }
@@ -187,11 +187,7 @@ describe('Message visibility', () => {
     alice = await createUser(db, { login: 'alice', name: 'Alice' })
     bob = await createUser(db, { login: 'bob', name: 'Bob' })
     chatId = await createChat(db, alice)
-    // Add bob manually (addMember has param order bug in helper above - fix inline)
-    await db.query(
-      `INSERT INTO chat_members (chat_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-      [chatId, bob],
-    )
+    await addMember(db, chatId, bob)
   })
 
   after(async () => {

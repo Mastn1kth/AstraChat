@@ -458,6 +458,7 @@ export default function App() {
   const stateRef = useRef(state)
   const selectChatRef = useRef(null)
   const loadMessagesRef = useRef(null)
+  const loadServerWorkspaceRef = useRef(null)
   const [presence, setPresence] = useState({})
   const [typingByChat, setTypingByChat] = useState({})
   const [socketVersion, setSocketVersion] = useState(0)
@@ -540,6 +541,11 @@ export default function App() {
   // Keep fresh reference to loadMessages for WS reconnect use.
   useEffect(() => {
     loadMessagesRef.current = loadMessagesFromServer
+  })
+
+  // Keep fresh reference to workspace reload for the long-lived WebSocket handler.
+  useEffect(() => {
+    loadServerWorkspaceRef.current = loadServerWorkspace
   })
 
   useEffect(() => {
@@ -713,7 +719,7 @@ export default function App() {
 
       if (payload.type === 'chat:member-added' && payload.chatId) {
         // Reload workspace so member lists and encryption keys are fresh
-        loadServerWorkspace(state.user.id).catch(() => {})
+        loadServerWorkspaceRef.current?.(state.user.id).catch(() => {})
         return
       }
 
@@ -729,7 +735,7 @@ export default function App() {
             setUi((current) => ({ ...current, mobilePane: 'list' }))
           }
         } else {
-          loadServerWorkspace(state.user.id).catch(() => {})
+          loadServerWorkspaceRef.current?.(state.user.id).catch(() => {})
         }
         return
       }
@@ -1088,7 +1094,7 @@ export default function App() {
       window.removeEventListener('astrachat:update-ready', handleUpdate)
       window.removeEventListener('astrachat:open-chat', handleOpenChat)
     }
-  }, [])
+  }, [showToast])
 
   const chatSummaries = useMemo(() => {
     return state.chats

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AlertCircle, Check, CheckCheck, CheckSquare, Copy, Download, Edit3, ExternalLink, FileText, Forward, Mic, Pin, Play, RefreshCw, Reply, SmilePlus, Square, Trash2 } from 'lucide-react'
 import { formatMessageTime } from '../utils/formatters'
 import FormattedText from '../utils/textFormat'
@@ -14,30 +14,31 @@ function extractFirstUrl(text) {
 }
 
 function useLinkPreview(url) {
-  const [preview, setPreview] = useState(undefined) // undefined=loading, null=none
-  const mountedRef = useRef(true)
+  const [loadedPreview, setLoadedPreview] = useState({ url: null, preview: null })
+
   useEffect(() => {
-    mountedRef.current = true
-    return () => { mountedRef.current = false }
-  }, [])
-  useEffect(() => {
-    if (!url) { setPreview(null); return }
-    if (linkPreviewCache.has(url)) { setPreview(linkPreviewCache.get(url)); return }
-    setPreview(undefined)
+    if (!url || linkPreviewCache.has(url)) return undefined
+
+    let cancelled = false
     getLinkPreview(url)
       .then((data) => {
-        if (!mountedRef.current) return
+        if (cancelled) return
         const result = (data?.title || data?.description) ? data : null
         linkPreviewCache.set(url, result)
-        setPreview(result)
+        setLoadedPreview({ url, preview: result })
       })
       .catch(() => {
-        if (!mountedRef.current) return
+        if (cancelled) return
         linkPreviewCache.set(url, null)
-        setPreview(null)
+        setLoadedPreview({ url, preview: null })
       })
+
+    return () => { cancelled = true }
   }, [url])
-  return preview
+
+  if (!url) return null
+  if (linkPreviewCache.has(url)) return linkPreviewCache.get(url)
+  return loadedPreview.url === url ? loadedPreview.preview : undefined
 }
 
 const reactions = ['\u{1F44D}', '\u{1F499}', '\u{1F602}', '\u{1F525}']

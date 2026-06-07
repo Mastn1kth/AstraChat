@@ -43,8 +43,7 @@ export default function ProfilePanel({
   onUpdateGroupInfo,
 }) {
   const [sharedTab, setSharedTab] = useState('media')
-  const [members, setMembers] = useState(null) // null = not loaded
-  const [membersLoading, setMembersLoading] = useState(false)
+  const [memberLoad, setMemberLoad] = useState({ chatId: null, members: null })
   const [addingMember, setAddingMember] = useState(false)
   const [addMemberId, setAddMemberId] = useState('')
   const [editingTitle, setEditingTitle] = useState(false)
@@ -52,15 +51,23 @@ export default function ProfilePanel({
 
   const isBackendGroup = chat.backend && (contact.type === 'group' || contact.type === 'channel')
   const isOwnerOrAdmin = contact.role === 'owner' || contact.role === 'admin'
+  const members = memberLoad.chatId === chat.id ? memberLoad.members : null
+  const membersLoading = Boolean(isBackendGroup && onLoadGroupMembers && memberLoad.chatId !== chat.id)
 
   // Load members for backend groups when panel opens
   useEffect(() => {
-    if (!isBackendGroup || !onLoadGroupMembers) return
-    setMembersLoading(true)
+    if (!isBackendGroup || !onLoadGroupMembers) return undefined
+
+    let cancelled = false
     onLoadGroupMembers(chat.id)
-      .then((list) => setMembers(list || []))
-      .catch(() => setMembers([]))
-      .finally(() => setMembersLoading(false))
+      .then((list) => {
+        if (!cancelled) setMemberLoad({ chatId: chat.id, members: list || [] })
+      })
+      .catch(() => {
+        if (!cancelled) setMemberLoad({ chatId: chat.id, members: [] })
+      })
+
+    return () => { cancelled = true }
   }, [chat.id, isBackendGroup, onLoadGroupMembers])
 
   const title =
@@ -111,7 +118,7 @@ export default function ProfilePanel({
       setAddingMember(false)
       // Reload member list
       const list = await onLoadGroupMembers(chat.id)
-      setMembers(list || [])
+      setMemberLoad({ chatId: chat.id, members: list || [] })
     } catch {
       // toast shown by App.jsx
     }
@@ -121,7 +128,11 @@ export default function ProfilePanel({
     if (!window.confirm('Remove this member?')) return
     try {
       await onRemoveGroupMember(chat.id, userId)
-      setMembers((current) => (current || []).filter((m) => m.id !== userId))
+      setMemberLoad((current) => (
+        current.chatId === chat.id
+          ? { ...current, members: (current.members || []).filter((m) => m.id !== userId) }
+          : current
+      ))
     } catch {
       // toast shown by App.jsx
     }

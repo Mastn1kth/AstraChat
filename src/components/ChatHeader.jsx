@@ -21,6 +21,10 @@ const MUTE_OPTIONS = [
   { label: 'Forever', ms: null },
 ]
 
+function getMutedUntil(ms) {
+  return ms === null ? '9999-12-31T23:59:59.000Z' : new Date(Date.now() + ms).toISOString()
+}
+
 export default function ChatHeader({
   contact,
   chat,
@@ -29,7 +33,6 @@ export default function ChatHeader({
   onToggleSearch,
   onTogglePin,
   onMuteChat,
-  onToggleMute,
   onArchive,
   onOpenCall,
 }) {
@@ -44,8 +47,7 @@ export default function ChatHeader({
   }
 
   function selectMuteDuration(ms) {
-    const mutedUntil = ms === null ? '9999-12-31T23:59:59.000Z' : new Date(Date.now() + ms).toISOString()
-    onMuteChat(mutedUntil)
+    onMuteChat(getMutedUntil(ms))
     setMuteMenuOpen(false)
   }
 

@@ -1114,8 +1114,12 @@ app.get('/api/link-preview', requireAuth, async (request, response) => {
 
   const cached = linkPreviewCache.get(url)
   if (cached && Date.now() - cached.cachedAt < LINK_PREVIEW_TTL_MS) {
-    const { cachedAt: _, ...rest } = cached
-    response.json(rest)
+    response.json({
+      title: cached.title,
+      description: cached.description,
+      image: cached.image,
+      siteName: cached.siteName,
+    })
     return
   }
 
