@@ -389,6 +389,7 @@ button {
   display: grid;
   grid-template-columns: 340px minmax(0, 1fr);
   height: 100svh;
+  min-height: 0;
   overflow: hidden;
   background: var(--bg);
 }
@@ -397,8 +398,11 @@ button {
   position: relative;
   z-index: 8;
   display: flex;
+  height: 100%;
+  min-height: 0;
   min-width: 0;
   flex-direction: column;
+  overflow: hidden;
   border-right: 1px solid var(--border);
   background: var(--surface);
 }
@@ -464,6 +468,7 @@ button {
 .sidebar-header,
 .chat-header {
   display: flex;
+  flex: 0 0 auto;
   min-height: 60px;
   align-items: center;
   gap: 8px;
@@ -910,6 +915,225 @@ textarea:focus-visible {
   opacity: 0.62;
 }
 
+.folder-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px 8px;
+}
+
+.folder-menu-header strong {
+  font-size: 15px;
+}
+
+.folder-menu-header button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  cursor: pointer;
+  padding: 8px 10px;
+  font-weight: 750;
+}
+
+.folder-section {
+  display: grid;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.folder-section > span,
+.folder-chat-picker > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.folder-system-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.folder-system-grid button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  padding: 0 10px;
+  text-align: left;
+}
+
+.folder-system-grid button.active {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.folder-system-grid button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 720;
+}
+
+.folder-system-grid button small {
+  color: var(--muted);
+}
+
+.folder-manager-list {
+  display: grid;
+  gap: 6px;
+  overflow: visible;
+  padding: 0;
+}
+
+.folder-manager-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 4px;
+}
+
+.folder-manager-row button {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 8px;
+}
+
+.folder-manager-row button:first-child {
+  text-align: left;
+}
+
+.folder-manager-row button:hover {
+  background: var(--surface-2);
+}
+
+.folder-manager-row span {
+  display: grid;
+  min-width: 0;
+}
+
+.folder-manager-row strong,
+.folder-manager-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-manager-row small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.folder-manager-row .danger-folder-button {
+  color: var(--danger);
+}
+
+.folder-editor {
+  gap: 12px;
+}
+
+.folder-chat-picker {
+  display: grid;
+  gap: 8px;
+}
+
+.folder-chat-picker > div {
+  display: grid;
+  max-height: 42vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.folder-chat-option {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  padding: 7px 9px;
+}
+
+.folder-chat-option:last-child {
+  border-bottom: 0;
+}
+
+.folder-chat-option:hover {
+  background: var(--surface-2);
+}
+
+.folder-chat-option input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.folder-chat-option span {
+  display: grid;
+  min-width: 0;
+}
+
+.folder-chat-option strong,
+.folder-chat-option small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-chat-option small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.folder-editor-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.folder-editor-actions button {
+  min-height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.folder-editor-actions .primary-button {
+  border-color: transparent;
+  color: #fff;
+  background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+}
+
 .session-actions {
   border-bottom: 1px solid var(--border);
   padding-bottom: 8px;
@@ -1016,6 +1240,7 @@ textarea:focus-visible {
 
 .search-field {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
   margin: 8px 10px;
@@ -1047,10 +1272,81 @@ textarea::placeholder {
   color: var(--faint);
 }
 
+.folder-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 8px 10px 2px;
+  scrollbar-width: none;
+}
+
+.folder-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.folder-tabs button {
+  display: inline-flex;
+  min-width: max-content;
+  height: 34px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.folder-tabs button:hover {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+  color: var(--accent);
+}
+
+.folder-tabs button.active {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.folder-tabs button small {
+  display: grid;
+  min-width: 19px;
+  height: 19px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  padding: 0 5px;
+  font-size: 11px;
+}
+
+.folder-tabs button.active small {
+  background: var(--surface);
+  color: var(--accent);
+}
+
+.folder-tabs .folder-tabs-add {
+  position: sticky;
+  right: 0;
+  z-index: 2;
+  width: 34px;
+  min-width: 34px;
+  justify-content: center;
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  background: var(--surface);
+  padding: 0;
+  box-shadow: -10px 0 16px var(--surface);
+}
+
 .chat-list {
   min-height: 0;
   flex: 1;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 2px 7px 12px;
 }
 
@@ -1175,6 +1471,10 @@ textarea::placeholder {
   color: var(--faint);
 }
 
+.folder-pin-flag {
+  color: var(--accent);
+}
+
 .unread-badge {
   min-width: 22px;
   height: 22px;
@@ -1218,6 +1518,11 @@ textarea::placeholder {
 
 .chat-row-actions button:hover {
   background: var(--surface-2);
+  color: var(--accent);
+}
+
+.chat-row-actions button.active {
+  background: var(--accent-soft);
   color: var(--accent);
 }
 
@@ -1276,15 +1581,16 @@ textarea::placeholder {
   position: relative;
   z-index: 2;
   display: flex;
+  height: 100%;
+  min-height: 0;
   min-width: 0;
   flex-direction: column;
+  overflow: hidden;
   background:
-    radial-gradient(circle at 15% 20%, rgba(255, 255, 255, 0.35) 0 1px, transparent 2px),
-    radial-gradient(circle at 80% 30%, rgba(255, 255, 255, 0.28) 0 1px, transparent 2px),
-    linear-gradient(135deg, rgba(124, 58, 237, 0.07), transparent 35%),
+    linear-gradient(135deg, rgba(124, 58, 237, 0.05), transparent 34%),
     repeating-linear-gradient(135deg, transparent 0 21px, rgba(124, 58, 237, 0.025) 21px 22px),
     var(--bg);
-  background-size: 180px 180px, 220px 220px, auto, auto, auto;
+  background-size: auto, auto, auto;
 }
 
 .chat-header {
@@ -1340,6 +1646,7 @@ textarea::placeholder {
   flex-direction: column;
   gap: 3px;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 12px clamp(12px, 6vw, 92px) 14px;
 }
 
@@ -1764,6 +2071,8 @@ textarea::placeholder {
 
 .composer {
   position: relative;
+  z-index: 4;
+  flex: 0 0 auto;
   border-top: 1px solid var(--border);
   background: linear-gradient(180deg, var(--surface) 0%, rgba(245, 243, 255, 0.6) 100%);
   padding: 10px clamp(10px, 3vw, 28px) 12px;

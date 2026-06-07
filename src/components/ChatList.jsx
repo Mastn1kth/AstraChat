@@ -3,42 +3,36 @@ import ChatItem from './ChatItem'
 export default function ChatList({
   chats,
   selectedChatId,
-  search,
-  showArchived,
+  folderTitle,
+  canPinInFolder,
   onSelectChat,
   onTogglePin,
   onToggleMute,
   onArchiveChat,
+  onToggleFolderPin,
 }) {
-  const normalized = search.trim().toLowerCase()
-  const visibleChats = chats.filter((chat) => {
-    if (chat.archived !== showArchived) return false
-    if (!normalized) return true
-    return [chat.contact.name, chat.contact.username, chat.lastMessageText]
-      .filter(Boolean)
-      .some((value) => value.toLowerCase().includes(normalized))
-  })
-
-  if (!visibleChats.length) {
+  if (!chats.length) {
     return (
       <div className="empty-list">
         <strong>No chats found</strong>
-        <span>Try another query or create a private chat, group or channel.</span>
+        <span>{folderTitle ? `${folderTitle} is empty.` : 'Try another query or create a chat.'}</span>
       </div>
     )
   }
 
   return (
     <div className="chat-list">
-      {visibleChats.map((chat) => (
+      {chats.map((chat) => (
         <ChatItem
           key={chat.id}
           chat={chat}
           selected={chat.id === selectedChatId}
+          canPinInFolder={canPinInFolder}
           onSelect={() => onSelectChat(chat.id)}
           onTogglePin={() => onTogglePin(chat.id)}
           onToggleMute={() => onToggleMute(chat.id)}
           onArchive={() => onArchiveChat(chat.id)}
+          onToggleFolderPin={() => onToggleFolderPin(chat.id)}
         />
       ))}
     </div>

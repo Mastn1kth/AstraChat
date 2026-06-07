@@ -8,6 +8,7 @@ export function loadMessengerState(fallbackState) {
     return {
       ...fallbackState,
       ...parsed,
+      chatFolders: parsed.chatFolders || fallbackState.chatFolders,
       settings: {
         ...fallbackState.settings,
         ...(parsed.settings || {}),
@@ -28,6 +29,7 @@ export function saveMessengerState(state) {
     messages: state.messages,
     contacts: state.contacts,
     user: state.user,
+    chatFolders: state.chatFolders,
     settings: state.settings,
   }
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))

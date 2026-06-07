@@ -8,11 +8,15 @@ import { loadMessengerState, resetMessengerState, saveMessengerState } from './u
 import { bumpAvatarCache } from './utils/avatarCache'
 import {
   changePassword,
+  createChatFolder,
   createChat as createServerChat,
   deleteAccount,
   deleteAvatar,
+  deleteChatFolder,
   deleteChatMessage,
+  deleteChatMessageForMe,
   editChatMessage,
+  getChatFolders,
   getSessions,
   getChatMessages,
   getChats,
@@ -25,7 +29,10 @@ import {
   sendChatMessage,
   terminateOtherSessions,
   terminateSession,
+  updateChatFolder,
+  updateChatFolderChat,
   toggleMessageReaction,
+  updateChatSettings,
   updateProfile,
   updateEncryptionPublicKey,
   uploadAvatar,
@@ -47,6 +54,22 @@ import {
 } from './utils/wordStream'
 import { ensureNotificationPermission, playIncomingSound, showDesktopNotification } from './utils/notify'
 
+const APP_TITLE = 'AstraChat'
+
+const SYSTEM_CHAT_FOLDERS = [
+  { id: 'all', title: 'All', filter: 'all' },
+  { id: 'unread', title: 'Unread', filter: 'unread' },
+  { id: 'personal', title: 'Personal', filter: 'private' },
+  { id: 'groups', title: 'Groups', filter: 'group' },
+  { id: 'channels', title: 'Channels', filter: 'channel' },
+  { id: 'archived', title: 'Archived', filter: 'archived' },
+]
+
+const EMPTY_CHAT_FOLDERS = {
+  systemFolders: SYSTEM_CHAT_FOLDERS,
+  folders: [],
+}
+
 const fallbackState = {
   user: currentUser,
   contacts: seedContacts,
@@ -59,9 +82,8 @@ const fallbackState = {
     chatBackground: 'default',
     wordStream: DEFAULT_WORD_STREAM_SETTINGS,
   },
+  chatFolders: EMPTY_CHAT_FOLDERS,
 }
-
-const APP_TITLE = 'AstraChat'
 
 function notificationBody(message) {
   if (message.deleted) return 'Message deleted'
@@ -82,6 +104,26 @@ function createId(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
+function normalizeChatFolders(payload = EMPTY_CHAT_FOLDERS) {
+  return {
+    systemFolders: payload.systemFolders?.length ? payload.systemFolders : SYSTEM_CHAT_FOLDERS,
+    folders: (payload.folders || []).map((folder) => ({
+      id: folder.id,
+      title: folder.title,
+      icon: folder.icon || '',
+      sortOrder: folder.sortOrder || 0,
+      createdAt: folder.createdAt || new Date().toISOString(),
+      updatedAt: folder.updatedAt || folder.createdAt || new Date().toISOString(),
+      chats: (folder.chats || []).map((chat) => ({
+        chatId: chat.chatId,
+        pinned: Boolean(chat.pinned),
+        pinnedAt: chat.pinnedAt || null,
+        addedAt: chat.addedAt || new Date().toISOString(),
+      })),
+    })),
+  }
+}
+
 async function normalizeServerMessage(message, currentUserId) {
   const decrypted = await decryptTextForUser(message.text || '', currentUserId)
   const media = await normalizeServerMedia(message.media, currentUserId)
@@ -94,6 +136,9 @@ async function normalizeServerMessage(message, currentUserId) {
     deleted: Boolean(message.deletedAt),
     status: message.status || 'sent',
     replyToId: message.replyToId || undefined,
+    forwarded: Boolean(message.forwarded),
+    forwardedFromMessageId: message.forwardedFromMessageId || undefined,
+    forwardedFromChatId: message.forwardedFromChatId || undefined,
     reactions: message.reactions || {},
     media,
     backend: true,
@@ -377,6 +422,7 @@ export default function App() {
     error: '',
   })
   const [selectedChatId, setSelectedChatId] = useState(() => state.chats.find((chat) => !chat.archived)?.id || '')
+  const [selectedFolderId, setSelectedFolderId] = useState('all')
   const [sidebarSearch, setSidebarSearch] = useState('')
   const [messageSearch, setMessageSearch] = useState('')
   const [replyToId, setReplyToId] = useState('')
@@ -573,6 +619,26 @@ export default function App() {
         return
       }
 
+      if (payload.type === 'chat:settings' && payload.chatId && payload.settings) {
+        setState((current) => ({
+          ...current,
+          chats: current.chats.map((chat) =>
+            chat.id === payload.chatId
+              ? {
+                  ...chat,
+                  pinned: Boolean(payload.settings.pinned),
+                  pinnedAt: payload.settings.pinnedAt || null,
+                  muted: Boolean(payload.settings.muted),
+                  mutedUntil: payload.settings.mutedUntil || null,
+                  archived: Boolean(payload.settings.archived),
+                  archivedAt: payload.settings.archivedAt || null,
+                }
+              : chat,
+          ),
+        }))
+        return
+      }
+
       if (payload.type === 'message:delivered' && payload.chatId && payload.messageId) {
         setState((current) => ({
           ...current,
@@ -703,7 +769,11 @@ export default function App() {
 
   async function loadServerWorkspace(currentUserId, currentUserPublicKey = state.user.encryptionPublicKey) {
     try {
-      const [{ users }, { chats }] = await Promise.all([searchUsers(), getChats()])
+      const [{ users }, { chats }, folderPayload] = await Promise.all([
+        searchUsers(),
+        getChats(),
+        getChatFolders(),
+      ])
       const serverContacts = users
         .filter((user) => user.id !== currentUserId)
         .map((user) => ({
@@ -776,6 +846,7 @@ export default function App() {
           })
         }
 
+        const chatSettings = chat.settings || {}
         return {
           id: chat.id,
           contactId,
@@ -785,9 +856,12 @@ export default function App() {
             id: member.id,
             encryptionPublicKey: member.encryptionPublicKey,
           })),
-          pinned: false,
-          muted: false,
-          archived: false,
+          pinned: Boolean(chatSettings.pinned),
+          pinnedAt: chatSettings.pinnedAt || null,
+          muted: Boolean(chatSettings.muted),
+          mutedUntil: chatSettings.mutedUntil || null,
+          archived: Boolean(chatSettings.archived),
+          archivedAt: chatSettings.archivedAt || null,
           unread: 0,
           createdAt: chat.created_at,
         }
@@ -810,6 +884,7 @@ export default function App() {
             serverChats.map((chat) => [chat.id, current.messages[chat.id] || []]),
           ),
         },
+        chatFolders: normalizeChatFolders(folderPayload),
       }))
     } catch {
       showToast('Could not load server chats.')
@@ -878,6 +953,7 @@ export default function App() {
       await logoutAccount()
     } finally {
       setAuth({ status: 'anonymous', user: null, error: '' })
+      setSelectedFolderId('all')
       setUi((current) => ({ ...current, menuOpen: false, mobilePane: 'list' }))
     }
   }
@@ -915,6 +991,7 @@ export default function App() {
       resetMessengerState()
       setState(fallbackState)
       setSelectedChatId('')
+      setSelectedFolderId('all')
       setAuth({ status: 'anonymous', user: null, error: '' })
       setUi((current) => ({ ...current, menuOpen: false, mobilePane: 'list' }))
       showToast('Account deleted.')
@@ -1116,7 +1193,7 @@ export default function App() {
     }))
     setState((current) => ({
       ...current,
-      chats: current.chats.map((chat) => (chat.id === chatId ? { ...chat, unread: 0, archived: false } : chat)),
+      chats: current.chats.map((chat) => (chat.id === chatId ? { ...chat, unread: 0 } : chat)),
     }))
     if (chat?.backend) {
       loadMessagesFromServer(chatId)
@@ -1285,7 +1362,10 @@ export default function App() {
     }
 
     try {
-      const { message } = await sendChatMessage(targetChat.id, { text: payloadText })
+      const { message } = await sendChatMessage(targetChat.id, {
+        text: payloadText,
+        forwardedFromMessageId: sourceMessage.backend ? sourceMessage.id : undefined,
+      })
       const normalizedMessage = await normalizeServerMessage(message, state.user.id)
       setState((current) => ({
         ...current,
@@ -1364,10 +1444,25 @@ export default function App() {
   async function deleteMessage(messageId) {
     if (!selectedChat) return
     if (selectedChat.backend) {
+      const message = (state.messages[selectedChat.id] || []).find((item) => item.id === messageId)
       try {
-        await deleteChatMessage(selectedChat.id, messageId)
+        if (message?.senderId === state.user.id) {
+          await deleteChatMessage(selectedChat.id, messageId)
+          showToast('Message deleted for everyone.')
+        } else {
+          await deleteChatMessageForMe(selectedChat.id, messageId)
+          setState((current) => ({
+            ...current,
+            messages: {
+              ...current.messages,
+              [selectedChat.id]: (current.messages[selectedChat.id] || []).filter(
+                (item) => item.id !== messageId,
+              ),
+            },
+          }))
+          showToast('Message deleted for you.')
+        }
         setSelectedMessageId('')
-        showToast('Message deleted for everyone.')
       } catch (error) {
         showToast(error.message || 'Message was not deleted.')
       }
@@ -1431,23 +1526,194 @@ export default function App() {
     }))
   }
 
-  function toggleChatField(chatId, field) {
-    setState((current) => ({
-      ...current,
-      chats: current.chats.map((chat) => (chat.id === chatId ? { ...chat, [field]: !chat[field] } : chat)),
-    }))
-  }
-
-  function archiveChat(chatId) {
+  function applyServerChatSettings(chatId, settings) {
     setState((current) => ({
       ...current,
       chats: current.chats.map((chat) =>
-        chat.id === chatId ? { ...chat, archived: !chat.archived, unread: 0 } : chat,
+        chat.id === chatId
+          ? {
+              ...chat,
+              pinned: Boolean(settings.pinned),
+              pinnedAt: settings.pinnedAt || null,
+              muted: Boolean(settings.muted),
+              mutedUntil: settings.mutedUntil || null,
+              archived: Boolean(settings.archived),
+              archivedAt: settings.archivedAt || null,
+            }
+          : chat,
       ),
     }))
-    if (selectedChatId === chatId) {
+  }
+
+  async function toggleChatField(chatId, field) {
+    const chat = state.chats.find((item) => item.id === chatId)
+    if (!chat) return
+    const nextValue = !chat[field]
+    setState((current) => ({
+      ...current,
+      chats: current.chats.map((item) => (item.id === chatId ? { ...item, [field]: nextValue } : item)),
+    }))
+    if (!chat.backend) return
+
+    try {
+      const patch = field === 'muted' ? { muted: nextValue } : { [field]: nextValue }
+      const { settings } = await updateChatSettings(chatId, patch)
+      applyServerChatSettings(chatId, settings)
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        chats: current.chats.map((item) => (item.id === chatId ? { ...item, [field]: chat[field] } : item)),
+      }))
+      showToast(error.message || 'Chat setting was not saved.')
+    }
+  }
+
+  async function archiveChat(chatId) {
+    const chat = state.chats.find((item) => item.id === chatId)
+    if (!chat) return
+    const nextArchived = !chat.archived
+    setState((current) => ({
+      ...current,
+      chats: current.chats.map((chat) =>
+        chat.id === chatId ? { ...chat, archived: nextArchived, unread: 0 } : chat,
+      ),
+    }))
+    if (nextArchived && selectedChatId === chatId) {
       setSelectedChatId('')
       setUi((current) => ({ ...current, mobilePane: 'list', profileOpen: false }))
+    }
+    if (!chat.backend) return
+
+    try {
+      const { settings } = await updateChatSettings(chatId, { archived: nextArchived })
+      applyServerChatSettings(chatId, settings)
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        chats: current.chats.map((item) =>
+          item.id === chatId ? { ...item, archived: chat.archived } : item,
+        ),
+      }))
+      showToast(error.message || 'Archive state was not saved.')
+    }
+  }
+
+  function upsertChatFolder(folder) {
+    setState((current) => {
+      const normalized = normalizeChatFolders({ ...current.chatFolders, folders: [folder] }).folders[0]
+      return {
+        ...current,
+        chatFolders: {
+          ...(current.chatFolders || EMPTY_CHAT_FOLDERS),
+          folders: (current.chatFolders?.folders || []).some((item) => item.id === normalized.id)
+            ? current.chatFolders.folders.map((item) => (item.id === normalized.id ? normalized : item))
+            : [...(current.chatFolders?.folders || []), normalized],
+        },
+      }
+    })
+  }
+
+  async function createFolder(input) {
+    const { folder } = await createChatFolder(input)
+    upsertChatFolder(folder)
+    showToast('Folder created.')
+    return folder
+  }
+
+  async function saveFolder(folderId, input) {
+    const snapshot = state.chatFolders
+    try {
+      const { folder } = await updateChatFolder(folderId, input)
+      setState((current) => {
+        const existing = current.chatFolders?.folders?.find((item) => item.id === folderId)
+        const nextFolder = {
+          ...existing,
+          ...folder,
+          chats: folder.chats || existing?.chats || [],
+        }
+        return {
+          ...current,
+          chatFolders: {
+            ...(current.chatFolders || EMPTY_CHAT_FOLDERS),
+            folders: (current.chatFolders?.folders || []).map((item) =>
+              item.id === folderId ? normalizeChatFolders({ folders: [nextFolder] }).folders[0] : item,
+            ),
+          },
+        }
+      })
+      showToast('Folder saved.')
+      return folder
+    } catch (error) {
+      setState((current) => ({ ...current, chatFolders: snapshot }))
+      throw error
+    }
+  }
+
+  async function removeFolder(folderId) {
+    const snapshot = state.chatFolders
+    setState((current) => ({
+      ...current,
+      chatFolders: {
+        ...(current.chatFolders || EMPTY_CHAT_FOLDERS),
+        folders: (current.chatFolders?.folders || []).filter((folder) => folder.id !== folderId),
+      },
+    }))
+    if (selectedFolderId === folderId) setSelectedFolderId('all')
+    try {
+      await deleteChatFolder(folderId)
+      showToast('Folder deleted.')
+    } catch (error) {
+      setState((current) => ({ ...current, chatFolders: snapshot }))
+      throw error
+    }
+  }
+
+  async function toggleFolderChatPin(folderId, chatId) {
+    const folder = state.chatFolders?.folders?.find((item) => item.id === folderId)
+    const folderChat = folder?.chats?.find((item) => item.chatId === chatId)
+    if (!folder || !folderChat) return
+    const nextPinned = !folderChat.pinned
+    const now = new Date().toISOString()
+    const snapshot = state.chatFolders
+    setState((current) => ({
+      ...current,
+      chatFolders: {
+        ...(current.chatFolders || EMPTY_CHAT_FOLDERS),
+        folders: (current.chatFolders?.folders || []).map((item) =>
+          item.id === folderId
+            ? {
+                ...item,
+                chats: item.chats.map((chat) =>
+                  chat.chatId === chatId
+                    ? { ...chat, pinned: nextPinned, pinnedAt: nextPinned ? now : null }
+                    : chat,
+                ),
+              }
+            : item,
+        ),
+      },
+    }))
+    try {
+      const { chat } = await updateChatFolderChat(folderId, chatId, { pinned: nextPinned })
+      setState((current) => ({
+        ...current,
+        chatFolders: {
+          ...(current.chatFolders || EMPTY_CHAT_FOLDERS),
+          folders: (current.chatFolders?.folders || []).map((item) =>
+            item.id === folderId
+              ? {
+                  ...item,
+                  chats: item.chats.map((folderChat) =>
+                    folderChat.chatId === chatId ? { ...folderChat, ...chat } : folderChat,
+                  ),
+                }
+              : item,
+          ),
+        },
+      }))
+    } catch (error) {
+      setState((current) => ({ ...current, chatFolders: snapshot }))
+      showToast(error.message || 'Folder pin was not saved.')
     }
   }
 
@@ -1467,6 +1733,7 @@ export default function App() {
           title: '',
           memberIds: [contactId],
         })
+        const chatSettings = chat.settings || {}
         const serverChat = {
           id: chat.id,
           contactId,
@@ -1476,9 +1743,12 @@ export default function App() {
             { id: state.user.id, encryptionPublicKey: state.user.encryptionPublicKey },
             { id: contactId, encryptionPublicKey: contact.encryptionPublicKey },
           ],
-          pinned: false,
-          muted: false,
-          archived: false,
+          pinned: Boolean(chatSettings.pinned),
+          pinnedAt: chatSettings.pinnedAt || null,
+          muted: Boolean(chatSettings.muted),
+          mutedUntil: chatSettings.mutedUntil || null,
+          archived: Boolean(chatSettings.archived),
+          archivedAt: chatSettings.archivedAt || null,
           unread: 0,
           createdAt: new Date().toISOString(),
         }
@@ -1797,6 +2067,7 @@ export default function App() {
     await terminateSession(sessionId)
     if (target?.current) {
       setAuth({ status: 'anonymous', user: null, error: '' })
+      setSelectedFolderId('all')
       setUi((current) => ({ ...current, menuOpen: false, mobilePane: 'list' }))
     } else {
       showToast('Session terminated.')
@@ -1812,6 +2083,7 @@ export default function App() {
     resetMessengerState()
     setState(fallbackState)
     setSelectedChatId(fallbackState.chats[0].id)
+    setSelectedFolderId('all')
     setUi((current) => ({ ...current, menuOpen: false, createSpace: '', mobilePane: 'list' }))
     showToast('Local data reset.')
   }
@@ -1842,6 +2114,8 @@ export default function App() {
   return (
     <AppShell
       chatSummaries={chatSummaries}
+      chatFolders={state.chatFolders || EMPTY_CHAT_FOLDERS}
+      selectedFolderId={selectedFolderId}
       contacts={state.contacts}
       user={state.user}
       settings={state.settings}
@@ -1858,6 +2132,7 @@ export default function App() {
       toast={toast}
       callController={callController}
       onSelectChat={selectChat}
+      onSelectFolder={setSelectedFolderId}
       onSidebarSearch={setSidebarSearch}
       onMessageSearch={setMessageSearch}
       onSendMessage={sendMessage}
@@ -1875,6 +2150,10 @@ export default function App() {
       onTogglePin={(chatId) => toggleChatField(chatId, 'pinned')}
       onToggleMute={(chatId) => toggleChatField(chatId, 'muted')}
       onArchiveChat={archiveChat}
+      onCreateFolder={createFolder}
+      onUpdateFolder={saveFolder}
+      onDeleteFolder={removeFolder}
+      onToggleFolderPin={toggleFolderChatPin}
       onExportEncryptionKey={exportEncryptionKey}
       onImportEncryptionKey={importEncryptionKey}
       onUploadAvatar={uploadUserAvatar}

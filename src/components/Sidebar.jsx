@@ -9,6 +9,8 @@ import {
   Check,
   Copy,
   Download,
+  Folder,
+  FolderPlus,
   Hash,
   ImageUp,
   KeyRound,
@@ -17,6 +19,8 @@ import {
   Menu,
   MessageCirclePlus,
   Moon,
+  Pencil,
+  Plus,
   RotateCcw,
   Search,
   Settings,
@@ -35,8 +39,12 @@ import ChatList from './ChatList'
 import IconButton from './IconButton'
 import { formatChatTime } from '../utils/formatters'
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export default function Sidebar({
   chats,
+  chatFolders,
+  selectedFolderId,
   contacts,
   user,
   settings,
@@ -45,6 +53,7 @@ export default function Sidebar({
   menuOpen,
   onSearch,
   onSelectChat,
+  onSelectFolder,
   onOpenCreateSpace,
   onCreateChat,
   onUpdateSettings,
@@ -55,6 +64,10 @@ export default function Sidebar({
   onTogglePin,
   onToggleMute,
   onArchiveChat,
+  onCreateFolder,
+  onUpdateFolder,
+  onDeleteFolder,
+  onToggleFolderPin,
   onExportEncryptionKey,
   onImportEncryptionKey,
   onUploadAvatar,
@@ -74,6 +87,10 @@ export default function Sidebar({
   const [passwordBusy, setPasswordBusy] = useState(false)
   const [passwordError, setPasswordError] = useState('')
   const [inviteCopied, setInviteCopied] = useState(false)
+  const [folderMode, setFolderMode] = useState('list')
+  const [folderDraft, setFolderDraft] = useState({ id: '', title: '', chatIds: [] })
+  const [folderBusy, setFolderBusy] = useState(false)
+  const [folderError, setFolderError] = useState('')
   const keyImportRef = useRef(null)
   const avatarInputRef = useRef(null)
 
@@ -144,10 +161,70 @@ export default function Sidebar({
     if (!normalized) return true
     return [contact.name, contact.username, contact.phone].filter(Boolean).some((value) => value.toLowerCase().includes(normalized))
   })
+  const systemFolders = chatFolders?.systemFolders || []
+  const customFolders = chatFolders?.folders || []
+  const folderSelectableChats = chats.filter((chat) => UUID_RE.test(chat.id))
+  const selectedCustomFolder = customFolders.find((folder) => folder.id === selectedFolderId)
+  const selectedSystemFolder = systemFolders.find((folder) => folder.id === selectedFolderId)
+  const selectedFolder = selectedCustomFolder || selectedSystemFolder || systemFolders[0]
+  const normalizedChatSearch = search.trim().toLowerCase()
+
+  function matchesSearch(chat) {
+    if (!normalizedChatSearch) return true
+    return [chat.contact.name, chat.contact.username, chat.lastMessageText]
+      .filter(Boolean)
+      .some((value) => value.toLowerCase().includes(normalizedChatSearch))
+  }
+
+  function matchesSystemFolder(chat, folderId) {
+    if (folderId === 'archived') return chat.archived
+    if (chat.archived) return false
+    if (folderId === 'unread') return (chat.unread || 0) > 0
+    if (folderId === 'personal') return chat.contact.type === 'private'
+    if (folderId === 'groups') return chat.contact.type === 'group' || chat.serverType === 'group'
+    if (folderId === 'channels') return chat.contact.type === 'channel' || chat.serverType === 'channel'
+    return true
+  }
+
+  function recentTime(chat) {
+    return chat.lastMessageTime ? new Date(chat.lastMessageTime).getTime() : 0
+  }
+
+  function chatsForCustomFolder(folder) {
+    const folderChats = new Map((folder?.chats || []).map((chat) => [chat.chatId, chat]))
+    return chats
+      .filter((chat) => folderChats.has(chat.id) && matchesSearch(chat))
+      .map((chat) => {
+        const folderChat = folderChats.get(chat.id)
+        return {
+          ...chat,
+          folderPinned: Boolean(folderChat?.pinned),
+          folderPinnedAt: folderChat?.pinnedAt || null,
+        }
+      })
+      .sort((a, b) => {
+        if (a.folderPinned !== b.folderPinned) return a.folderPinned ? -1 : 1
+        if (a.folderPinned && b.folderPinned) {
+          return new Date(b.folderPinnedAt || 0).getTime() - new Date(a.folderPinnedAt || 0).getTime()
+        }
+        return recentTime(b) - recentTime(a)
+      })
+  }
+
+  const visibleChats = selectedCustomFolder
+    ? chatsForCustomFolder(selectedCustomFolder)
+    : chats.filter((chat) => matchesSystemFolder(chat, selectedFolder?.id || 'all') && matchesSearch(chat))
+
+  function folderCount(folder) {
+    if (folder.chats) return folder.chats.length
+    return chats.filter((chat) => matchesSystemFolder(chat, folder.id)).length
+  }
 
   function closeMenu() {
     setMenuView('main')
     setContactSearch('')
+    setFolderMode('list')
+    setFolderError('')
     onToggleMenu()
   }
 
@@ -170,7 +247,75 @@ export default function Sidebar({
   function openMainMenu() {
     setMenuView('main')
     setContactSearch('')
+    setFolderMode('list')
+    setFolderError('')
     onToggleMenu()
+  }
+
+  function startCreateFolder() {
+    setFolderMode('create')
+    setFolderDraft({ id: '', title: '', chatIds: [] })
+    setFolderError('')
+  }
+
+  function startEditFolder(folder) {
+    setFolderMode('edit')
+    setFolderDraft({
+      id: folder.id,
+      title: folder.title,
+      chatIds: (folder.chats || []).map((chat) => chat.chatId),
+    })
+    setFolderError('')
+  }
+
+  function toggleDraftChat(chatId) {
+    setFolderDraft((draft) => ({
+      ...draft,
+      chatIds: draft.chatIds.includes(chatId)
+        ? draft.chatIds.filter((id) => id !== chatId)
+        : [...draft.chatIds, chatId],
+    }))
+  }
+
+  async function submitFolder(event) {
+    event.preventDefault()
+    setFolderError('')
+    const title = folderDraft.title.trim()
+    if (!title) {
+      setFolderError('Folder name is required.')
+      return
+    }
+    setFolderBusy(true)
+    try {
+      if (folderMode === 'edit') {
+        await onUpdateFolder(folderDraft.id, { title, chatIds: folderDraft.chatIds })
+      } else {
+        const folder = await onCreateFolder({ title, chatIds: folderDraft.chatIds })
+        onSelectFolder(folder.id)
+      }
+      setFolderMode('list')
+      setFolderDraft({ id: '', title: '', chatIds: [] })
+    } catch (error) {
+      setFolderError(error.message || 'Folder was not saved.')
+    } finally {
+      setFolderBusy(false)
+    }
+  }
+
+  async function deleteFolder(folderId) {
+    const folder = customFolders.find((item) => item.id === folderId)
+    const sure = window.confirm(`Delete folder "${folder?.title || 'Folder'}"? Chats and messages will stay.`)
+    if (!sure) return
+    setFolderBusy(true)
+    setFolderError('')
+    try {
+      await onDeleteFolder(folderId)
+      setFolderMode('list')
+    } catch (error) {
+      setFolderError(error.message || 'Folder was not deleted.')
+    } finally {
+      setFolderBusy(false)
+    }
   }
 
   async function refreshSessions() {
@@ -269,6 +414,9 @@ export default function Sidebar({
           </button>
           <button onClick={() => setMenuView('archive')}>
             <Archive size={19} /> Archived chats
+          </button>
+          <button onClick={() => setMenuView('folders')}>
+            <Folder size={19} /> Folders
           </button>
           <button onClick={() => setMenuView('settings')}>
             <Settings size={19} /> Settings
@@ -388,6 +536,128 @@ export default function Sidebar({
     )
   }
 
+  function renderFolderForm() {
+    return (
+      <form className="drawer-fields folder-editor" onSubmit={submitFolder}>
+        <label>
+          <span>Name</span>
+          <input
+            value={folderDraft.title}
+            onChange={(event) => setFolderDraft((draft) => ({ ...draft, title: event.target.value }))}
+            maxLength={48}
+            autoFocus
+          />
+        </label>
+        <div className="folder-chat-picker">
+          <span>Chats</span>
+          <div>
+            {folderSelectableChats.map((chat) => (
+              <label key={chat.id} className="folder-chat-option">
+                <input
+                  type="checkbox"
+                  checked={folderDraft.chatIds.includes(chat.id)}
+                  onChange={() => toggleDraftChat(chat.id)}
+                />
+                <Avatar contact={chat.contact} size="sm" />
+                <span>
+                  <strong>{chat.contact.name}</strong>
+                  <small>{chat.lastMessageText || chat.contact.lastSeen || 'No messages yet'}</small>
+                </span>
+              </label>
+            ))}
+            {!folderSelectableChats.length && <p className="drawer-empty">No server chats available.</p>}
+          </div>
+        </div>
+        {folderError && <p className="drawer-empty session-error">{folderError}</p>}
+        <div className="folder-editor-actions">
+          <button type="button" onClick={() => setFolderMode('list')} disabled={folderBusy}>
+            Cancel
+          </button>
+          <button className="primary-button" type="submit" disabled={folderBusy}>
+            {folderBusy ? 'Saving...' : 'Save folder'}
+          </button>
+        </div>
+      </form>
+    )
+  }
+
+  function renderFoldersMenu() {
+    return (
+      <>
+        {renderMenuHeader('Folders')}
+        <div className="folder-menu-header">
+          <strong>{folderMode === 'edit' ? 'Edit folder' : folderMode === 'create' ? 'New folder' : 'Chat folders'}</strong>
+          {folderMode === 'list' && (
+            <button type="button" onClick={startCreateFolder}>
+              <FolderPlus size={16} /> New
+            </button>
+          )}
+        </div>
+
+        {folderMode !== 'list' ? (
+          renderFolderForm()
+        ) : (
+          <>
+            <section className="folder-section">
+              <span>System</span>
+              <div className="folder-system-grid">
+                {systemFolders.map((folder) => (
+                  <button
+                    key={folder.id}
+                    className={selectedFolderId === folder.id ? 'active' : ''}
+                    onClick={() => {
+                      onSelectFolder(folder.id)
+                      closeMenu()
+                    }}
+                  >
+                    <span>{folder.title}</span>
+                    <small>{folderCount(folder)}</small>
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="folder-section">
+              <span>Custom</span>
+              <div className="drawer-list folder-manager-list">
+                {customFolders.map((folder) => (
+                  <article key={folder.id} className="folder-manager-row">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onSelectFolder(folder.id)
+                        closeMenu()
+                      }}
+                    >
+                      <Folder size={18} />
+                      <span>
+                        <strong>{folder.title}</strong>
+                        <small>{folder.chats.length} chats</small>
+                      </span>
+                    </button>
+                    <button type="button" onClick={() => startEditFolder(folder)} title="Edit folder">
+                      <Pencil size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      className="danger-folder-button"
+                      onClick={() => deleteFolder(folder.id)}
+                      title="Delete folder"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </article>
+                ))}
+                {!customFolders.length && <p className="drawer-empty">No custom folders yet.</p>}
+              </div>
+            </section>
+            {folderError && <p className="drawer-empty session-error">{folderError}</p>}
+          </>
+        )}
+      </>
+    )
+  }
+
   function renderSettingsMenu() {
     return (
       <>
@@ -430,6 +700,9 @@ export default function Sidebar({
           </button>
           <button onClick={() => setMenuView('appearance')}>
             <Brush size={18} /> Chat appearance
+          </button>
+          <button onClick={() => setMenuView('folders')}>
+            <Folder size={18} /> Folders
           </button>
           <button onClick={() => onUpdateSettings({ toast: settings.sound !== false ? 'Message sound is on.' : 'Message sound is off.' })}>
             {settings.notifications ? <Bell size={18} /> : <BellOff size={18} />} Notifications
@@ -686,6 +959,46 @@ export default function Sidebar({
     )
   }
 
+  function renderFolderTabs() {
+    const folders = [
+      ...systemFolders,
+      ...customFolders.map((folder) => ({
+        ...folder,
+        custom: true,
+      })),
+    ]
+
+    return (
+      <div className="folder-tabs" aria-label="Chat folders">
+        {folders.map((folder) => (
+          <button
+            key={folder.id}
+            type="button"
+            className={selectedFolderId === folder.id ? 'active' : ''}
+            onClick={() => onSelectFolder(folder.id)}
+            title={folder.title}
+          >
+            {folder.custom && <Folder size={14} />}
+            <strong>{folder.title}</strong>
+            <small>{folderCount(folder)}</small>
+          </button>
+        ))}
+        <button
+          type="button"
+          className="folder-tabs-add"
+          onClick={() => {
+            setMenuView('folders')
+            startCreateFolder()
+            if (!menuOpen) onToggleMenu()
+          }}
+          title="Create folder"
+        >
+          <Plus size={16} />
+        </button>
+      </div>
+    )
+  }
+
   return (
     <aside className="sidebar">
       <header className="sidebar-header">
@@ -715,6 +1028,7 @@ export default function Sidebar({
             {menuView === 'contacts' && renderContactsMenu()}
             {menuView === 'archive' && renderArchiveMenu()}
             {menuView === 'settings' && renderSettingsMenu()}
+            {menuView === 'folders' && renderFoldersMenu()}
             {menuView === 'privacy' && renderPrivacyMenu()}
             {menuView === 'password' && renderPasswordMenu()}
             {menuView === 'sessions' && renderSessionsMenu()}
@@ -723,6 +1037,8 @@ export default function Sidebar({
           <button className="menu-scrim" onClick={closeMenu} aria-label="Close menu" />
         </div>
       )}
+
+      {renderFolderTabs()}
 
       <label className="search-field">
         <Search size={17} />
@@ -734,14 +1050,15 @@ export default function Sidebar({
       </label>
 
       <ChatList
-        chats={chats}
+        chats={visibleChats}
         selectedChatId={selectedChatId}
-        search={search}
-        showArchived={false}
+        folderTitle={selectedFolder?.title}
+        canPinInFolder={Boolean(selectedCustomFolder)}
         onSelectChat={onSelectChat}
         onTogglePin={onTogglePin}
         onToggleMute={onToggleMute}
         onArchiveChat={onArchiveChat}
+        onToggleFolderPin={(chatId) => onToggleFolderPin(selectedCustomFolder?.id, chatId)}
       />
     </aside>
   )

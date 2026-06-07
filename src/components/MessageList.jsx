@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowDown } from 'lucide-react'
 import MessageBubble from './MessageBubble'
 import { formatDateDivider } from '../utils/formatters'
@@ -27,11 +27,28 @@ export default function MessageList({
 
   useEffect(() => () => window.clearTimeout(highlightTimerRef.current), [])
 
+  const scrollListTo = useCallback((top, behavior = 'smooth') => {
+    const list = listRef.current
+    if (!list) return
+    list.scrollTo({ top, behavior })
+  }, [])
+
+  const scrollToBottom = useCallback((behavior = 'smooth') => {
+    const list = listRef.current
+    if (!list) return
+    scrollListTo(list.scrollHeight, behavior)
+    setShowJump(false)
+  }, [scrollListTo])
+
   function jumpToMessage(messageId) {
     if (!messageId) return
     const element = messageRefs.current[messageId]
     if (!element) return
-    element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    const list = listRef.current
+    if (list) {
+      const top = element.offsetTop - list.clientHeight / 2 + element.offsetHeight / 2
+      scrollListTo(Math.max(0, top))
+    }
     setHighlightId(messageId)
     window.clearTimeout(highlightTimerRef.current)
     highlightTimerRef.current = window.setTimeout(() => {
@@ -47,8 +64,8 @@ export default function MessageList({
   }, [messages])
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages.length])
+    scrollToBottom()
+  }, [messages.length, scrollToBottom])
 
   function handleScroll() {
     const element = listRef.current
@@ -125,7 +142,7 @@ export default function MessageList({
       )}
       <div ref={bottomRef} />
       {showJump && (
-        <button className="jump-button" onClick={() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' })}>
+        <button className="jump-button" onClick={() => scrollToBottom()}>
           <ArrowDown size={18} />
         </button>
       )}

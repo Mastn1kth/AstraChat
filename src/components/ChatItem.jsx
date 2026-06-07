@@ -2,9 +2,18 @@ import { Archive, BellOff, MoreVertical, Pin } from 'lucide-react'
 import Avatar from './Avatar'
 import { formatChatTime } from '../utils/formatters'
 
-export default function ChatItem({ chat, selected, onSelect, onTogglePin, onToggleMute, onArchive }) {
+export default function ChatItem({
+  chat,
+  selected,
+  canPinInFolder,
+  onSelect,
+  onTogglePin,
+  onToggleMute,
+  onArchive,
+  onToggleFolderPin,
+}) {
   const { contact } = chat
-  const typeLabel = contact.type === 'group' ? 'group' : contact.type === 'channel' ? 'channel' : contact.type === 'bot' ? 'bot' : ''
+  const typeLabel = contact.type === 'group' ? 'group' : contact.type === 'channel' ? 'channel' : ''
 
   return (
     <article className={`chat-item ${selected ? 'selected' : ''}`} onClick={onSelect}>
@@ -21,6 +30,7 @@ export default function ChatItem({ chat, selected, onSelect, onTogglePin, onTogg
         <div className="chat-item-bottom">
           <p>{chat.lastMessageText || 'No messages yet'}</p>
           <div className="chat-flags">
+            {chat.folderPinned && <Pin size={13} className="folder-pin-flag" />}
             {chat.pinned && <Pin size={13} />}
             {chat.muted && <BellOff size={13} />}
             {chat.unread > 0 && <span className="unread-badge">{chat.unread}</span>}
@@ -28,6 +38,15 @@ export default function ChatItem({ chat, selected, onSelect, onTogglePin, onTogg
         </div>
       </div>
       <div className="chat-row-actions" onClick={(event) => event.stopPropagation()}>
+        {canPinInFolder && (
+          <button
+            onClick={onToggleFolderPin}
+            title={chat.folderPinned ? 'Unpin in folder' : 'Pin in folder'}
+            className={chat.folderPinned ? 'active' : ''}
+          >
+            <Pin size={14} />
+          </button>
+        )}
         <button onClick={onTogglePin} title={chat.pinned ? 'Unpin' : 'Pin'}>
           <Pin size={14} />
         </button>

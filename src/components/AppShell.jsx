@@ -14,6 +14,8 @@ import ForwardModal from './ForwardModal'
 
 export default function AppShell({
   chatSummaries,
+  chatFolders,
+  selectedFolderId,
   contacts,
   user,
   settings,
@@ -30,6 +32,7 @@ export default function AppShell({
   toast,
   callController,
   onSelectChat,
+  onSelectFolder,
   onSidebarSearch,
   onMessageSearch,
   onSendMessage,
@@ -47,6 +50,10 @@ export default function AppShell({
   onTogglePin,
   onToggleMute,
   onArchiveChat,
+  onCreateFolder,
+  onUpdateFolder,
+  onDeleteFolder,
+  onToggleFolderPin,
   onExportEncryptionKey,
   onImportEncryptionKey,
   onUploadAvatar,
@@ -88,6 +95,8 @@ export default function AppShell({
       <WordStreamBackground words={wordStreamWords} settings={settings.wordStream} />
       <Sidebar
         chats={chatSummaries}
+        chatFolders={chatFolders}
+        selectedFolderId={selectedFolderId}
         contacts={contacts}
         user={user}
         settings={settings}
@@ -96,6 +105,7 @@ export default function AppShell({
         menuOpen={ui.menuOpen}
         onSearch={onSidebarSearch}
         onSelectChat={onSelectChat}
+        onSelectFolder={onSelectFolder}
         onOpenCreateSpace={onOpenCreateSpace}
         onCreateChat={onCreateChat}
         onUpdateSettings={onUpdateSettings}
@@ -106,6 +116,10 @@ export default function AppShell({
         onTogglePin={onTogglePin}
         onToggleMute={onToggleMute}
         onArchiveChat={onArchiveChat}
+        onCreateFolder={onCreateFolder}
+        onUpdateFolder={onUpdateFolder}
+        onDeleteFolder={onDeleteFolder}
+        onToggleFolderPin={onToggleFolderPin}
         onExportEncryptionKey={onExportEncryptionKey}
         onImportEncryptionKey={onImportEncryptionKey}
         onUploadAvatar={onUploadAvatar}
