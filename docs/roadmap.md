@@ -32,10 +32,11 @@ Goal: make the existing messenger core reliable locally.
 - [x] Media upload for images/video/voice/files.
 - [x] WebSocket realtime events.
 - [x] 1:1 audio/video call signaling.
-- [ ] Backend pagination for long message history.
+- [x] Backend pagination for long message history (cursor-based, `before` + `limit`, `hasMore` flag).
 - [ ] Robust optimistic UI retry queue.
 - [x] Persist pinned/muted/archived chat state on backend.
-- [ ] Add integration tests for auth, chats, messages, media and WebSocket flows.
+- [x] Integration tests for message visibility (delete-for-me, clear-history, delete-for-everyone, pagination).
+- [ ] Integration tests for auth, media and WebSocket flows.
 - [ ] Add e2e tests for the main user workflows.
 
 ## Phase 2 - Telegram-Parity Core
@@ -46,14 +47,14 @@ Goal: move mock Telegram-like surfaces to real server-backed behavior.
 - [ ] QR login.
 - [ ] Two-factor password.
 - [ ] Contact list and contact import mock boundary.
-- [ ] Chat folders: All, Unread, Personal, Groups, Channels, Archived. Backend contract exists; full UI is still missing.
+- [x] Chat folders: All, Unread, Personal, Groups, Channels, Archived. Backend + UI implemented with custom folder support.
 - [x] Archive chats.
-- [ ] Pinned chats and pinned messages. Backend pinned chats exist; pinned messages are still missing.
-- [ ] Mute/unmute per chat with optional mute-until date. Backend mute exists; full UI for mute-until is still missing.
+- [x] Pinned chats. Pinned messages (backend + WS broadcast + UI bar with jump/unpin).
+- [x] Mute/unmute per chat with mute-until date. Duration picker: 1h, 8h, 1d, 1w, Forever.
 - [ ] Global search across users, chats and messages. Users/chats are server-backed; message search is limited by encrypted payloads unless `searchText` is provided.
 - [ ] In-chat message search with jump-to-message. Local loaded-message jump exists; server-side encrypted history search is limited by `searchText`.
-- [ ] Forward single and selected messages. Single-message backend metadata exists; multi-select is still missing.
-- [ ] Multi-select messages.
+- [x] Forward single and selected messages. Multi-select with bulk forward and bulk delete implemented.
+- [x] Multi-select messages (checkbox mode, bulk forward/delete bar).
 - [x] Clear history and delete-for-me.
 - [ ] Link previews with disable-preview option.
 - [ ] Message formatting: bold, italic, code, quote, spoiler.

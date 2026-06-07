@@ -3125,6 +3125,265 @@ textarea::placeholder {
   padding: 10px 18px;
 }
 
+/* ── Pinned message bar ─────────────────────────────────────────────────── */
+.pinned-message-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  background: var(--bg-secondary, #f0f2f5);
+  border-bottom: 1px solid var(--border, #e0e0e0);
+  cursor: pointer;
+  min-height: 36px;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.pinned-message-bar:hover {
+  background: var(--bg-hover, #e4e6ea);
+}
+
+.pinned-icon {
+  color: #3390ec;
+  flex-shrink: 0;
+}
+
+.pinned-text {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-secondary, #707579);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pinned-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary, #707579);
+  padding: 4px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.pinned-close:hover {
+  background: rgba(0, 0, 0, 0.08);
+  color: var(--text-primary, #000);
+}
+
+[data-theme='dark'] .pinned-message-bar {
+  background: #1e2428;
+  border-bottom-color: #2a3035;
+}
+
+[data-theme='dark'] .pinned-message-bar:hover {
+  background: #252b30;
+}
+
+/* ── Multi-select bar (replaces composer) ──────────────────────────────── */
+.multiselect-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--bg-secondary, #f0f2f5);
+  border-top: 1px solid var(--border, #e0e0e0);
+  flex-shrink: 0;
+  min-height: 56px;
+}
+
+.multiselect-cancel {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #3390ec;
+  font-size: 14px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+
+.multiselect-cancel:hover {
+  background: rgba(51, 144, 236, 0.1);
+}
+
+.multiselect-bar > span {
+  flex: 1;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary, #000);
+}
+
+.multiselect-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.multiselect-actions button {
+  background: none;
+  border: 1px solid #3390ec;
+  color: #3390ec;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: 8px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.multiselect-actions button:hover {
+  background: #3390ec;
+  color: white;
+}
+
+.multiselect-actions button.danger {
+  border-color: #e84b4f;
+  color: #e84b4f;
+}
+
+.multiselect-actions button.danger:hover {
+  background: #e84b4f;
+  color: white;
+}
+
+[data-theme='dark'] .multiselect-bar {
+  background: #1e2428;
+  border-top-color: #2a3035;
+}
+
+[data-theme='dark'] .multiselect-bar > span {
+  color: #e8eaed;
+}
+
+/* ── Load-more button (top of message list) ────────────────────────────── */
+.load-more-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #3390ec;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.15s;
+  border-radius: 8px;
+  margin-bottom: 6px;
+}
+
+.load-more-button:hover {
+  background: rgba(51, 144, 236, 0.08);
+}
+
+/* ── Message select checkbox (multi-select mode) ───────────────────────── */
+.message-select-checkbox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary, #707579);
+  padding: 4px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+
+.message-select-checkbox.checked {
+  color: #3390ec;
+}
+
+.message-select-checkbox:hover {
+  color: #3390ec;
+}
+
+.message-row.multi-select-mode {
+  cursor: pointer;
+  padding-left: 6px;
+}
+
+.message-row.multi-select-mode:hover {
+  background: rgba(51, 144, 236, 0.05);
+  border-radius: 8px;
+}
+
+.message-row.multi-selected {
+  background: rgba(51, 144, 236, 0.1);
+  border-radius: 8px;
+}
+
+/* ── Mute duration dropdown ────────────────────────────────────────────── */
+.mute-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.mute-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  background: var(--bg-primary, #fff);
+  border: 1px solid var(--border, #e0e0e0);
+  border-radius: 10px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+  z-index: 300;
+  min-width: 140px;
+}
+
+.mute-dropdown button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 16px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-primary, #000);
+  transition: background 0.12s;
+}
+
+.mute-dropdown button:hover {
+  background: var(--bg-hover, #f0f2f5);
+}
+
+.mute-scrim {
+  position: fixed;
+  inset: 0;
+  background: transparent;
+  z-index: 299;
+  border: none;
+  cursor: default;
+}
+
+[data-theme='dark'] .mute-dropdown {
+  background: #212a30;
+  border-color: #2a3035;
+}
+
+[data-theme='dark'] .mute-dropdown button {
+  color: #e8eaed;
+}
+
+[data-theme='dark'] .mute-dropdown button:hover {
+  background: #2a3035;
+}
+
 .segmented {
   display: grid;
   grid-template-columns: 1fr 1fr;
