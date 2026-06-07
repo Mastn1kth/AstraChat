@@ -1,6 +1,7 @@
 import { PGlite } from '@electric-sql/pglite'
 import { randomUUID } from 'node:crypto'
 import { config } from './config.js'
+import { runMigrations } from './migrations.js'
 
 export const db = new PGlite(config.databasePath)
 
@@ -169,6 +170,7 @@ export async function migrateDatabase() {
       ADD CONSTRAINT media_files_kind_check
       CHECK (kind IN ('image', 'video', 'voice', 'file'));
   `)
+  await runMigrations(db)
 }
 
 export async function createSavedChat(tx, userId) {
@@ -180,6 +182,12 @@ export async function createSavedChat(tx, userId) {
   await tx.query(
     'INSERT INTO chat_members (chat_id, user_id, role) VALUES ($1, $2, $3)',
     [chatId, userId, 'owner'],
+  )
+  await tx.query(
+    `INSERT INTO chat_user_settings (chat_id, user_id)
+     VALUES ($1, $2)
+     ON CONFLICT (chat_id, user_id) DO NOTHING`,
+    [chatId, userId],
   )
   return chatId
 }
