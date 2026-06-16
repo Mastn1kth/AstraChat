@@ -1,0 +1,12 @@
+.git
+.playwright-mcp
+node_modules
+dist
+server-data*
+*.log
+.env
+.env.*
+!.env.example
+!.env.production.example
+Dockerfile
+docker-compose*.yml

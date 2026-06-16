@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { setLang, t } from './i18n'
+import { useConfirm } from './hooks/useConfirm'
 import AppShell from './components/AppShell'
 import AuthScreen from './components/AuthScreen'
 import useWebRTCCall from './hooks/useWebRTCCall'
@@ -8,6 +10,7 @@ import { loadMessengerState, resetMessengerState, saveMessengerState } from './u
 import { bumpAvatarCache } from './utils/avatarCache'
 import {
   changePassword,
+  blockUser,
   createChatFolder,
   createChat as createServerChat,
   deleteAccount,
@@ -15,8 +18,11 @@ import {
   deleteChatFolder,
   deleteChatMessage,
   deleteChatMessageForMe,
+  disableTotp,
   editChatMessage,
+  getCallHistory,
   getChatFolders,
+  getChatMessageContext,
   getSessions,
   getChatMessages,
   getChatMembers,
@@ -25,28 +31,42 @@ import {
   updateChatInfo,
   getChats,
   pinChatMessage,
+  getBlockedUsers,
   getCurrentSession,
+  getSecurityEvents,
+  getTotpStatus,
   loginAccount,
   logoutAccount,
+  markAllSecurityEventsRead,
+  markSecurityEventRead,
   registerAccount,
+  reportAbuse,
   testLogin,
   searchUsers,
   sendChatMessage,
+  startTotpSetup,
   terminateOtherSessions,
   terminateSession,
   updateChatFolder,
   updateChatFolderChat,
+  updateChatMemberPermissions,
+  updateChatMemberRole,
   toggleMessageReaction,
+  votePoll,
   updateChatSettings,
   updateProfile,
   updateEncryptionPublicKey,
+  unblockUser,
   uploadAvatar,
   uploadMedia,
+  verifyTotpSetup,
 } from './api/client'
 import {
   decryptBlobForUser,
+  decryptKeyBackupWithPassphrase,
   decryptTextForUser,
   encryptBlobForRecipients,
+  encryptKeyBackupWithPassphrase,
   encryptTextForRecipients,
   ensureUserKeyPair,
   exportUserKeyBackup,
@@ -57,9 +77,24 @@ import {
   DEFAULT_WORD_STREAM_SETTINGS,
   extractPrivateWordStream,
 } from './utils/wordStream'
+import { DEFAULT_LIVE_WALL_SETTINGS, extractAllChatWords } from './utils/liveWall'
+import {
+  API_BASE,
+  getCloudKeyBackup,
+  getWallMessages,
+  putCloudKeyBackup,
+  sendWallMessage,
+} from './api/client'
 import { ensureNotificationPermission, playIncomingSound, showDesktopNotification } from './utils/notify'
+import { disableWebPushNotifications, enableWebPushNotifications } from './utils/push'
+import {
+  decodeRichMessage,
+  encodeRichMessage,
+  getMessagePlainText,
+  getRichSearchText,
+} from './utils/richMessages'
 
-const APP_TITLE = 'AstraChat'
+const APP_TITLE = 'Onda'
 
 const SYSTEM_CHAT_FOLDERS = [
   { id: 'all', title: 'All', filter: 'all' },
@@ -82,10 +117,12 @@ const fallbackState = {
   messages: initialMessages,
   settings: {
     theme: 'light',
+    language: 'ru',
     notifications: true,
     sound: true,
     chatBackground: 'default',
     wordStream: DEFAULT_WORD_STREAM_SETTINGS,
+    liveWall: DEFAULT_LIVE_WALL_SETTINGS,
   },
   chatFolders: EMPTY_CHAT_FOLDERS,
 }
@@ -98,11 +135,33 @@ function notificationBody(message) {
       image: '\u{1F4F7} Photo',
       video: '\u{1F4F9} Video',
       voice: '\u{1F3A4} Voice message',
+      audio: '\u{1F3B5} Audio',
       file: '\u{1F4CE} File',
     }
     return labels[message.media.kind] || 'Attachment'
   }
   return 'New message'
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function messageMentionsCurrentUser(text, user) {
+  const username = String(user?.username || '').replace(/^@/, '').trim()
+  if (!username) return false
+  return new RegExp(`(^|[^\\w])@${escapeRegExp(username)}(?=$|[^\\w])`, 'i').test(
+    String(text || ''),
+  )
+}
+
+function shouldNotifyForChat(chat, mentioned) {
+  const pushMode = chat?.pushMode || 'default'
+  if (pushMode === 'off') return false
+  if (mentioned) return true
+  if (chat?.muted) return false
+  if (pushMode === 'mentions') return false
+  return true
 }
 
 function createId(prefix) {
@@ -131,11 +190,16 @@ function normalizeChatFolders(payload = EMPTY_CHAT_FOLDERS) {
 
 async function normalizeServerMessage(message, currentUserId) {
   const decrypted = await decryptTextForUser(message.text || '', currentUserId)
+  const decoded = decodeRichMessage(decrypted.text)
   const media = await normalizeServerMedia(message.media, currentUserId)
   return {
     id: message.id,
     senderId: message.senderId,
-    text: decrypted.text,
+    text: decoded.text,
+    rich: decoded.rich,
+    albumId: decoded.rich?.type === 'album' ? decoded.rich.albumId : undefined,
+    albumIndex: decoded.rich?.type === 'album' ? decoded.rich.index : undefined,
+    albumCount: decoded.rich?.type === 'album' ? decoded.rich.count : undefined,
     time: message.createdAt,
     edited: Boolean(message.editedAt),
     deleted: Boolean(message.deletedAt),
@@ -176,14 +240,21 @@ async function normalizeServerMedia(media, currentUserId) {
   }
 }
 
+function mergeMessagesById(existingMessages = [], nextMessages = []) {
+  const byId = new Map()
+  existingMessages.forEach((message) => byId.set(message.id, message))
+  nextMessages.forEach((message) => byId.set(message.id, message))
+  return Array.from(byId.values()).sort((a, b) => new Date(a.time) - new Date(b.time))
+}
+
 function formatLastSeen(lastSeenAt) {
-  if (!lastSeenAt) return 'last seen recently'
+  if (!lastSeenAt) return t('status.lastSeenRecently')
   const date = new Date(lastSeenAt)
   const today = new Date()
   if (date.toDateString() === today.toDateString()) {
-    return `last seen at ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    return t('status.lastSeenAt', { time: date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })
   }
-  return `last seen ${date.toLocaleDateString([], { day: 'numeric', month: 'short' })}`
+  return t('status.lastSeenDate', { date: date.toLocaleDateString([], { day: 'numeric', month: 'short' }) })
 }
 
 function getInitials(name) {
@@ -343,9 +414,10 @@ async function getAudioDurationMs(file) {
 
 async function prepareClientMediaFile(file) {
   if (file.type.startsWith('audio/')) {
+    const isVoiceRecording = /^voice-\d+\.(webm|ogg|m4a)$/i.test(file.name)
     return {
       blob: file,
-      kind: 'voice',
+      kind: isVoiceRecording ? 'voice' : 'audio',
       mimeType: file.type || 'audio/webm',
       width: null,
       height: null,
@@ -448,12 +520,14 @@ export default function App() {
     }
     return add ? add.replace(/^@/, '').toLowerCase() : ''
   })
+  const { confirm, dialog: confirmDialog } = useConfirm()
   const toastTimerRef = useRef()
   const selectedChatIdRef = useRef(selectedChatId)
   const socketRef = useRef(null)
   const profileSaveTimerRef = useRef(null)
   const callSignalHandlerRef = useRef(null)
   const callSocketCloseHandlerRef = useRef(null)
+  const callSocketReadyHandlerRef = useRef(null)
   const pendingReadIdsRef = useRef(new Set())
   const stateRef = useRef(state)
   const selectChatRef = useRef(null)
@@ -461,6 +535,7 @@ export default function App() {
   const loadServerWorkspaceRef = useRef(null)
   const [presence, setPresence] = useState({})
   const [typingByChat, setTypingByChat] = useState({})
+  const [wallMessages, setWallMessages] = useState([])
   const [socketVersion, setSocketVersion] = useState(0)
   const [ui, setUi] = useState({
     contactsOpen: false,
@@ -490,11 +565,14 @@ export default function App() {
     const settings = snapshot.settings || {}
     const isActiveChat = selectedChatIdRef.current === chatId && !document.hidden
     if (isActiveChat) return
+    const chat = snapshot.chats.find((item) => item.id === chatId)
+    const mentioned = messageMentionsCurrentUser(message.text, snapshot.user)
+    if (!shouldNotifyForChat(chat, mentioned)) return
     if (settings.sound) playIncomingSound()
     if (settings.notifications) {
       const sender = snapshot.contacts.find((contact) => contact.id === senderId)
       showDesktopNotification({
-        title: sender?.name || 'New message',
+        title: mentioned ? `${sender?.name || 'Onda'} mentioned you` : sender?.name || 'New message',
         body: notificationBody(message),
         tag: chatId,
         onClick: () => selectChatRef.current?.(chatId),
@@ -502,12 +580,13 @@ export default function App() {
     }
   }, [])
 
-  const callController = useWebRTCCall({ sendSignal: sendSocketEvent })
+  const callController = useWebRTCCall({ sendSignal: sendSocketEvent, currentUser: state.user })
 
   useEffect(() => {
     callSignalHandlerRef.current = callController.handleSignal
     callSocketCloseHandlerRef.current = callController.handleSocketClose
-  }, [callController.handleSignal, callController.handleSocketClose])
+    callSocketReadyHandlerRef.current = callController.handleSocketReady
+  }, [callController.handleSignal, callController.handleSocketClose, callController.handleSocketReady])
 
   useEffect(() => {
     saveMessengerState(state)
@@ -526,12 +605,37 @@ export default function App() {
     stateRef.current = state
   })
 
-  // Request notification permission once the user is in and notifications are enabled.
+  // Keep this browser's Web Push subscription aligned with the notification toggle.
   useEffect(() => {
-    if (auth.status === 'authenticated' && state.settings.notifications) {
-      ensureNotificationPermission()
+    if (auth.status !== 'authenticated') return undefined
+
+    let cancelled = false
+    if (state.settings.notifications) {
+      enableWebPushNotifications().catch(() => {
+        if (!cancelled) ensureNotificationPermission()
+      })
+    } else {
+      disableWebPushNotifications().catch(() => {})
+    }
+
+    return () => {
+      cancelled = true
     }
   }, [auth.status, state.settings.notifications])
+
+  // Load the live wall stream when the user turns the wallpaper on.
+  useEffect(() => {
+    if (auth.status !== 'authenticated' || !state.settings.liveWall?.enabled) return
+    let cancelled = false
+    getWallMessages()
+      .then(({ messages }) => {
+        if (!cancelled && Array.isArray(messages)) setWallMessages(messages)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [auth.status, state.settings.liveWall?.enabled])
 
   // Keep a fresh reference to the chat selector for notification click handling.
   useEffect(() => {
@@ -578,12 +682,18 @@ export default function App() {
   }, [state.settings.theme])
 
   useEffect(() => {
+    if (state.settings.language) setLang(state.settings.language)
+  }, [state.settings.language])
+
+  useEffect(() => {
     if (auth.status !== 'authenticated') return undefined
 
     let reconnectTimer
     let shouldReconnect = true
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const socket = new WebSocket(`${protocol}//${window.location.host}/ws`)
+    const wsUrl = API_BASE
+      ? `${API_BASE.replace(/^http/, 'ws')}/ws`
+      : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`
+    const socket = new WebSocket(wsUrl)
     socketRef.current = socket
 
     socket.addEventListener('message', (event) => {
@@ -597,7 +707,15 @@ export default function App() {
         callSignalHandlerRef.current?.(payload)
         return
       }
+      if (payload.type === 'wall:new' && payload.message) {
+        setWallMessages((current) => {
+          if (current.some((item) => item.id === payload.message.id)) return current
+          return [...current.slice(-79), payload.message]
+        })
+        return
+      }
       if (payload.type === 'session:ready') {
+        callSocketReadyHandlerRef.current?.()
         const onlineIds = new Set(payload.onlineUserIds || [])
         setPresence((current) => {
           const next = { ...current }
@@ -614,6 +732,8 @@ export default function App() {
             loadMessagesRef.current?.(activeChatId)
           }
         }
+        // Flush the offline queue after reconnect.
+        resendFailedRef.current?.()
         return
       }
 
@@ -627,21 +747,39 @@ export default function App() {
           },
         }))
         if (!payload.online) {
-          setTypingByChat((current) =>
-            Object.fromEntries(
-              Object.entries(current).filter(([, userId]) => userId !== payload.userId),
-            ),
-          )
+          setTypingByChat((current) => {
+            return Object.fromEntries(
+              Object.entries(current)
+                .map(([chatId, userIds]) => [
+                  chatId,
+                  (Array.isArray(userIds) ? userIds : [userIds]).filter((userId) => userId !== payload.userId),
+                ])
+                .filter(([, userIds]) => userIds.length),
+            )
+          })
         }
         return
       }
 
       if (payload.type === 'typing:update' && payload.chatId) {
         setTypingByChat((current) => {
-          if (payload.active) return { ...current, [payload.chatId]: payload.userId }
-          if (current[payload.chatId] !== payload.userId) return current
+          const currentUserIds = Array.isArray(current[payload.chatId])
+            ? current[payload.chatId]
+            : current[payload.chatId]
+              ? [current[payload.chatId]]
+              : []
+          if (payload.active) {
+            if (currentUserIds.includes(payload.userId)) return current
+            return { ...current, [payload.chatId]: [...currentUserIds, payload.userId] }
+          }
+          if (!currentUserIds.includes(payload.userId)) return current
+          const remainingUserIds = currentUserIds.filter((userId) => userId !== payload.userId)
           const next = { ...current }
-          delete next[payload.chatId]
+          if (remainingUserIds.length) {
+            next[payload.chatId] = remainingUserIds
+          } else {
+            delete next[payload.chatId]
+          }
           return next
         })
         return
@@ -660,9 +798,35 @@ export default function App() {
                   mutedUntil: payload.settings.mutedUntil || null,
                   archived: Boolean(payload.settings.archived),
                   archivedAt: payload.settings.archivedAt || null,
+                  pushMode: payload.settings.pushMode || 'default',
                 }
               : chat,
           ),
+        }))
+        return
+      }
+
+      if (payload.type === 'security:event' && payload.event) {
+        showToast(payload.event.title || 'Security alert')
+        return
+      }
+
+      if (payload.type === 'user:block-updated' && payload.userId) {
+        setState((current) => ({
+          ...current,
+          contacts: current.contacts.map((contact) =>
+            contact.id === payload.userId
+              ? { ...contact, blockedByMe: Boolean(payload.blockedByMe) }
+              : contact,
+          ),
+          chats: current.chats.map((chat) => ({
+            ...chat,
+            members: chat.members?.map((member) =>
+              member.id === payload.userId
+                ? { ...member, blockedByMe: Boolean(payload.blockedByMe) }
+                : member,
+            ),
+          })),
         }))
         return
       }
@@ -737,6 +901,21 @@ export default function App() {
         } else {
           loadServerWorkspaceRef.current?.(state.user.id).catch(() => {})
         }
+        return
+      }
+
+      if (payload.type === 'chat:member-role' && payload.chatId && payload.userId) {
+        patchChatMember(payload.chatId, payload.userId, {
+          role: payload.role,
+          permissions: payload.permissions || {},
+        })
+        return
+      }
+
+      if (payload.type === 'chat:member-permissions' && payload.chatId && payload.userId) {
+        patchChatMember(payload.chatId, payload.userId, {
+          permissions: payload.permissions || {},
+        })
         return
       }
 
@@ -821,6 +1000,9 @@ export default function App() {
             if (payload.type === 'message:reactions') {
               return { ...message, reactions: payload.reactions }
             }
+            if (payload.type === 'message:poll' && message.id === payload.messageId) {
+              return { ...message, poll: payload.poll }
+            }
             return message
           }),
         },
@@ -842,7 +1024,7 @@ export default function App() {
       if (socketRef.current === socket) socketRef.current = null
       socket.close()
     }
-  }, [auth.status, notifyIncoming, socketVersion, state.user.id])
+  }, [auth.status, notifyIncoming, showToast, socketVersion, state.user.id])
 
   async function loadServerWorkspace(currentUserId, currentUserPublicKey = state.user.encryptionPublicKey) {
     try {
@@ -859,14 +1041,17 @@ export default function App() {
           backend: true,
           name: user.name,
           username: `@${user.username}`,
+          customStatus: user.status || '',
           avatar: user.avatar,
           color: '#3390ec',
           status: user.online ? 'online' : 'offline',
-          lastSeen: user.online ? 'online' : formatLastSeen(user.lastSeenAt),
+          lastSeen: user.online ? t('status.online') : formatLastSeen(user.lastSeenAt),
           lastSeenAt: user.lastSeenAt,
           encryptionPublicKey: user.encryptionPublicKey,
+          blockedByMe: Boolean(user.blockedByMe),
+          blockedMe: Boolean(user.blockedMe),
           phone: '',
-          bio: user.bio || 'AstraChat user',
+          bio: user.bio || 'Onda user',
         }))
       setPresence((current) => ({
         ...current,
@@ -931,7 +1116,14 @@ export default function App() {
           serverType: chat.type,
           members: chat.members.map((member) => ({
             id: member.id,
+            name: member.name,
+            username: member.username,
+            customStatus: member.status || '',
+            role: member.role,
+            permissions: member.permissions || {},
             encryptionPublicKey: member.encryptionPublicKey,
+            blockedByMe: Boolean(member.blockedByMe),
+            blockedMe: Boolean(member.blockedMe),
           })),
           pinned: Boolean(chatSettings.pinned),
           pinnedAt: chatSettings.pinnedAt || null,
@@ -939,6 +1131,7 @@ export default function App() {
           mutedUntil: chatSettings.mutedUntil || null,
           archived: Boolean(chatSettings.archived),
           archivedAt: chatSettings.archivedAt || null,
+          pushMode: chatSettings.pushMode || 'default',
           pinnedMessageId: chat.pinnedMessageId || null,
           unread: 0,
           createdAt: chat.created_at,
@@ -988,22 +1181,66 @@ export default function App() {
       name: user.name,
       username: `@${user.username}`,
       bio: user.bio || '',
+      customStatus: user.status || '',
       avatar: user.avatar,
       encryptionPublicKey,
+      totpEnabled: Boolean(user.totpEnabled),
     }
     setState((current) => ({ ...current, user: appUser }))
     setAuth({ status: 'authenticated', user: appUser, error: '' })
     await loadServerWorkspace(user.id, encryptionPublicKey)
+    try {
+      const { events } = await getSecurityEvents({ unread: true })
+      if (events?.length) {
+        showToast(events.length === 1 ? events[0].title : `${events.length} unread security alerts`)
+      }
+    } catch {
+      // Security alerts are secondary to signing in.
+    }
   }
 
   async function handleLogin(input) {
     setAuth((current) => ({ ...current, status: 'pending', error: '' }))
     try {
-      const { user } = await loginAccount(input)
+      const { user, totpRequired } = await loginAccount(input)
+      if (totpRequired) {
+        setAuth({
+          status: 'totp',
+          user: null,
+          error: '',
+          totpChallenge: { login: input.login, password: input.password },
+        })
+        return
+      }
       await completeAuthentication(user)
     } catch (error) {
       setAuth({ status: 'anonymous', user: null, error: error.message })
     }
+  }
+
+  async function handleTotpLogin({ code }) {
+    const challenge = auth.totpChallenge
+    if (!challenge) {
+      setAuth({ status: 'anonymous', user: null, error: 'Login session expired. Try again.' })
+      return
+    }
+    setAuth((current) => ({ ...current, status: 'pending', error: '' }))
+    try {
+      const { user } = await loginAccount({ ...challenge, totpCode: code })
+      await completeAuthentication(user)
+    } catch (error) {
+      setAuth((current) => ({
+        ...current,
+        status: 'totp',
+        user: null,
+        error: error.message,
+        totpChallenge: challenge,
+      }))
+    }
+  }
+
+  function cancelTotpLogin() {
+    setAuth({ status: 'anonymous', user: null, error: '' })
   }
 
   async function handleRegister(input) {
@@ -1028,6 +1265,7 @@ export default function App() {
 
   async function handleLogout() {
     try {
+      await disableWebPushNotifications()
       await logoutAccount()
     } finally {
       setAuth({ status: 'anonymous', user: null, error: '' })
@@ -1096,21 +1334,37 @@ export default function App() {
     }
   }, [showToast])
 
+  useEffect(() => {
+    if (auth.status !== 'authenticated') return
+    const params = new URLSearchParams(window.location.search)
+    const chatId = params.get('chat')
+    if (!chatId || !state.chats.some((chat) => chat.id === chatId)) return
+    params.delete('chat')
+    const query = params.toString()
+    window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}`)
+    selectChatRef.current?.(chatId)
+  }, [auth.status, state.chats])
+
   const chatSummaries = useMemo(() => {
     return state.chats
       .map((chat) => {
         const baseContact = state.contacts.find((item) => item.id === chat.contactId)
         const live = presence[chat.contactId]
-        const isTyping = typingByChat[chat.id] === chat.contactId
+        const typingUserIds = Array.isArray(typingByChat[chat.id])
+          ? typingByChat[chat.id]
+          : typingByChat[chat.id]
+            ? [typingByChat[chat.id]]
+            : []
+        const isTyping = typingUserIds.includes(chat.contactId)
         const contact =
           baseContact?.backend && baseContact.type === 'private' && baseContact.status !== 'saved'
             ? {
                 ...baseContact,
                 status: isTyping ? 'typing' : live?.online ? 'online' : 'offline',
                 lastSeen: isTyping
-                  ? 'typing...'
+                  ? t('status.typing')
                   : live?.online
-                    ? 'online'
+                    ? t('status.online')
                     : formatLastSeen(live?.lastSeenAt || baseContact.lastSeenAt),
               }
             : baseContact
@@ -1127,7 +1381,7 @@ export default function App() {
       .sort(byPinnedThenRecent)
   }, [presence, state.chats, state.contacts, state.messages, typingByChat])
 
-  // Reflect total unread count in the browser tab title (Telegram-style "(3) AstraChat").
+  // Reflect total unread count in the browser tab title (Telegram-style "(3) Onda").
   useEffect(() => {
     const totalUnread = chatSummaries.reduce((sum, chat) => sum + (chat.unread || 0), 0)
     document.title = totalUnread > 0 ? `(${totalUnread}) ${APP_TITLE}` : APP_TITLE
@@ -1161,6 +1415,12 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.status, pendingInvite, state.contacts, state.user.username])
 
+  const liveWallEnabled = Boolean(state.settings.liveWall?.enabled)
+  const liveWallChatWords = useMemo(
+    () => (liveWallEnabled ? extractAllChatWords(state.messages) : []),
+    [liveWallEnabled, state.messages],
+  )
+
   const wordStreamWords = useMemo(
     () =>
       extractPrivateWordStream({
@@ -1176,6 +1436,16 @@ export default function App() {
     ? chatSummaries.find((chat) => chat.id === selectedChat.id)?.contact || null
     : null
   const messages = selectedChat ? state.messages[selectedChat.id] || [] : []
+  const selectedTypingUsers = useMemo(() => {
+    const userIds = Array.isArray(typingByChat[selectedChatId])
+      ? typingByChat[selectedChatId]
+      : typingByChat[selectedChatId]
+        ? [typingByChat[selectedChatId]]
+        : []
+    return userIds
+      .filter((userId) => userId !== state.user.id)
+      .map((userId) => state.contacts.find((contact) => contact.id === userId) || { id: userId, name: 'Someone' })
+  }, [selectedChatId, state.contacts, state.user.id, typingByChat])
   const replyTo = messages.find((message) => message.id === replyToId)
   const editingMessage = messages.find((message) => message.id === editingMessageId)
 
@@ -1280,6 +1550,48 @@ export default function App() {
     await loadMessagesFromServer(selectedChat.id, { before: oldest.time, append: true })
   }
 
+  async function jumpToMessage(messageId) {
+    if (!selectedChat || !messageId) return
+    const currentMessages = stateRef.current?.messages?.[selectedChat.id] || []
+    if (currentMessages.some((message) => message.id === messageId)) {
+      setSelectedMessageId(messageId)
+      return
+    }
+    if (!selectedChat.backend) {
+      showToast('This message is not loaded locally.')
+      return
+    }
+
+    try {
+      const { messages: serverMessages, hasMoreBefore } = await getChatMessageContext(
+        selectedChat.id,
+        messageId,
+        { limit: 51 },
+      )
+      const normalizedMessages = await Promise.all(
+        serverMessages.map((message) => normalizeServerMessage(message, state.user.id)),
+      )
+      if (!normalizedMessages.some((message) => message.id === messageId)) {
+        throw new Error('Message is not available.')
+      }
+      setState((current) => ({
+        ...current,
+        messages: {
+          ...current.messages,
+          [selectedChat.id]: mergeMessagesById(current.messages[selectedChat.id], normalizedMessages),
+        },
+      }))
+      setHasMoreMessages((current) => ({
+        ...current,
+        [selectedChat.id]: Boolean(hasMoreBefore || current[selectedChat.id]),
+      }))
+      setSelectedMessageId(messageId)
+      sendSocketEvent({ type: 'chat:read', chatId: selectedChat.id })
+    } catch (error) {
+      showToast(error.message || 'Could not open message.')
+    }
+  }
+
   function selectChat(chatId) {
     const chat = state.chats.find((item) => item.id === chatId)
     setSelectedChatId(chatId)
@@ -1319,14 +1631,14 @@ export default function App() {
     [selectedChat?.backend, selectedChat?.id, sendSocketEvent],
   )
 
-  async function sendMessage(text) {
+  async function sendMessage(text, linkPreview) {
     if (!selectedChat) return
 
     if (editingMessage) {
       if (selectedChat.backend) {
         try {
           const encryptedText = await encryptTextForChat(text, selectedChat)
-          await editChatMessage(selectedChat.id, editingMessage.id, encryptedText)
+          await editChatMessage(selectedChat.id, editingMessage.id, encryptedText, text)
           setEditingMessageId('')
           showToast('Message edited.')
         } catch (error) {
@@ -1371,6 +1683,7 @@ export default function App() {
       status: 'sending',
       replyToId: replyTo?.id,
       reactions: {},
+      linkPreview: linkPreview || null,
     }
 
     setState((current) => ({
@@ -1386,7 +1699,9 @@ export default function App() {
       try {
         const { message } = await sendChatMessage(selectedChat.id, {
           text: payloadText,
+          searchText: text,
           replyToId: replyTo?.id,
+          linkPreview: linkPreview || undefined,
         })
         const normalizedMessage = await normalizeServerMessage(message, state.user.id)
         if (pendingReadIdsRef.current.has(normalizedMessage.id)) {
@@ -1428,10 +1743,100 @@ export default function App() {
     window.setTimeout(() => updateMessageStatus(selectedChat.id, id, 'read'), 1500)
   }
 
+  async function sendRichMessage(rich) {
+    if (!selectedChat || editingMessage) return
+
+    // Polls are sent as real server messages with a poll payload, not as rich text
+    if (rich.type === 'poll' && selectedChat.backend) {
+      try {
+        const { message } = await sendChatMessage(selectedChat.id, {
+          text: '',
+          searchText: rich.poll?.question || '',
+          poll: rich.poll,
+        })
+        const normalizedMessage = await normalizeServerMessage(message, state.user.id)
+        setState((current) => ({
+          ...current,
+          messages: {
+            ...current.messages,
+            [selectedChat.id]: [...(current.messages[selectedChat.id] || []), normalizedMessage],
+          },
+        }))
+      } catch (error) {
+        showToast(error.message || 'Poll could not be sent.')
+      }
+      return
+    }
+
+    const text = rich.caption || ''
+    const searchText = getRichSearchText(rich)
+    const encoded = encodeRichMessage(rich)
+    let payloadText = encoded
+    if (selectedChat.backend) {
+      try {
+        payloadText = await encryptTextForChat(encoded, selectedChat)
+      } catch (error) {
+        showToast(error.message || 'Message was not encrypted.')
+        return
+      }
+    }
+
+    const id = createId('rich')
+    const localMessage = {
+      id,
+      senderId: state.user.id,
+      text,
+      rich,
+      time: new Date().toISOString(),
+      status: selectedChat.backend ? 'sending' : 'read',
+      replyToId: replyTo?.id,
+      reactions: {},
+    }
+    setState((current) => ({
+      ...current,
+      messages: {
+        ...current.messages,
+        [selectedChat.id]: [...(current.messages[selectedChat.id] || []), localMessage],
+      },
+    }))
+    setReplyToId('')
+
+    if (!selectedChat.backend) return
+
+    try {
+      const { message } = await sendChatMessage(selectedChat.id, {
+        text: payloadText,
+        searchText,
+        replyToId: replyTo?.id,
+      })
+      const normalizedMessage = await normalizeServerMessage(message, state.user.id)
+      setState((current) => ({
+        ...current,
+        messages: {
+          ...current.messages,
+          [selectedChat.id]: (current.messages[selectedChat.id] || []).map((item) =>
+            item.id === id ? normalizedMessage : item,
+          ),
+        },
+      }))
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        messages: {
+          ...current.messages,
+          [selectedChat.id]: (current.messages[selectedChat.id] || []).map((item) =>
+            item.id === id ? { ...item, status: 'failed' } : item,
+          ),
+        },
+      }))
+      showToast(error.message || 'Rich message was not sent.')
+    }
+  }
+
   async function forwardMessageToChat(sourceMessage, targetChatId) {
     const targetChat = state.chats.find((chat) => chat.id === targetChatId)
     if (!targetChat || !sourceMessage || sourceMessage.deleted) return
-    const text = sourceMessage.text?.trim()
+    const text = getMessagePlainText(sourceMessage).trim()
     if (!text) {
       showToast('Only text forwarding is available for encrypted media.')
       return
@@ -1474,6 +1879,7 @@ export default function App() {
     try {
       const { message } = await sendChatMessage(targetChat.id, {
         text: payloadText,
+        searchText: forwardedText,
         forwardedFromMessageId: sourceMessage.backend ? sourceMessage.id : undefined,
       })
       const normalizedMessage = await normalizeServerMessage(message, state.user.id)
@@ -1501,30 +1907,6 @@ export default function App() {
     }
   }
 
-  function sendMockMessage(text) {
-    if (!selectedChat) return
-    const now = new Date().toISOString()
-    setState((current) => ({
-      ...current,
-      messages: {
-        ...current.messages,
-        [selectedChat.id]: [
-          ...(current.messages[selectedChat.id] || []),
-          {
-            id: createId('msg'),
-            senderId: current.user.id,
-            text,
-            time: now,
-            status: 'read',
-            replyToId: replyTo?.id,
-            reactions: {},
-            mock: true,
-          },
-        ],
-      },
-    }))
-    setReplyToId('')
-  }
 
   function updateMessageStatus(chatId, messageId, status) {
     setState((current) => ({
@@ -1595,9 +1977,10 @@ export default function App() {
   }
 
   async function copyMessage(message) {
-    if (!message.text) return
+    const text = getMessagePlainText(message)
+    if (!text) return
     try {
-      await navigator.clipboard.writeText(message.text)
+      await navigator.clipboard.writeText(text)
       showToast('Message copied.')
     } catch {
       showToast('Clipboard is unavailable in this browser.')
@@ -1649,6 +2032,7 @@ export default function App() {
               mutedUntil: settings.mutedUntil || null,
               archived: Boolean(settings.archived),
               archivedAt: settings.archivedAt || null,
+              pushMode: settings.pushMode || 'default',
             }
           : chat,
       ),
@@ -1756,6 +2140,30 @@ export default function App() {
     }
   }
 
+  async function setChatPushMode(chatId, pushMode) {
+    const chat = state.chats.find((item) => item.id === chatId)
+    if (!chat) return
+    const previousMode = chat.pushMode || 'default'
+    setState((current) => ({
+      ...current,
+      chats: current.chats.map((item) => (item.id === chatId ? { ...item, pushMode } : item)),
+    }))
+    if (!chat.backend) return
+
+    try {
+      const { settings } = await updateChatSettings(chatId, { pushMode })
+      applyServerChatSettings(chatId, settings)
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        chats: current.chats.map((item) =>
+          item.id === chatId ? { ...item, pushMode: previousMode } : item,
+        ),
+      }))
+      showToast(error.message || 'Push setting was not saved.')
+    }
+  }
+
   function toggleMessageSelection(messageId) {
     setSelectedMessageIds((current) => {
       const next = new Set(current)
@@ -1787,6 +2195,72 @@ export default function App() {
     }
   }
 
+  // Offline queue: re-send every failed text message in every backend chat.
+  // Triggered when the network returns or the WebSocket reconnects.
+  async function resendFailedMessages() {
+    const current = stateRef.current
+    if (!current) return
+    for (const [chatId, chatMessages] of Object.entries(current.messages || {})) {
+      const chat = current.chats.find((item) => item.id === chatId)
+      if (!chat?.backend) continue
+      for (const message of chatMessages) {
+        if (message.status !== 'failed' || message.media || typeof message.text !== 'string') continue
+        try {
+          const payloadText = await encryptTextForChat(message.text, chat)
+          const { message: serverMessage } = await sendChatMessage(chatId, {
+            text: payloadText,
+            searchText: message.text,
+            replyToId: message.replyToId,
+          })
+          const normalized = await normalizeServerMessage(serverMessage, current.user.id)
+          setState((prev) => ({
+            ...prev,
+            messages: {
+              ...prev.messages,
+              [chatId]: (prev.messages[chatId] || []).map((item) =>
+                item.id === message.id ? normalized : item,
+              ),
+            },
+          }))
+        } catch {
+          // Still offline or rejected — keep it queued for the next attempt.
+        }
+      }
+    }
+  }
+
+  const resendFailedRef = useRef(resendFailedMessages)
+  useEffect(() => {
+    resendFailedRef.current = resendFailedMessages
+  })
+
+  useEffect(() => {
+    function handleOnline() {
+      resendFailedRef.current()
+    }
+    window.addEventListener('online', handleOnline)
+    return () => window.removeEventListener('online', handleOnline)
+  }, [])
+
+  async function votePollOption(messageId, optionIds) {
+    if (!selectedChat?.backend) return
+    try {
+      const { poll } = await votePoll(selectedChat.id, messageId, optionIds)
+      if (!poll) return
+      setState((current) => ({
+        ...current,
+        messages: {
+          ...current.messages,
+          [selectedChat.id]: (current.messages[selectedChat.id] || []).map((message) =>
+            message.id === messageId ? { ...message, poll } : message,
+          ),
+        },
+      }))
+    } catch (error) {
+      showToast(error.message || 'Could not register vote.')
+    }
+  }
+
   async function retryMessage(messageId) {
     if (!selectedChat) return
     const message = (state.messages[selectedChat.id] || []).find((m) => m.id === messageId)
@@ -1807,6 +2281,7 @@ export default function App() {
       const payloadText = await encryptTextForChat(message.text || '', selectedChat)
       const { message: serverMessage } = await sendChatMessage(selectedChat.id, {
         text: payloadText,
+        searchText: message.text || '',
         replyToId: message.replyToId,
       })
       const normalized = await normalizeServerMessage(serverMessage, state.user.id)
@@ -1842,6 +2317,31 @@ export default function App() {
     }
   }
 
+  function patchChatMember(chatId, userId, patch) {
+    setState((current) => ({
+      ...current,
+      chats: current.chats.map((chat) =>
+        chat.id === chatId
+          ? {
+              ...chat,
+              members: (chat.members || []).map((member) =>
+                member.id === userId ? { ...member, ...patch } : member,
+              ),
+            }
+          : chat,
+      ),
+    }))
+  }
+
+  async function loadCallHistory(chatId) {
+    try {
+      const { calls } = await getCallHistory(chatId)
+      return calls
+    } catch {
+      return []
+    }
+  }
+
   async function addGroupMember(chatId, userId) {
     try {
       const { member } = await addChatMember(chatId, userId)
@@ -1862,6 +2362,35 @@ export default function App() {
       showToast('Member removed.')
     } catch (error) {
       showToast(error.message || 'Could not remove member.')
+      throw error
+    }
+  }
+
+  async function updateGroupMemberRole(chatId, userId, input) {
+    try {
+      const payload = await updateChatMemberRole(chatId, userId, input)
+      patchChatMember(chatId, userId, {
+        role: payload.role,
+        permissions: payload.permissions || {},
+      })
+      showToast('Member role updated.')
+      return payload
+    } catch (error) {
+      showToast(error.message || 'Could not update member role.')
+      throw error
+    }
+  }
+
+  async function updateGroupMemberPermissions(chatId, userId, permissions) {
+    try {
+      const payload = await updateChatMemberPermissions(chatId, userId, permissions)
+      patchChatMember(chatId, userId, {
+        permissions: payload.permissions || {},
+      })
+      showToast('Member permissions updated.')
+      return payload
+    } catch (error) {
+      showToast(error.message || 'Could not update member permissions.')
       throw error
     }
   }
@@ -2025,7 +2554,12 @@ export default function App() {
           serverType: 'private',
           members: [
             { id: state.user.id, encryptionPublicKey: state.user.encryptionPublicKey },
-            { id: contactId, encryptionPublicKey: contact.encryptionPublicKey },
+            {
+              id: contactId,
+              encryptionPublicKey: contact.encryptionPublicKey,
+              blockedByMe: Boolean(contact.blockedByMe),
+              blockedMe: Boolean(contact.blockedMe),
+            },
           ],
           pinned: Boolean(chatSettings.pinned),
           pinnedAt: chatSettings.pinnedAt || null,
@@ -2033,6 +2567,7 @@ export default function App() {
           mutedUntil: chatSettings.mutedUntil || null,
           archived: Boolean(chatSettings.archived),
           archivedAt: chatSettings.archivedAt || null,
+          pushMode: chatSettings.pushMode || 'default',
           unread: 0,
           createdAt: new Date().toISOString(),
         }
@@ -2084,8 +2619,18 @@ export default function App() {
     setUi((current) => ({ ...current, contactsOpen: false, mobilePane: 'chat' }))
   }
 
-  async function sendAttachment(file, caption) {
+  async function sendAttachment(file, caption, options = {}) {
     if (!selectedChat) return
+    const rich = options.album
+      ? {
+          type: 'album',
+          caption,
+          albumId: options.album.albumId,
+          index: options.album.index,
+          count: options.album.count,
+        }
+      : null
+    const messageText = rich ? encodeRichMessage(rich) : caption
 
     if (!selectedChat.backend) {
       const mediaUrl = URL.createObjectURL(file)
@@ -2094,7 +2639,9 @@ export default function App() {
         : file.type.startsWith('video/')
           ? 'video'
           : file.type.startsWith('audio/')
-            ? 'voice'
+            ? /^voice-\d+\.(webm|ogg|m4a)$/i.test(file.name)
+              ? 'voice'
+              : 'audio'
             : 'file'
       setState((current) => ({
         ...current,
@@ -2106,6 +2653,10 @@ export default function App() {
               id: createId('media'),
               senderId: current.user.id,
               text: caption,
+              rich,
+              albumId: rich?.albumId,
+              albumIndex: rich?.index,
+              albumCount: rich?.count,
               time: new Date().toISOString(),
               status: 'read',
               reactions: {},
@@ -2126,13 +2677,18 @@ export default function App() {
       return
     }
 
-    showToast('Preparing encrypted media...')
+    if (!options.quiet) showToast('Preparing encrypted media...')
     try {
-      const encryptedCaption = await encryptTextForChat(caption, selectedChat)
+      const encryptedCaption = await encryptTextForChat(messageText, selectedChat)
       const encryptedMedia = await encryptMediaForChat(file, selectedChat)
-      const { media } = await uploadMedia(encryptedMedia.file, selectedChat.id, encryptedMedia.metadata)
+      const { media } = await uploadMedia(encryptedMedia.file, selectedChat.id, {
+        ...encryptedMedia.metadata,
+        signal: options.signal,
+        onUploadProgress: options.onUploadProgress,
+      })
       const { message } = await sendChatMessage(selectedChat.id, {
         text: encryptedCaption,
+        searchText: rich ? getRichSearchText(rich) : caption,
         mediaId: media.id,
       })
       const normalizedMessage = await normalizeServerMessage(message, state.user.id)
@@ -2154,6 +2710,9 @@ export default function App() {
       const savedPercent = media.originalSize
         ? Math.max(0, Math.round((1 - media.size / media.originalSize) * 100))
         : 0
+      if (options.quiet) {
+        return
+      }
       if (savedPercent) {
         showToast(`Media sent. Compressed by ${savedPercent}%.`)
       } else if (encryptedMedia.metadata.kind === 'video' && !encryptedMedia.compressed) {
@@ -2162,71 +2721,50 @@ export default function App() {
         showToast('Media sent.')
       }
     } catch (error) {
-      showToast(error.message || 'Media upload failed.')
+      if (error.name === 'AbortError') {
+        showToast('Media upload cancelled.')
+      } else {
+        showToast(error.message || 'Media upload failed.')
+      }
       throw error
     }
   }
 
-  function createSpace({ type, name, username, bio }) {
-    const entityId = createId(type)
-    const chatId = createId('chat')
-    const avatar = name
-      .split(/\s+/)
-      .map((part) => part[0])
-      .join('')
-      .slice(0, 2)
-      .toUpperCase()
-
-    const entity = {
-      id: entityId,
-      type,
-      name,
-      username,
-      avatar: avatar || (type === 'group' ? 'GR' : 'CH'),
-      color: type === 'group' ? '#14b8a6' : '#f97316',
-      status: type,
-      lastSeen: type === 'group' ? '1 member, 1 online' : '1 subscriber',
-      phone: '',
-      bio: bio || (type === 'group' ? 'Local group created in MVP.' : 'Local channel created in MVP.'),
-      members: type === 'group' ? ['me'] : undefined,
-      subscribers: type === 'channel' ? 1 : undefined,
-      role: 'owner',
+  async function sendAttachments(files, caption, options = {}) {
+    const list = Array.from(files || []).filter(Boolean)
+    if (!list.length) return
+    if (list.length === 1) {
+      await sendAttachment(list[0], caption, options)
+      return
     }
 
-    setState((current) => ({
-      ...current,
-      contacts: [entity, ...current.contacts],
-      chats: [
-        {
-          id: chatId,
-          contactId: entityId,
-          pinned: false,
-          muted: false,
-          archived: false,
-          unread: 0,
-          createdAt: new Date().toISOString(),
+    const albumId = createId('album')
+    const progress = new Array(list.length).fill(0)
+    for (let index = 0; index < list.length; index += 1) {
+      await sendAttachment(list[index], index === 0 ? caption : '', {
+        ...options,
+        quiet: true,
+        album: { albumId, index: index + 1, count: list.length },
+        onUploadProgress: (percent) => {
+          progress[index] = percent
+          const aggregate = Math.round(progress.reduce((sum, value) => sum + value, 0) / list.length)
+          options.onUploadProgress?.(aggregate)
         },
-        ...current.chats,
-      ],
-      messages: {
-        ...current.messages,
-        [chatId]: [
-          {
-            id: createId('msg'),
-            senderId: entityId,
-            text:
-              type === 'group'
-                ? 'Group created locally. Members, roles, topics and moderation are prepared as UI/mock states.'
-                : 'Channel created locally. Publishing, views, discussions and scheduled posts are prepared as UI/mock states.',
-            time: new Date().toISOString(),
-            status: 'read',
-            reactions: {},
-          },
-        ],
-      },
-    }))
-    setSelectedChatId(chatId)
-    setUi((current) => ({ ...current, createSpace: '', menuOpen: false, mobilePane: 'chat' }))
+      })
+    }
+    showToast(`Album sent: ${list.length} items.`)
+  }
+
+  async function createSpace({ type, name }) {
+    try {
+      const { chat } = await createServerChat({ type, title: name, memberIds: [] })
+      await loadServerWorkspace(state.user.id)
+      setUi((current) => ({ ...current, createSpace: '', menuOpen: false, mobilePane: 'chat' }))
+      selectChat(chat.id)
+      showToast(type === 'group' ? t('toast.groupCreated') : t('toast.channelCreated'))
+    } catch (error) {
+      showToast(error.message || t('toast.spaceFailed'))
+    }
   }
 
   function updateSettings(patch) {
@@ -2242,13 +2780,14 @@ export default function App() {
 
   function normalizeProfilePatch(user) {
     return {
-      name: String(user.name || '').trim().slice(0, 64) || 'AstraChat User',
+      name: String(user.name || '').trim().slice(0, 64) || 'Onda User',
       username: String(user.username || '')
         .replace(/^@+/, '')
         .trim()
         .toLowerCase()
         .slice(0, 32),
       bio: String(user.bio || '').trim().slice(0, 240),
+      status: String(user.customStatus || '').trim().slice(0, 80),
     }
   }
 
@@ -2260,8 +2799,10 @@ export default function App() {
       name: user.name,
       username: `@${user.username}`,
       bio: user.bio || '',
+      customStatus: user.status || '',
       avatar: user.avatar,
       encryptionPublicKey: user.encryptionPublicKey || state.user.encryptionPublicKey,
+      totpEnabled: Boolean(user.totpEnabled),
     }
     setState((current) => ({ ...current, user: appUser }))
     setAuth((current) => ({
@@ -2340,9 +2881,135 @@ export default function App() {
     }
   }
 
+  // Cloud key backup: passphrase-encrypted blob synced via the server so a
+  // second device can pick up the E2EE key without manual file transfer.
+  async function cloudKeyBackup(passphrase) {
+    try {
+      const backup = await exportUserKeyBackup(state.user.id)
+      const payload = await encryptKeyBackupWithPassphrase(backup, passphrase)
+      await putCloudKeyBackup(payload)
+      showToast(t('cloudKey.saved'))
+      return true
+    } catch (error) {
+      showToast(error.message || t('cloudKey.saveFailed'))
+      return false
+    }
+  }
+
+  async function cloudKeyRestore(passphrase) {
+    try {
+      const { payload } = await getCloudKeyBackup()
+      const backup = await decryptKeyBackupWithPassphrase(payload, passphrase)
+      await importEncryptionKey(new Blob([backup], { type: 'application/json' }))
+      return true
+    } catch (error) {
+      showToast(error.message || t('cloudKey.restoreFailed'))
+      return false
+    }
+  }
+
   async function loadSessions() {
     const { sessions } = await getSessions()
     return sessions
+  }
+
+  async function loadTotpStatus() {
+    return getTotpStatus()
+  }
+
+  async function beginTotpSetup() {
+    return startTotpSetup()
+  }
+
+  async function confirmTotpSetup(code) {
+    const { user } = await verifyTotpSetup(code)
+    applyServerUser(user)
+    showToast('Two-factor authentication enabled.')
+    return user
+  }
+
+  async function turnOffTotp(code) {
+    const { user } = await disableTotp(code)
+    applyServerUser(user)
+    showToast('Two-factor authentication disabled.')
+    return user
+  }
+
+  async function loadSecurityAlerts(unread = false) {
+    const { events } = await getSecurityEvents({ unread })
+    return events
+  }
+
+  async function markSecurityAlertRead(eventId) {
+    await markSecurityEventRead(eventId)
+  }
+
+  async function markAllSecurityAlertsRead() {
+    await markAllSecurityEventsRead()
+    showToast('Security alerts marked as read.')
+  }
+
+  async function loadBlockedContacts() {
+    const { users } = await getBlockedUsers()
+    return users
+  }
+
+  function applyBlockedState(userId, blockedByMe) {
+    setState((current) => ({
+      ...current,
+      contacts: current.contacts.map((contact) =>
+        contact.id === userId ? { ...contact, blockedByMe } : contact,
+      ),
+      chats: current.chats.map((chat) => ({
+        ...chat,
+        members: chat.members?.map((member) =>
+          member.id === userId ? { ...member, blockedByMe } : member,
+        ),
+      })),
+    }))
+  }
+
+  async function blockContact(userId) {
+    if (!userId) return
+    const sure = await confirm('Block this user? They will not be able to direct-message or call you.')
+    if (!sure) return
+    await blockUser(userId)
+    applyBlockedState(userId, true)
+    showToast('User blocked.')
+  }
+
+  async function unblockContact(userId) {
+    if (!userId) return
+    await unblockUser(userId)
+    applyBlockedState(userId, false)
+    showToast('User unblocked.')
+  }
+
+  async function reportUser(userId, context = {}) {
+    if (!userId) return
+    const details = window.prompt('Report details', context.details || '')
+    if (details === null) return
+    await reportAbuse({
+      targetUserId: userId,
+      chatId: context.chatId || selectedChatId || undefined,
+      reason: context.reason || 'abuse',
+      details,
+    })
+    showToast('Report sent.')
+  }
+
+  async function reportMessage(message) {
+    if (!message?.id) return
+    const details = window.prompt('Report this message', '')
+    if (details === null) return
+    await reportAbuse({
+      targetMessageId: message.id,
+      targetUserId: message.senderId,
+      chatId: selectedChatId || undefined,
+      reason: 'spam',
+      details,
+    })
+    showToast('Message reported.')
   }
 
   async function endSession(sessionId) {
@@ -2388,14 +3055,29 @@ export default function App() {
       <AuthScreen
         pending={auth.status === 'pending'}
         error={auth.error}
+        totpRequired={auth.status === 'totp'}
         onLogin={handleLogin}
+        onTotpLogin={handleTotpLogin}
+        onCancelTotp={cancelTotpLogin}
         onRegister={handleRegister}
         onTestLogin={handleTestLogin}
       />
     )
   }
 
+  async function handleSendWallMessage(text) {
+    try {
+      await sendWallMessage(text)
+      showToast(t('toast.wallSent'))
+      return true
+    } catch (error) {
+      showToast(error.message || t('toast.wallFailed'))
+      return false
+    }
+  }
+
   return (
+    <>
     <AppShell
       chatSummaries={chatSummaries}
       chatFolders={state.chatFolders || EMPTY_CHAT_FOLDERS}
@@ -2404,6 +3086,10 @@ export default function App() {
       user={state.user}
       settings={state.settings}
       wordStreamWords={wordStreamWords}
+      allMessages={state.messages}
+      wallMessages={wallMessages}
+      liveWallChatWords={liveWallChatWords}
+      onSendWallMessage={handleSendWallMessage}
       selectedChat={selectedChat}
       selectedContact={selectedContact}
       messages={messages}
@@ -2415,12 +3101,15 @@ export default function App() {
       selectedMessageId={selectedMessageId}
       toast={toast}
       callController={callController}
+      typingUsers={selectedTypingUsers}
       onSelectChat={selectChat}
       onSelectFolder={setSelectedFolderId}
       onSidebarSearch={setSidebarSearch}
       onMessageSearch={setMessageSearch}
       onSendMessage={sendMessage}
       onSendAttachment={sendAttachment}
+      onSendAttachments={sendAttachments}
+      onSendRichMessage={sendRichMessage}
       onTyping={handleTyping}
       onStartReply={startReply}
       onStartEdit={startEdit}
@@ -2431,6 +3120,7 @@ export default function App() {
       onReact={reactToMessage}
       onForwardMessage={forwardMessageToChat}
       onSelectMessage={(id) => setSelectedMessageId((current) => (current === id ? '' : id))}
+      onJumpToMessage={jumpToMessage}
       hasMoreMessages={hasMoreMessages[selectedChatId] || false}
       unreadFromId={unreadFromId[selectedChatId] || null}
       selectedMessageIds={selectedMessageIds}
@@ -2441,30 +3131,48 @@ export default function App() {
       onForwardSelectedMessages={forwardSelectedMessages}
       onPinMessage={pinMessage}
       onRetryMessage={retryMessage}
+      onVotePoll={votePollOption}
       onLoadGroupMembers={loadGroupMembers}
+      onLoadCallHistory={loadCallHistory}
       onAddGroupMember={addGroupMember}
       onRemoveGroupMember={removeGroupMember}
       onUpdateGroupInfo={updateGroupInfo}
+      onUpdateGroupMemberRole={updateGroupMemberRole}
+      onUpdateGroupMemberPermissions={updateGroupMemberPermissions}
       onTogglePin={(chatId) => toggleChatField(chatId, 'pinned')}
       onMuteChat={muteChat}
       onToggleMute={(chatId) => toggleChatField(chatId, 'muted')}
+      onSetChatPushMode={setChatPushMode}
       onArchiveChat={archiveChat}
       onCreateFolder={createFolder}
       onUpdateFolder={saveFolder}
       onDeleteFolder={removeFolder}
       onToggleFolderPin={toggleFolderChatPin}
       onExportEncryptionKey={exportEncryptionKey}
+      onCloudKeyBackup={cloudKeyBackup}
+      onCloudKeyRestore={cloudKeyRestore}
       onImportEncryptionKey={importEncryptionKey}
       onUploadAvatar={uploadUserAvatar}
       onRemoveAvatar={removeUserAvatar}
       onChangePassword={changeUserPassword}
       onDeleteAccount={removeAccount}
       onLoadSessions={loadSessions}
+      onLoadTotpStatus={loadTotpStatus}
+      onStartTotpSetup={beginTotpSetup}
+      onVerifyTotpSetup={confirmTotpSetup}
+      onDisableTotp={turnOffTotp}
       onTerminateOtherSessions={endOtherSessions}
       onTerminateSession={endSession}
+      onLoadSecurityAlerts={loadSecurityAlerts}
+      onMarkSecurityAlertRead={markSecurityAlertRead}
+      onMarkAllSecurityAlertsRead={markAllSecurityAlertsRead}
+      onLoadBlockedContacts={loadBlockedContacts}
+      onBlockUser={blockContact}
+      onUnblockUser={unblockContact}
+      onReportUser={reportUser}
+      onReportMessage={reportMessage}
       onCreateChat={createChat}
       onCreateSpace={createSpace}
-      onSendMockMessage={sendMockMessage}
       onOpenContacts={() => setUi((current) => ({ ...current, contactsOpen: true, menuOpen: false }))}
       onCloseContacts={() => setUi((current) => ({ ...current, contactsOpen: false }))}
       onOpenCreateSpace={(mode) => setUi((current) => ({ ...current, createSpace: mode, menuOpen: false }))}
@@ -2476,12 +3184,14 @@ export default function App() {
       onToggleSearch={() => setUi((current) => ({ ...current, searchOpen: !current.searchOpen }))}
       onToggleMenu={() => setUi((current) => ({ ...current, menuOpen: !current.menuOpen }))}
       onOpenCall={(kind) => {
-        if (!selectedChat?.backend || !selectedContact?.backend || selectedChat.type !== 'private') {
-          showToast('Calls are available in registered-user private chats.')
+        const chatType = selectedChat?.serverType || selectedContact?.type
+        if (!selectedChat?.backend || !selectedContact?.backend || !['private', 'group'].includes(chatType)) {
+          showToast('Calls are available in registered-user private chats and groups.')
           return
         }
         callController.startCall({
           contact: selectedContact,
+          chat: selectedChat,
           chatId: selectedChat.id,
           kind,
         })
@@ -2489,6 +3199,17 @@ export default function App() {
       onResetState={resetState}
       onLogout={handleLogout}
       onBackToList={() => setUi((current) => ({ ...current, mobilePane: 'list' }))}
+      onGlobalSearchSelectChat={(result) => {
+        const chat = state.chats?.find((c) => c.id === result.id)
+          || state.contacts?.find((c) => c.id === result.id)
+        if (chat) selectChat(chat.id)
+      }}
+      onGlobalSearchJumpMessage={(chatId, messageId) => {
+        selectChat(chatId)
+        window.setTimeout(() => jumpToMessage(messageId), 200)
+      }}
     />
+    {confirmDialog}
+    </>
   )
 }

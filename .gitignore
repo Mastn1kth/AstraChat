@@ -13,7 +13,10 @@ dist-ssr
 *.local
 server-data*
 .playwright-mcp
+.claude/
 .env
+.env.production
+.env.mobile
 
 # Editor directories and files
 .vscode/*
@@ -25,3 +28,18 @@ server-data*
 *.njsproj
 *.sln
 *.sw?
+
+# Mobile (Capacitor) build artifacts
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+ios/App/Pods/
+ios/App/build/
+ios/DerivedData/
+*.keystore
+android/keystore.properties
+backups/
+Onda-Admin.exe
+dist-admin/
+Onda-debug.apk

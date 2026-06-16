@@ -1,11 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useConfirm } from '../hooks/useConfirm'
 import {
   Archive,
+  Ban,
   Bell,
   BellOff,
+  Check,
+  Copy,
+  FileText,
+  Flag,
   Image,
   Link as LinkIcon,
   Loader2,
+  Music,
+  Phone,
   Play,
   Plus,
   Shield,
@@ -15,14 +23,47 @@ import {
   X,
 } from 'lucide-react'
 import Avatar from './Avatar'
+import FocusSchedule from './FocusSchedule'
 import { formatMessageTime } from '../utils/formatters'
+import { t } from '../i18n'
+import { getChannelStats, getChatAdminLog, getChatBans, unbanChatMember, getChatInvites, createChatInvite, revokeChatInvite } from '../api/client'
 
 const linkPattern = /\bhttps?:\/\/[^\s<>"']+/gi
+const roleOptions = ['owner', 'admin', 'moderator', 'member']
+const permissionOptions = [
+  ['send_messages', 'Messages'],
+  ['send_media', 'Media'],
+  ['send_polls', 'Polls'],
+  ['pin_messages', 'Pin'],
+  ['delete_messages', 'Delete'],
+  ['ban_users', 'Ban'],
+  ['manage_members', 'Members'],
+  ['manage_topics', 'Topics'],
+  ['post_messages', 'Posts'],
+  ['view_stats', 'Stats'],
+]
 
 function extractLinks(message) {
   return Array.from(message.text?.matchAll(linkPattern) || []).map((match) =>
     match[0].replace(/[),.;!?]+$/g, ''),
   )
+}
+
+function formatCallTime(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  return date.toLocaleString([], {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function callStatusLabel(call) {
+  if (call.status === 'accepted' && !call.endedAt) return 'active'
+  if (call.status === 'accepted') return 'answered'
+  return call.status
 }
 
 export default function ProfilePanel({
@@ -31,28 +72,53 @@ export default function ProfilePanel({
   contacts,
   messages,
   currentUserId,
-  onMockAction,
   onClose,
   onTogglePin,
   onToggleMute,
   onArchive,
   onOpenMedia,
   onLoadGroupMembers,
+  onLoadCallHistory,
   onAddGroupMember,
   onRemoveGroupMember,
   onUpdateGroupInfo,
+  onUpdateGroupMemberRole,
+  onUpdateGroupMemberPermissions,
+  onBlockUser,
+  onUnblockUser,
+  onReportUser,
 }) {
   const [sharedTab, setSharedTab] = useState('media')
   const [memberLoad, setMemberLoad] = useState({ chatId: null, members: null })
+  const [callHistoryLoad, setCallHistoryLoad] = useState({ chatId: null, calls: null })
   const [addingMember, setAddingMember] = useState(false)
   const [addMemberId, setAddMemberId] = useState('')
+  const [savingMemberId, setSavingMemberId] = useState('')
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleInput, setTitleInput] = useState(contact.name || '')
+  const [adminPanel, setAdminPanel] = useState(null) // { bans, events, error } when open
+  const [channelStats, setChannelStats] = useState(null) // { subscribers, ... } | { error }
+  const [invites, setInvites] = useState(null)
+  const [invitesLoading, setInvitesLoading] = useState(false)
+  const [copiedInviteId, setCopiedInviteId] = useState('')
+  const { confirm, dialog } = useConfirm()
 
   const isBackendGroup = chat.backend && (contact.type === 'group' || contact.type === 'channel')
-  const isOwnerOrAdmin = contact.role === 'owner' || contact.role === 'admin'
+  const canModeratePrivateContact = chat.backend && contact.type === 'private' && contact.id !== currentUserId
   const members = memberLoad.chatId === chat.id ? memberLoad.members : null
+  const currentMember = members?.find((member) => member.id === currentUserId)
+  const currentPermissions = currentMember?.permissions || contact.permissions || {}
+  const canManageMembers = isBackendGroup && (
+    currentPermissions.manage_members ||
+    ['owner', 'admin'].includes(currentMember?.role || contact.role)
+  )
+  const canManageRoles = isBackendGroup && (
+    currentPermissions.manage_roles ||
+    (currentMember?.role || contact.role) === 'owner'
+  )
+  const isOwnerOrAdmin = canManageMembers || canManageRoles
   const membersLoading = Boolean(isBackendGroup && onLoadGroupMembers && memberLoad.chatId !== chat.id)
+  const callHistoryLoading = Boolean(chat.backend && onLoadCallHistory && callHistoryLoad.chatId !== chat.id)
 
   // Load members for backend groups when panel opens
   useEffect(() => {
@@ -70,10 +136,117 @@ export default function ProfilePanel({
     return () => { cancelled = true }
   }, [chat.id, isBackendGroup, onLoadGroupMembers])
 
+  useEffect(() => {
+    if (!chat.backend || !onLoadCallHistory) return undefined
+
+    let cancelled = false
+    onLoadCallHistory(chat.id)
+      .then((calls) => {
+        if (!cancelled) setCallHistoryLoad({ chatId: chat.id, calls: calls || [] })
+      })
+      .catch(() => {
+        if (!cancelled) setCallHistoryLoad({ chatId: chat.id, calls: [] })
+      })
+
+    return () => { cancelled = true }
+  }, [chat.backend, chat.id, onLoadCallHistory])
+
+  async function toggleAdminPanel() {
+    if (adminPanel) {
+      setAdminPanel(null)
+      return
+    }
+    setAdminPanel({ loading: true })
+    try {
+      const [bansPayload, logPayload] = await Promise.all([
+        getChatBans(chat.id),
+        getChatAdminLog(chat.id),
+      ])
+      setAdminPanel({ bans: bansPayload.bans || [], events: logPayload.events || [] })
+    } catch (error) {
+      setAdminPanel({ error: error.message || t('pp.adminLoadFailed') })
+    }
+  }
+
+  async function unbanUser(userId) {
+    try {
+      await unbanChatMember(chat.id, userId)
+      setAdminPanel((current) =>
+        current?.bans
+          ? { ...current, bans: current.bans.filter((ban) => ban.userId !== userId) }
+          : current,
+      )
+    } catch (error) {
+      setAdminPanel((current) => (current ? { ...current, error: error.message } : current))
+    }
+  }
+
+  async function toggleChannelStats() {
+    if (channelStats) {
+      setChannelStats(null)
+      return
+    }
+    setChannelStats({ loading: true })
+    try {
+      setChannelStats(await getChannelStats(chat.id))
+    } catch (error) {
+      setChannelStats({ error: error.message || t('pp.statsLoadFailed') })
+    }
+  }
+
+  async function loadInvites() {
+    if (!isBackendGroup || invitesLoading) return
+    setInvitesLoading(true)
+    try {
+      const data = await getChatInvites(chat.id)
+      setInvites(data.links || [])
+    } catch {
+      setInvites([])
+    } finally {
+      setInvitesLoading(false)
+    }
+  }
+
+  async function handleCreateInvite() {
+    try {
+      const data = await createChatInvite(chat.id, { name: '' })
+      setInvites((current) => [data, ...(current || [])])
+    } catch {
+      // toast shown by App.jsx
+    }
+  }
+
+  async function handleRevokeInvite(inviteId) {
+    if (!await confirm('Revoke this invite link?')) return
+    try {
+      await revokeChatInvite(chat.id, inviteId)
+      setInvites((current) => (current || []).filter((item) => item.id !== inviteId))
+    } catch {
+      // toast shown by App.jsx
+    }
+  }
+
+  function copyInviteLink(link) {
+    const url = `${window.location.origin}/join/${link.token}`
+    navigator.clipboard.writeText(url).catch(() => {})
+    setCopiedInviteId(link.id)
+    window.setTimeout(() => setCopiedInviteId(''), 2000)
+  }
+
+  function memberName(userId) {
+    if (!userId) return '—'
+    if (userId === currentUserId) return 'You'
+    return (
+      members?.find((member) => member.id === userId)?.name ||
+      contacts.find((item) => item.id === userId)?.name ||
+      t('pp.member')
+    )
+  }
+
   const title =
-    contact.type === 'group' ? 'Group profile' :
-    contact.type === 'channel' ? 'Channel profile' :
-    'Contact profile'
+    contact.type === 'group' ? t('pp.groupProfile') :
+    contact.type === 'channel' ? t('pp.channelProfile') :
+    t('pp.contactProfile')
 
   // Fallback member names from local contacts (for non-backend groups)
   const memberNames = (contact.members || [])
@@ -87,7 +260,44 @@ export default function ProfilePanel({
   const sharedMedia = useMemo(
     () =>
       messages
-        .filter((message) => message.media && !message.deleted && !message.media.decryptFailed)
+        .filter((message) =>
+          message.media &&
+          !message.deleted &&
+          !message.media.decryptFailed &&
+          ['image', 'video'].includes(message.media.kind),
+        )
+        .map((message) => ({
+          ...message.media,
+          messageId: message.id,
+          time: message.time,
+        })),
+    [messages],
+  )
+  const sharedFiles = useMemo(
+    () =>
+      messages
+        .filter((message) =>
+          message.media &&
+          !message.deleted &&
+          !message.media.decryptFailed &&
+          message.media.kind === 'file',
+        )
+        .map((message) => ({
+          ...message.media,
+          messageId: message.id,
+          time: message.time,
+        })),
+    [messages],
+  )
+  const sharedAudio = useMemo(
+    () =>
+      messages
+        .filter((message) =>
+          message.media &&
+          !message.deleted &&
+          !message.media.decryptFailed &&
+          ['voice', 'audio'].includes(message.media.kind),
+        )
         .map((message) => ({
           ...message.media,
           messageId: message.id,
@@ -125,7 +335,7 @@ export default function ProfilePanel({
   }
 
   async function handleRemoveMember(userId) {
-    if (!window.confirm('Remove this member?')) return
+    if (!await confirm('Remove this member?')) return
     try {
       await onRemoveGroupMember(chat.id, userId)
       setMemberLoad((current) => (
@@ -135,6 +345,58 @@ export default function ProfilePanel({
       ))
     } catch {
       // toast shown by App.jsx
+    }
+  }
+
+  function patchLoadedMember(userId, patch) {
+    setMemberLoad((current) => (
+      current.chatId === chat.id
+        ? {
+            ...current,
+            members: (current.members || []).map((member) =>
+              member.id === userId ? { ...member, ...patch } : member,
+            ),
+          }
+        : current
+    ))
+  }
+
+  async function handleRoleChange(member, role) {
+    if (!onUpdateGroupMemberRole || role === member.role) return
+    setSavingMemberId(member.id)
+    try {
+      const response = await onUpdateGroupMemberRole(chat.id, member.id, {
+        role,
+        permissions: {},
+      })
+      if (onLoadGroupMembers) {
+        const list = await onLoadGroupMembers(chat.id)
+        setMemberLoad({ chatId: chat.id, members: list || [] })
+      } else {
+        patchLoadedMember(member.id, {
+          role: response.role || role,
+          permissions: response.permissions || {},
+        })
+      }
+    } finally {
+      setSavingMemberId('')
+    }
+  }
+
+  async function handlePermissionChange(member, permission, value) {
+    if (!onUpdateGroupMemberPermissions) return
+    const permissions = {
+      ...(member.permissions || {}),
+      [permission]: value,
+    }
+    setSavingMemberId(member.id)
+    try {
+      const response = await onUpdateGroupMemberPermissions(chat.id, member.id, permissions)
+      patchLoadedMember(member.id, {
+        permissions: response.permissions || permissions,
+      })
+    } finally {
+      setSavingMemberId('')
     }
   }
 
@@ -150,6 +412,7 @@ export default function ProfilePanel({
   }
 
   return (
+    <>
     <aside className="side-panel profile-panel">
       <header>
         <strong>{title}</strong>
@@ -165,65 +428,74 @@ export default function ProfilePanel({
               autoFocus
               value={titleInput}
               onChange={(e) => setTitleInput(e.target.value)}
-              placeholder="Group name"
+              placeholder={t('pp.groupName')}
               maxLength={64}
             />
-            <button type="submit">Save</button>
-            <button type="button" onClick={() => setEditingTitle(false)}>Cancel</button>
+            <button type="submit">{t('pp.save')}</button>
+            <button type="button" onClick={() => setEditingTitle(false)}>{t('chat.cancel')}</button>
           </form>
         ) : (
           <h2
             className={isBackendGroup && isOwnerOrAdmin ? 'editable-title' : ''}
             onClick={() => isBackendGroup && isOwnerOrAdmin && setEditingTitle(true)}
-            title={isBackendGroup && isOwnerOrAdmin ? 'Click to rename' : ''}
+            title={isBackendGroup && isOwnerOrAdmin ? t('pp.clickToRename') : ''}
           >
             {contact.name}
           </h2>
         )}
+        {contact.customStatus && <p className="profile-custom-status">{contact.customStatus}</p>}
         <p className={contact.status === 'online' ? 'online-text' : ''}>{contact.lastSeen}</p>
       </div>
 
       <dl className="profile-data">
+        {contact.customStatus && (
+          <div>
+            <dt>{t('pp.status')}</dt>
+            <dd>{contact.customStatus}</dd>
+          </div>
+        )}
         {contact.username && (
           <div>
-            <dt>Username</dt>
+            <dt>{t('pp.username')}</dt>
             <dd>{contact.username}</dd>
           </div>
         )}
         {contact.phone && (
           <div>
-            <dt>Phone</dt>
+            <dt>{t('pp.phone')}</dt>
             <dd>{contact.phone}</dd>
           </div>
         )}
         {contact.bio && (
           <div>
-            <dt>About</dt>
+            <dt>{t('pp.about')}</dt>
             <dd>{contact.bio}</dd>
           </div>
         )}
         <div>
-          <dt>Type</dt>
+          <dt>{t('pp.type')}</dt>
           <dd>{contact.type || 'private'}</dd>
         </div>
         {contact.type === 'channel' && (
           <div>
-            <dt>Subscribers</dt>
+            <dt>{t('pp.subscribers')}</dt>
             <dd>{contact.subscribers || 0}</dd>
           </div>
         )}
       </dl>
 
+      <FocusSchedule messages={messages} contact={contact} currentUserId={currentUserId} />
+
       {/* Group members section */}
       {(contact.type === 'group' || contact.type === 'channel') && (
         <section className="group-members-section">
           <div className="group-members-header">
-            <strong><Users size={15} /> Members</strong>
-            {isBackendGroup && isOwnerOrAdmin && (
+            <strong><Users size={15} /> {t('pp.members')}</strong>
+            {isBackendGroup && canManageMembers && (
               <button
                 className="add-member-btn"
                 onClick={() => setAddingMember((v) => !v)}
-                title="Add member"
+                title={t('pp.addMember')}
               >
                 <Plus size={15} />
               </button>
@@ -236,15 +508,15 @@ export default function ProfilePanel({
                 autoFocus
                 value={addMemberId}
                 onChange={(e) => setAddMemberId(e.target.value)}
-                placeholder="User ID to add"
+                placeholder={t('pp.userIdToAdd')}
               />
-              <button type="submit">Add</button>
-              <button type="button" onClick={() => setAddingMember(false)}>✕</button>
+              <button type="submit">{t('pp.add')}</button>
+              <button type="button" onClick={() => setAddingMember(false)}>X</button>
             </form>
           )}
 
           {membersLoading ? (
-            <div className="members-loading"><Loader2 size={16} className="spin" /> Loading…</div>
+            <div className="members-loading"><Loader2 size={16} className="spin" /> {t('pp.loading')}</div>
           ) : members ? (
             <ul className="members-list">
               {members.map((m) => (
@@ -253,54 +525,273 @@ export default function ProfilePanel({
                     {m.name}
                     <small className="member-role">{m.role}</small>
                   </span>
-                  {isOwnerOrAdmin && m.id !== currentUserId && (
-                    <button
-                      className="remove-member-btn"
-                      onClick={() => handleRemoveMember(m.id)}
-                      title="Remove member"
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  )}
+                  <div className="member-admin-controls">
+                    {canManageRoles && m.id !== currentUserId && (
+                      <>
+                        <label className="member-role-select">
+                          <select
+                            value={m.role || 'member'}
+                            onChange={(event) => handleRoleChange(m, event.target.value)}
+                            disabled={savingMemberId === m.id}
+                            aria-label={`Change role for ${m.name}`}
+                          >
+                            {roleOptions.map((role) => (
+                              <option key={role} value={role}>{role}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <details className="member-permissions">
+                          <summary><Shield size={13} /> {t('pp.rights')}</summary>
+                          <div>
+                            {permissionOptions.map(([key, label]) => (
+                              <label key={key}>
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(m.permissions?.[key])}
+                                  disabled={savingMemberId === m.id}
+                                  onChange={(event) => handlePermissionChange(m, key, event.target.checked)}
+                                />
+                                <span>{label}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </details>
+                      </>
+                    )}
+                    {savingMemberId === m.id && <Loader2 size={14} className="spin member-saving" />}
+                    {canManageMembers && m.id !== currentUserId && (
+                      <button
+                        className="remove-member-btn"
+                        onClick={() => handleRemoveMember(m.id)}
+                        title={t('pp.removeMember')}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
                 </li>
               ))}
             </ul>
           ) : !isBackendGroup ? (
-            <p className="members-local">{memberNames.join(', ') || 'No members'}</p>
+            <p className="members-local">{memberNames.join(', ') || t('pp.noMembers')}</p>
           ) : null}
         </section>
       )}
 
       <div className="panel-actions">
         <button onClick={onTogglePin}>
-          <Pin size={17} /> {chat.pinned ? 'Unpin chat' : 'Pin chat'}
+          <Pin size={17} /> {chat.pinned ? t('chat.unpin') : t('chat.pin')}
         </button>
         <button onClick={onToggleMute}>
           {chat.muted ? <Bell size={17} /> : <BellOff size={17} />}
-          {chat.muted ? 'Unmute' : 'Mute'}
+          {chat.muted ? t('chat.unmute') : t('chat.mute')}
         </button>
         <button onClick={onArchive}>
-          <Archive size={17} /> {chat.archived ? 'Unarchive' : 'Archive'}
+          <Archive size={17} /> {chat.archived ? t('chat.unarchive') : t('chat.archive')}
         </button>
-        {contact.type === 'group' && (
-          <button onClick={() => onMockAction('[mock] group admin panel: bans, slow mode, anti-spam')}>
-            <Shield size={17} /> Admin settings
+        {isBackendGroup && contact.type === 'group' && isOwnerOrAdmin && (
+          <button onClick={toggleAdminPanel} className={adminPanel ? 'active' : ''}>
+            <Shield size={17} /> {t('pp.adminSettings')}
           </button>
         )}
-        {contact.type === 'channel' && (
-          <button onClick={() => onMockAction('[mock] channel stats: views, growth, reposts')}>
-            <Users size={17} /> Statistics
+        {isBackendGroup && contact.type === 'channel' && isOwnerOrAdmin && (
+          <button onClick={toggleChannelStats} className={channelStats ? 'active' : ''}>
+            <Users size={17} /> {t('pp.statistics')}
           </button>
+        )}
+        {canModeratePrivateContact && (
+          <>
+            <button onClick={() => onReportUser?.(contact.id)}>
+              <Flag size={17} /> {t('pp.reportUser')}
+            </button>
+            {contact.blockedByMe ? (
+              <button onClick={() => onUnblockUser?.(contact.id)}>
+                <Ban size={17} /> {t('pp.unblockUser')}
+              </button>
+            ) : (
+              <button className="danger-profile-action" onClick={() => onBlockUser?.(contact.id)}>
+                <Ban size={17} /> {t('pp.blockUser')}
+              </button>
+            )}
+          </>
         )}
       </div>
+
+      {adminPanel && (
+        <section className="admin-panel-section">
+          <div className="group-members-header">
+            <strong><Shield size={15} /> {t('pp.adminSettings')}</strong>
+          </div>
+          {adminPanel.loading ? (
+            <div className="members-loading"><Loader2 size={16} className="spin" /> {t('pp.loading')}</div>
+          ) : adminPanel.error ? (
+            <p className="shared-empty">{adminPanel.error}</p>
+          ) : (
+            <>
+              <p className="admin-panel-subtitle">{t('pp.bannedUsers')}</p>
+              {adminPanel.bans.length ? (
+                <ul className="admin-ban-list">
+                  {adminPanel.bans.map((ban) => (
+                    <li key={ban.userId}>
+                      <span>
+                        <strong>{ban.user?.name || memberName(ban.userId)}</strong>
+                        <small>
+                          {ban.reason || t('pp.noReason')}
+                          {ban.expiresAt ? ` · until ${formatCallTime(ban.expiresAt)}` : ''}
+                        </small>
+                      </span>
+                      <button type="button" onClick={() => unbanUser(ban.userId)}>{t('pp.unban')}</button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="shared-empty">{t('pp.noBans')}</p>
+              )}
+              <p className="admin-panel-subtitle">{t('pp.recentAdminActions')}</p>
+              {adminPanel.events.length ? (
+                <ul className="admin-log-list">
+                  {adminPanel.events.slice(0, 12).map((event) => (
+                    <li key={event.id}>
+                      <span>
+                        <strong>{event.action.replace(/[_:]/g, ' ')}</strong>
+                        <small>
+                          {memberName(event.actorUserId)}
+                          {event.targetUserId ? ` → ${memberName(event.targetUserId)}` : ''}
+                        </small>
+                      </span>
+                      <small>{formatCallTime(event.createdAt)}</small>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="shared-empty">{t('pp.noAdminActions')}</p>
+              )}
+            </>
+          )}
+        </section>
+      )}
+
+      {channelStats && (
+        <section className="admin-panel-section">
+          <div className="group-members-header">
+            <strong><Users size={15} /> {t('pp.channelStats')}</strong>
+          </div>
+          {channelStats.loading ? (
+            <div className="members-loading"><Loader2 size={16} className="spin" /> {t('pp.loading')}</div>
+          ) : channelStats.error ? (
+            <p className="shared-empty">{channelStats.error}</p>
+          ) : (
+            <ul className="channel-stats-grid">
+              <li><strong>{channelStats.subscribers}</strong><small>{t('pp.subscribers')}</small></li>
+              <li><strong>{channelStats.posts}</strong><small>{t('pp.posts')}</small></li>
+              <li><strong>{channelStats.views}</strong><small>{t('pp.views')}</small></li>
+              <li><strong>{channelStats.reposts}</strong><small>{t('pp.reposts')}</small></li>
+            </ul>
+          )}
+        </section>
+      )}
+
+      {chat.backend && (
+        <section className="call-history-section">
+          <div className="group-members-header">
+            <strong><Phone size={15} /> {t('pp.calls')}</strong>
+          </div>
+          {callHistoryLoading ? (
+            <div className="members-loading"><Loader2 size={16} className="spin" /> {t('pp.loading')}</div>
+          ) : callHistoryLoad.calls?.length ? (
+            <ul className="call-history-list">
+              {callHistoryLoad.calls.slice(0, 8).map((item) => {
+                const names = (item.participants || [])
+                  .filter((participant) => !participant.self)
+                  .map((participant) => participant.name)
+                  .slice(0, 3)
+                  .join(', ')
+                return (
+                  <li key={item.id}>
+                    <span>
+                      <strong>{item.kind === 'video' ? t('chat.videoCall') : t('chat.audioCall')}</strong>
+                      <small>{names || contact.name}</small>
+                    </span>
+                    <span>
+                      <strong>{callStatusLabel(item)}</strong>
+                      <small>{formatCallTime(item.createdAt)}</small>
+                    </span>
+                  </li>
+                )
+              })}
+            </ul>
+          ) : (
+            <p className="shared-empty">{t('pp.noCalls')}</p>
+          )}
+        </section>
+      )}
+
+      {isBackendGroup && isOwnerOrAdmin && (
+        <section className="invite-links-section">
+          <div className="group-members-header">
+            <strong><LinkIcon size={15} /> {t('pp.inviteLinks')}</strong>
+            <button
+              className="add-member-btn"
+              title={t('pp.createInvite')}
+              onClick={invites === null ? async () => { await loadInvites(); handleCreateInvite() } : handleCreateInvite}
+            >
+              <Plus size={15} />
+            </button>
+          </div>
+          {invites === null && !invitesLoading && (
+            <button className="load-invites-btn" onClick={loadInvites}>
+              {t('pp.showInviteLinks')}
+            </button>
+          )}
+          {invitesLoading && <div className="members-loading"><Loader2 size={16} className="spin" /></div>}
+          {invites !== null && (
+            <ul className="invite-links-list">
+              {invites.length === 0 && <li className="shared-empty">{t('pp.noInviteLinks')}</li>}
+              {invites.map((link) => {
+                const url = `${window.location.origin}/join/${link.token}`
+                return (
+                  <li key={link.id} className="invite-link-row">
+                    <div className="invite-link-body">
+                      <span className="invite-link-url">{url}</span>
+                      {link.usageCount !== undefined && (
+                        <small>{link.usageCount} {t('pp.uses')}{link.usageLimit ? ` / ${link.usageLimit}` : ''}</small>
+                      )}
+                    </div>
+                    <button
+                      className="invite-copy-btn"
+                      onClick={() => copyInviteLink(link)}
+                      title={t('pp.copyLink')}
+                    >
+                      {copiedInviteId === link.id ? <Check size={14} /> : <Copy size={14} />}
+                    </button>
+                    <button
+                      className="remove-member-btn"
+                      onClick={() => handleRevokeInvite(link.id)}
+                      title={t('pp.revokeLink')}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </section>
+      )}
 
       <section className="shared-panel">
         <div className="shared-tabs">
           <button className={sharedTab === 'media' ? 'active' : ''} onClick={() => setSharedTab('media')}>
-            <Image size={15} /> Media
+            <Image size={15} /> {t('pp.media')}
+          </button>
+          <button className={sharedTab === 'files' ? 'active' : ''} onClick={() => setSharedTab('files')}>
+            <FileText size={15} /> {t('pp.files')}
+          </button>
+          <button className={sharedTab === 'audio' ? 'active' : ''} onClick={() => setSharedTab('audio')}>
+            <Music size={15} /> {t('pp.voice')}
           </button>
           <button className={sharedTab === 'links' ? 'active' : ''} onClick={() => setSharedTab('links')}>
-            <LinkIcon size={15} /> Links
+            <LinkIcon size={15} /> {t('pp.links')}
           </button>
         </div>
 
@@ -320,7 +811,37 @@ export default function ProfilePanel({
                 )}
               </button>
             ))}
-            {!sharedMedia.length && <p className="shared-empty">No shared media yet.</p>}
+            {!sharedMedia.length && <p className="shared-empty">{t('pp.noSharedMedia')}</p>}
+          </div>
+        )}
+
+        {sharedTab === 'files' && (
+          <div className="shared-links-list">
+            {sharedFiles.map((file) => (
+              <a key={`${file.messageId}-${file.id}`} href={file.url} download={file.name || 'file'}>
+                <FileText size={16} />
+                <span>
+                  <strong>{file.name || 'File'}</strong>
+                  <small>{formatMessageTime(file.time)}</small>
+                </span>
+              </a>
+            ))}
+            {!sharedFiles.length && <p className="shared-empty">{t('pp.noSharedFiles')}</p>}
+          </div>
+        )}
+
+        {sharedTab === 'audio' && (
+          <div className="shared-links-list">
+            {sharedAudio.map((audio) => (
+              <a key={`${audio.messageId}-${audio.id}`} href={audio.url} download={audio.name || 'audio'}>
+                <Music size={16} />
+                <span>
+                  <strong>{audio.name || (audio.kind === 'voice' ? t('pp.voiceMessage') : t('pp.audio'))}</strong>
+                  <small>{formatMessageTime(audio.time)}</small>
+                </span>
+              </a>
+            ))}
+            {!sharedAudio.length && <p className="shared-empty">{t('pp.noSharedAudio')}</p>}
           </div>
         )}
 
@@ -335,10 +856,12 @@ export default function ProfilePanel({
                 </span>
               </a>
             ))}
-            {!sharedLinks.length && <p className="shared-empty">No shared links yet.</p>}
+            {!sharedLinks.length && <p className="shared-empty">{t('pp.noSharedLinks')}</p>}
           </div>
         )}
       </section>
     </aside>
+    {dialog}
+    </>
   )
 }

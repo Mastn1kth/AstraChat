@@ -1,14 +1,15 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useConfirm } from '../hooks/useConfirm'
+import { t } from '../i18n'
 import {
   Archive,
   ArrowLeft,
-  Bell,
-  BellOff,
   Brush,
   Camera,
   Check,
   Copy,
   Download,
+  DownloadCloud,
   Folder,
   FolderPlus,
   Hash,
@@ -21,18 +22,22 @@ import {
   Moon,
   Pencil,
   Plus,
+  QrCode,
   RotateCcw,
   Search,
   Settings,
+  ShieldCheck,
   Smartphone,
   Sun,
   LogOut,
   Trash2,
   Upload,
+  UploadCloud,
   UserCircle,
   Users,
   X,
   XCircle,
+  Waves,
 } from 'lucide-react'
 import Avatar from './Avatar'
 import ChatList from './ChatList'
@@ -41,6 +46,35 @@ import { formatChatTime } from '../utils/formatters'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+function WallComposer({ onSend }) {
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function submit(event) {
+    event.preventDefault()
+    const trimmed = text.trim()
+    if (!trimmed || busy) return
+    setBusy(true)
+    const sent = await onSend(trimmed)
+    setBusy(false)
+    if (sent) setText('')
+  }
+
+  return (
+    <form className="wall-composer" onSubmit={submit}>
+      <input
+        value={text}
+        maxLength={120}
+        placeholder={t('appearance.wallPlaceholder')}
+        onChange={(event) => setText(event.target.value)}
+      />
+      <button type="submit" className="primary-button" disabled={busy || !text.trim()}>
+        {busy ? '…' : t('appearance.wallSend')}
+      </button>
+    </form>
+  )
+}
+
 export default function Sidebar({
   chats,
   chatFolders,
@@ -48,16 +82,19 @@ export default function Sidebar({
   contacts,
   user,
   settings,
+  allMessages,
   selectedChatId,
   search,
   menuOpen,
   onSearch,
+  onOpenGlobalSearch,
   onSelectChat,
   onSelectFolder,
   onOpenCreateSpace,
   onCreateChat,
   onUpdateSettings,
   onUpdateUser,
+  onSendWallMessage,
   onResetState,
   onLogout,
   onToggleMenu,
@@ -70,22 +107,49 @@ export default function Sidebar({
   onToggleFolderPin,
   onExportEncryptionKey,
   onImportEncryptionKey,
+  onCloudKeyBackup,
+  onCloudKeyRestore,
   onUploadAvatar,
   onRemoveAvatar,
   onChangePassword,
   onDeleteAccount,
   onLoadSessions,
+  onLoadTotpStatus,
+  onStartTotpSetup,
+  onVerifyTotpSetup,
+  onDisableTotp,
   onTerminateOtherSessions,
   onTerminateSession,
+  onLoadSecurityAlerts,
+  onMarkSecurityAlertRead,
+  onMarkAllSecurityAlertsRead,
+  onLoadBlockedContacts,
+  onUnblockUser,
 }) {
   const [menuView, setMenuView] = useState('main')
+  const [encryptionInfo, setEncryptionInfo] = useState(null)
   const [contactSearch, setContactSearch] = useState('')
   const [sessions, setSessions] = useState([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const [sessionsError, setSessionsError] = useState('')
+  const [securityEvents, setSecurityEvents] = useState([])
+  const [securityLoading, setSecurityLoading] = useState(false)
+  const [securityError, setSecurityError] = useState('')
+  const [blockedUsers, setBlockedUsers] = useState([])
+  const [blockedLoading, setBlockedLoading] = useState(false)
+  const [blockedError, setBlockedError] = useState('')
   const [passwordForm, setPasswordForm] = useState({ current: '', next: '', confirm: '' })
   const [passwordBusy, setPasswordBusy] = useState(false)
   const [passwordError, setPasswordError] = useState('')
+  const [totpState, setTotpState] = useState({
+    enabled: Boolean(user.totpEnabled),
+    setup: null,
+    qrDataUrl: '',
+    code: '',
+    disableCode: '',
+    busy: false,
+    error: '',
+  })
   const [inviteCopied, setInviteCopied] = useState(false)
   const [folderMode, setFolderMode] = useState('list')
   const [folderDraft, setFolderDraft] = useState({ id: '', title: '', chatIds: [] })
@@ -93,12 +157,17 @@ export default function Sidebar({
   const [folderError, setFolderError] = useState('')
   const keyImportRef = useRef(null)
   const avatarInputRef = useRef(null)
+  const { confirm, dialog } = useConfirm()
 
   const WALLPAPERS = ['default', 'plain', 'lavender', 'mint', 'peach', 'night']
   const inviteUsername = String(user.username || '').replace(/^@/, '')
   const inviteLink = inviteUsername
     ? `${window.location.origin}/?add=${inviteUsername}`
     : ''
+
+  useEffect(() => {
+    setTotpState((current) => ({ ...current, enabled: Boolean(user.totpEnabled) }))
+  }, [user.totpEnabled])
 
   function handleAvatarChange(event) {
     const file = event.target.files?.[0]
@@ -145,8 +214,8 @@ export default function Sidebar({
     }
   }
 
-  function confirmDeleteAccount() {
-    const sure = window.confirm(
+  async function confirmDeleteAccount() {
+    const sure = await confirm(
       'Delete your account permanently? Your messages and the chats you created will be removed. This cannot be undone.',
     )
     if (sure) onDeleteAccount()
@@ -171,9 +240,18 @@ export default function Sidebar({
 
   function matchesSearch(chat) {
     if (!normalizedChatSearch) return true
-    return [chat.contact.name, chat.contact.username, chat.lastMessageText]
+    const direct = [chat.contact.name, chat.contact.username, chat.lastMessageText]
       .filter(Boolean)
       .some((value) => value.toLowerCase().includes(normalizedChatSearch))
+    if (direct) return true
+    // Full-history search runs locally over already-decrypted messages —
+    // the server cannot search E2EE content, but this device can.
+    return (allMessages?.[chat.id] || []).some(
+      (message) =>
+        !message.deleted &&
+        typeof message.text === 'string' &&
+        message.text.toLowerCase().includes(normalizedChatSearch),
+    )
   }
 
   function matchesSystemFolder(chat, folderId) {
@@ -304,7 +382,7 @@ export default function Sidebar({
 
   async function deleteFolder(folderId) {
     const folder = customFolders.find((item) => item.id === folderId)
-    const sure = window.confirm(`Delete folder "${folder?.title || 'Folder'}"? Chats and messages will stay.`)
+    const sure = await confirm(`Delete folder "${folder?.title || 'Folder'}"? Chats and messages will stay.`)
     if (!sure) return
     setFolderBusy(true)
     setFolderError('')
@@ -336,6 +414,176 @@ export default function Sidebar({
     await refreshSessions()
   }
 
+  async function refreshTotpStatus() {
+    if (!onLoadTotpStatus) return
+    setTotpState((current) => ({ ...current, busy: true, error: '' }))
+    try {
+      const status = await onLoadTotpStatus()
+      setTotpState((current) => ({
+        ...current,
+        enabled: Boolean(status.enabled),
+        busy: false,
+      }))
+    } catch (error) {
+      setTotpState((current) => ({
+        ...current,
+        busy: false,
+        error: error.message || 'Could not load two-factor status.',
+      }))
+    }
+  }
+
+  async function openTwoFactor() {
+    setMenuView('twoFactor')
+    await refreshTotpStatus()
+  }
+
+  async function startTwoFactorSetup() {
+    setTotpState((current) => ({ ...current, busy: true, error: '', setup: null, qrDataUrl: '', code: '' }))
+    try {
+      const setup = await onStartTotpSetup()
+      const QRCode = await import('qrcode')
+      const qrDataUrl = await QRCode.toDataURL(setup.otpauthUrl, {
+        margin: 1,
+        width: 220,
+        color: { dark: '#1e1b4b', light: '#ffffff' },
+      })
+      setTotpState((current) => ({ ...current, setup, qrDataUrl, busy: false }))
+    } catch (error) {
+      setTotpState((current) => ({
+        ...current,
+        busy: false,
+        error: error.message || 'Could not start two-factor setup.',
+      }))
+    }
+  }
+
+  async function submitTwoFactorSetup(event) {
+    event.preventDefault()
+    setTotpState((current) => ({ ...current, busy: true, error: '' }))
+    try {
+      await onVerifyTotpSetup(totpState.code)
+      setTotpState((current) => ({
+        ...current,
+        enabled: true,
+        setup: null,
+        qrDataUrl: '',
+        code: '',
+        busy: false,
+      }))
+    } catch (error) {
+      setTotpState((current) => ({
+        ...current,
+        busy: false,
+        error: error.message || 'Could not verify the authentication code.',
+      }))
+    }
+  }
+
+  async function disableTwoFactor(event) {
+    event.preventDefault()
+    const sure = await confirm('Disable two-factor authentication for this account?')
+    if (!sure) return
+    setTotpState((current) => ({ ...current, busy: true, error: '' }))
+    try {
+      await onDisableTotp(totpState.disableCode)
+      setTotpState((current) => ({
+        ...current,
+        enabled: false,
+        disableCode: '',
+        setup: null,
+        qrDataUrl: '',
+        busy: false,
+      }))
+    } catch (error) {
+      setTotpState((current) => ({
+        ...current,
+        busy: false,
+        error: error.message || 'Could not disable two-factor authentication.',
+      }))
+    }
+  }
+
+  async function refreshSecurityEvents() {
+    setSecurityLoading(true)
+    setSecurityError('')
+    try {
+      const events = await onLoadSecurityAlerts()
+      setSecurityEvents(events)
+    } catch (error) {
+      setSecurityError(error.message || 'Could not load security alerts.')
+    } finally {
+      setSecurityLoading(false)
+    }
+  }
+
+  async function openSecurityEvents() {
+    setMenuView('security')
+    await refreshSecurityEvents()
+  }
+
+  async function markSecurityEvent(eventId) {
+    setSecurityLoading(true)
+    setSecurityError('')
+    try {
+      await onMarkSecurityAlertRead(eventId)
+      setSecurityEvents((events) =>
+        events.map((event) =>
+          event.id === eventId ? { ...event, readAt: event.readAt || new Date().toISOString() } : event,
+        ),
+      )
+    } catch (error) {
+      setSecurityError(error.message || 'Could not update security alert.')
+    } finally {
+      setSecurityLoading(false)
+    }
+  }
+
+  async function markAllSecurityEvents() {
+    setSecurityLoading(true)
+    setSecurityError('')
+    try {
+      await onMarkAllSecurityAlertsRead()
+      const now = new Date().toISOString()
+      setSecurityEvents((events) => events.map((event) => ({ ...event, readAt: event.readAt || now })))
+    } catch (error) {
+      setSecurityError(error.message || 'Could not update security alerts.')
+    } finally {
+      setSecurityLoading(false)
+    }
+  }
+
+  async function refreshBlockedUsers() {
+    setBlockedLoading(true)
+    setBlockedError('')
+    try {
+      const users = await onLoadBlockedContacts()
+      setBlockedUsers(users)
+    } catch (error) {
+      setBlockedError(error.message || 'Could not load blocked users.')
+    } finally {
+      setBlockedLoading(false)
+    }
+  }
+
+  async function openBlockedUsers() {
+    setMenuView('blocked')
+    await refreshBlockedUsers()
+  }
+
+  async function unblockFromList(userId) {
+    setBlockedLoading(true)
+    setBlockedError('')
+    try {
+      await onUnblockUser(userId)
+      setBlockedUsers((users) => users.filter((user) => user.id !== userId))
+    } catch (error) {
+      setBlockedError(error.message || 'Could not unblock user.')
+    } finally {
+      setBlockedLoading(false)
+    }
+  }
+
   async function terminateSession(sessionId) {
     setSessionsLoading(true)
     setSessionsError('')
@@ -362,12 +610,7 @@ export default function Sidebar({
     }
   }
 
-  function renderMenuHeader(title) {
-    const backView = title === 'Change password'
-      ? 'privacy'
-      : ['Chat appearance', 'Privacy and security', 'Active sessions'].includes(title)
-        ? 'settings'
-        : 'main'
+  function renderMenuHeader(title, backView = 'main') {
 
     return (
       <header className="drawer-page-header">
@@ -390,6 +633,7 @@ export default function Sidebar({
             <div>
               <strong>{user.name}</strong>
               <span>{user.username}</span>
+              {user.customStatus && <small className="menu-custom-status">{user.customStatus}</small>}
             </div>
           </button>
           <button onClick={closeMenu} aria-label="Close menu">
@@ -398,32 +642,32 @@ export default function Sidebar({
         </header>
         <div className="side-menu-actions">
           <button onClick={() => setMenuView('contacts')}>
-            <MessageCirclePlus size={19} /> New private chat
+            <MessageCirclePlus size={19} /> {t('menu.newPrivateChat')}
           </button>
           <button onClick={() => openCreateSpace('group')}>
-            <Users size={19} /> New group
+            <Users size={19} /> {t('menu.newGroup')}
           </button>
           <button onClick={() => openCreateSpace('channel')}>
-            <Hash size={19} /> New channel
+            <Hash size={19} /> {t('menu.newChannel')}
           </button>
           <button onClick={() => setMenuView('profile')}>
-            <UserCircle size={19} /> My profile
+            <UserCircle size={19} /> {t('menu.myProfile')}
           </button>
           <button onClick={() => setMenuView('contacts')}>
-            <Users size={19} /> Contacts
+            <Users size={19} /> {t('menu.contacts')}
           </button>
           <button onClick={() => setMenuView('archive')}>
-            <Archive size={19} /> Archived chats
+            <Archive size={19} /> {t('menu.archivedChats')}
           </button>
           <button onClick={() => setMenuView('folders')}>
-            <Folder size={19} /> Folders
+            <Folder size={19} /> {t('menu.folders')}
           </button>
           <button onClick={() => setMenuView('settings')}>
-            <Settings size={19} /> Settings
+            <Settings size={19} /> {t('menu.settings')}
           </button>
         </div>
         <div className="side-menu-footer">
-          <Sun size={15} /> Light/dark theme in Settings <Moon size={15} />
+          <Sun size={15} /> {t('menu.themeHint')} <Moon size={15} />
         </div>
       </>
     )
@@ -432,7 +676,7 @@ export default function Sidebar({
   function renderProfileMenu() {
     return (
       <>
-        {renderMenuHeader('My profile')}
+        {renderMenuHeader(t('menu.myProfile'))}
         <section className="drawer-profile">
           <div className="drawer-avatar-wrap">
             <Avatar contact={user} size="xl" />
@@ -454,12 +698,13 @@ export default function Sidebar({
           />
           <strong>{user.name}</strong>
           <span>{user.username}</span>
+          {user.customStatus && <p className="drawer-custom-status">{user.customStatus}</p>}
           <div className="drawer-avatar-actions">
             <button type="button" onClick={() => avatarInputRef.current?.click()}>
-              <ImageUp size={15} /> Upload photo
+              <ImageUp size={15} /> {t('profile.uploadPhoto')}
             </button>
             <button type="button" className="ghost-danger" onClick={onRemoveAvatar}>
-              <Trash2 size={15} /> Remove
+              <Trash2 size={15} /> {t('profile.removePhoto')}
             </button>
           </div>
         </section>
@@ -475,6 +720,15 @@ export default function Sidebar({
           <label>
             <span>Bio</span>
             <input value={user.bio} onChange={(event) => onUpdateUser({ bio: event.target.value })} />
+          </label>
+          <label>
+            <span>Status</span>
+            <input
+              value={user.customStatus || ''}
+              maxLength={80}
+              placeholder="emoji + text"
+              onChange={(event) => onUpdateUser({ customStatus: event.target.value })}
+            />
           </label>
           <div className="drawer-invite">
             <span>Invite link</span>
@@ -494,10 +748,10 @@ export default function Sidebar({
   function renderContactsMenu() {
     return (
       <>
-        {renderMenuHeader('Contacts')}
+        {renderMenuHeader(t('menu.contacts'))}
         <label className="drawer-search">
           <Search size={17} />
-          <input value={contactSearch} onChange={(event) => setContactSearch(event.target.value)} placeholder="Search people" />
+          <input value={contactSearch} onChange={(event) => setContactSearch(event.target.value)} placeholder={t('search.people')} />
         </label>
         <div className="drawer-list">
           {filteredContacts.map((contact) => (
@@ -509,7 +763,7 @@ export default function Sidebar({
               </span>
             </button>
           ))}
-          {!filteredContacts.length && <p className="drawer-empty">No contacts found.</p>}
+          {!filteredContacts.length && <p className="drawer-empty">{t('menu.noContacts')}</p>}
         </div>
       </>
     )
@@ -518,7 +772,7 @@ export default function Sidebar({
   function renderArchiveMenu() {
     return (
       <>
-        {renderMenuHeader('Archived chats')}
+        {renderMenuHeader(t('menu.archivedChats'))}
         <div className="drawer-list">
           {archivedChats.map((chat) => (
             <button key={chat.id} className="drawer-archive-chat" onClick={() => selectArchived(chat.id)}>
@@ -584,7 +838,7 @@ export default function Sidebar({
   function renderFoldersMenu() {
     return (
       <>
-        {renderMenuHeader('Folders')}
+        {renderMenuHeader(t('menu.folders'))}
         <div className="folder-menu-header">
           <strong>{folderMode === 'edit' ? 'Edit folder' : folderMode === 'create' ? 'New folder' : 'Chat folders'}</strong>
           {folderMode === 'list' && (
@@ -610,7 +864,7 @@ export default function Sidebar({
                       closeMenu()
                     }}
                   >
-                    <span>{folder.title}</span>
+                    <span>{t(`folders.${folder.id}`)}</span>
                     <small>{folderCount(folder)}</small>
                   </button>
                 ))}
@@ -648,7 +902,7 @@ export default function Sidebar({
                     </button>
                   </article>
                 ))}
-                {!customFolders.length && <p className="drawer-empty">No custom folders yet.</p>}
+                {!customFolders.length && <p className="drawer-empty">{t('folders.noCustom')}</p>}
               </div>
             </section>
             {folderError && <p className="drawer-empty session-error">{folderError}</p>}
@@ -661,21 +915,21 @@ export default function Sidebar({
   function renderSettingsMenu() {
     return (
       <>
-        {renderMenuHeader('Settings')}
+        {renderMenuHeader(t('menu.settings'))}
         <div className="drawer-fields">
           <div className="drawer-setting-row">
-            <span>Theme</span>
+            <span>{t('menu.theme')}</span>
             <div className="drawer-segmented">
               <button className={settings.theme === 'light' ? 'active' : ''} onClick={() => onUpdateSettings({ theme: 'light' })}>
-                <Sun size={16} /> Light
+                <Sun size={16} /> {t('menu.light')}
               </button>
               <button className={settings.theme === 'dark' ? 'active' : ''} onClick={() => onUpdateSettings({ theme: 'dark' })}>
-                <Moon size={16} /> Dark
+                <Moon size={16} /> {t('menu.dark')}
               </button>
             </div>
           </div>
           <label className="drawer-toggle">
-            <span>Notifications</span>
+            <span>{t('menu.desktopNotifications')}</span>
             <input
               type="checkbox"
               checked={settings.notifications}
@@ -683,7 +937,7 @@ export default function Sidebar({
             />
           </label>
           <label className="drawer-toggle">
-            <span>Message sound</span>
+            <span>{t('menu.messageSound')}</span>
             <input
               type="checkbox"
               checked={settings.sound !== false}
@@ -693,44 +947,87 @@ export default function Sidebar({
         </div>
         <div className="drawer-settings-list">
           <button onClick={() => setMenuView('privacy')}>
-            <LockKeyhole size={18} /> Privacy and security
+            <LockKeyhole size={18} /> {t('menu.privacy')}
           </button>
           <button onClick={openSessions}>
-            <Smartphone size={18} /> Devices
+            <Smartphone size={18} /> {t('menu.devices')}
           </button>
           <button onClick={() => setMenuView('appearance')}>
-            <Brush size={18} /> Chat appearance
+            <Brush size={18} /> {t('menu.chatAppearance')}
           </button>
           <button onClick={() => setMenuView('folders')}>
-            <Folder size={18} /> Folders
-          </button>
-          <button onClick={() => onUpdateSettings({ toast: settings.sound !== false ? 'Message sound is on.' : 'Message sound is off.' })}>
-            {settings.notifications ? <Bell size={18} /> : <BellOff size={18} />} Notifications
+            <Folder size={18} /> {t('menu.folders')}
           </button>
           <button className="danger-menu-action" onClick={onResetState}>
-            <RotateCcw size={18} /> Reset local data
+            <RotateCcw size={18} /> {t('menu.resetLocal')}
           </button>
           <button className="danger-menu-action" onClick={confirmDeleteAccount}>
-            <Trash2 size={18} /> Delete account
+            <Trash2 size={18} /> {t('menu.deleteAccount')}
           </button>
           <button className="danger-menu-action" onClick={onLogout}>
-            <LogOut size={18} /> Log out
+            <LogOut size={18} /> {t('menu.logout')}
           </button>
         </div>
       </>
     )
   }
 
+  async function toggleEncryptionInfo() {
+    if (encryptionInfo) {
+      setEncryptionInfo(null)
+      return
+    }
+    let fingerprint = ''
+    try {
+      const keyText = JSON.stringify(user.encryptionPublicKey || '')
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(keyText))
+      fingerprint = [...new Uint8Array(digest)]
+        .slice(0, 8)
+        .map((byte) => byte.toString(16).padStart(2, '0'))
+        .join(' ')
+        .toUpperCase()
+    } catch {
+      // Fingerprint is informational; show the card without it.
+    }
+    setEncryptionInfo({ fingerprint })
+  }
+
   function renderPrivacyMenu() {
     return (
       <>
-        {renderMenuHeader('Privacy and security')}
+        {renderMenuHeader(t('menu.privacy'), 'settings')}
         <div className="drawer-settings-list">
           <button onClick={onExportEncryptionKey}>
-            <Download size={18} /> Export encryption key
+            <Download size={18} /> {t('privacy.exportKey')}
           </button>
           <button onClick={() => keyImportRef.current?.click()}>
-            <Upload size={18} /> Import encryption key
+            <Upload size={18} /> {t('privacy.importKey')}
+          </button>
+          <button
+            onClick={() => {
+              const passphrase = window.prompt(t('cloudKey.askPassphrase'))
+              if (!passphrase) return
+              if (passphrase.length < 8) {
+                onUpdateSettings({ toast: t('cloudKey.tooShort') })
+                return
+              }
+              const confirmPhrase = window.prompt(t('cloudKey.repeatPassphrase'))
+              if (confirmPhrase !== passphrase) {
+                onUpdateSettings({ toast: t('cloudKey.mismatch') })
+                return
+              }
+              onCloudKeyBackup?.(passphrase)
+            }}
+          >
+            <UploadCloud size={18} /> {t('cloudKey.save')}
+          </button>
+          <button
+            onClick={() => {
+              const passphrase = window.prompt(t('cloudKey.askPassphrase'))
+              if (passphrase) onCloudKeyRestore?.(passphrase)
+            }}
+          >
+            <DownloadCloud size={18} /> {t('cloudKey.restore')}
           </button>
           <input
             ref={keyImportRef}
@@ -743,14 +1040,40 @@ export default function Sidebar({
               if (file) onImportEncryptionKey(file)
             }}
           />
-          <button onClick={() => setMenuView('password')}>
-            <KeyRound size={18} /> Change password
+          <button onClick={toggleEncryptionInfo}>
+            <KeyRound size={18} /> {t('privacy.encryptionStatus')}
           </button>
-          <button onClick={() => onUpdateSettings({ toast: 'Passwords are hashed in the database. Messages and media use local encryption keys.' })}>
-            <KeyRound size={18} /> Encryption status
+          {encryptionInfo && (
+            <div className="encryption-status-card">
+              <p>
+                <strong>{user.encryptionPublicKey ? t('privacy.encryptionActive') : t('privacy.encryptionMissing')}</strong>
+              </p>
+              {user.encryptionPublicKey ? (
+                <>
+                  <p className="encryption-fingerprint">
+                    {t('privacy.fingerprint')} <code>{encryptionInfo.fingerprint || '…'}</code>
+                  </p>
+                  <p>{t('privacy.encryptionHint')}</p>
+                </>
+              ) : (
+                <p>{t('privacy.encryptionRelogin')}</p>
+              )}
+            </div>
+          )}
+          <button onClick={() => setMenuView('password')}>
+            <KeyRound size={18} /> {t('privacy.changePassword')}
+          </button>
+          <button onClick={openTwoFactor}>
+            <ShieldCheck size={18} /> {t('privacy.twoFactor')}
           </button>
           <button onClick={openSessions}>
-            <Smartphone size={18} /> Active sessions
+            <Smartphone size={18} /> {t('privacy.sessions')}
+          </button>
+          <button onClick={openSecurityEvents}>
+            <LockKeyhole size={18} /> {t('privacy.securityAlerts')}
+          </button>
+          <button onClick={openBlockedUsers}>
+            <XCircle size={18} /> {t('privacy.blockedUsers')}
           </button>
         </div>
         <p className="appearance-privacy-note">
@@ -761,10 +1084,155 @@ export default function Sidebar({
     )
   }
 
+  function renderTwoFactorMenu() {
+    return (
+      <>
+        {renderMenuHeader(t('privacy.twoFactor'), 'privacy')}
+        <section className="drawer-fields totp-panel">
+          <div className={`totp-status ${totpState.enabled ? 'enabled' : ''}`}>
+            <ShieldCheck size={18} />
+            <span>{totpState.enabled ? 'Enabled' : 'Not enabled'}</span>
+          </div>
+
+          {!totpState.enabled && !totpState.setup && (
+            <button className="primary-button drawer-password-submit" type="button" onClick={startTwoFactorSetup} disabled={totpState.busy}>
+              {totpState.busy ? 'Preparing...' : 'Set up authenticator app'}
+            </button>
+          )}
+
+          {!totpState.enabled && totpState.setup && (
+            <form className="totp-setup-form" onSubmit={submitTwoFactorSetup}>
+              {totpState.qrDataUrl ? (
+                <img className="totp-qr" src={totpState.qrDataUrl} alt="Authenticator app QR code" />
+              ) : (
+                <div className="totp-qr-placeholder"><QrCode size={38} /></div>
+              )}
+              <label>
+                <span>Manual setup key</span>
+                <input readOnly value={totpState.setup.secret} onFocus={(event) => event.target.select()} />
+              </label>
+              <label>
+                <span>6-digit code</span>
+                <input
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  pattern="[0-9]{6}"
+                  maxLength={6}
+                  value={totpState.code}
+                  onChange={(event) => setTotpState((current) => ({
+                    ...current,
+                    code: event.target.value.replace(/\D/g, '').slice(0, 6),
+                  }))}
+                  required
+                />
+              </label>
+              <button className="primary-button drawer-password-submit" type="submit" disabled={totpState.busy || totpState.code.length !== 6}>
+                {totpState.busy ? 'Verifying...' : 'Enable two-factor'}
+              </button>
+            </form>
+          )}
+
+          {totpState.enabled && (
+            <form className="totp-setup-form" onSubmit={disableTwoFactor}>
+              <label>
+                <span>Authenticator code</span>
+                <input
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  pattern="[0-9]{6}"
+                  maxLength={6}
+                  value={totpState.disableCode}
+                  onChange={(event) => setTotpState((current) => ({
+                    ...current,
+                    disableCode: event.target.value.replace(/\D/g, '').slice(0, 6),
+                  }))}
+                  required
+                />
+              </label>
+              <button className="primary-button danger drawer-password-submit" type="submit" disabled={totpState.busy || totpState.disableCode.length !== 6}>
+                {totpState.busy ? 'Disabling...' : 'Disable two-factor'}
+              </button>
+            </form>
+          )}
+
+          {totpState.error && <p className="drawer-empty session-error">{totpState.error}</p>}
+        </section>
+        <p className="appearance-privacy-note">
+          Sign-in will require both your password and a current code from your authenticator app.
+        </p>
+      </>
+    )
+  }
+
+  function renderSecurityMenu() {
+    return (
+      <>
+        {renderMenuHeader(t('privacy.securityAlerts'), 'privacy')}
+        <div className="drawer-settings-list session-actions">
+          <button onClick={refreshSecurityEvents} disabled={securityLoading}>
+            {securityLoading ? <LoaderCircle className="send-spinner" size={18} /> : <LockKeyhole size={18} />}
+            Refresh alerts
+          </button>
+          <button onClick={markAllSecurityEvents} disabled={securityLoading || !securityEvents.some((event) => !event.readAt)}>
+            <Check size={18} /> {t('privacy.markAllRead')}
+          </button>
+        </div>
+        {securityError && <p className="drawer-empty session-error">{securityError}</p>}
+        <div className="drawer-list session-list">
+          {securityEvents.map((event) => (
+            <article key={event.id} className={`session-card ${event.readAt ? '' : 'security-unread'}`}>
+              <div>
+                <strong>{event.title}</strong>
+                <small>{event.body || event.type}</small>
+                <small>{new Date(event.createdAt).toLocaleString()}</small>
+              </div>
+              {!event.readAt && (
+                <button onClick={() => markSecurityEvent(event.id)} disabled={securityLoading}>
+                  Read
+                </button>
+              )}
+            </article>
+          ))}
+          {!securityLoading && !securityEvents.length && <p className="drawer-empty">No security alerts.</p>}
+        </div>
+      </>
+    )
+  }
+
+  function renderBlockedMenu() {
+    return (
+      <>
+        {renderMenuHeader(t('privacy.blockedUsers'), 'privacy')}
+        <div className="drawer-settings-list session-actions">
+          <button onClick={refreshBlockedUsers} disabled={blockedLoading}>
+            {blockedLoading ? <LoaderCircle className="send-spinner" size={18} /> : <XCircle size={18} />}
+            Refresh blocked users
+          </button>
+        </div>
+        {blockedError && <p className="drawer-empty session-error">{blockedError}</p>}
+        <div className="drawer-list session-list">
+          {blockedUsers.map((blocked) => (
+            <article key={blocked.id} className="session-card">
+              <div>
+                <strong>{blocked.name}</strong>
+                <small>@{blocked.username}</small>
+                <small>{blocked.blockedAt ? `Blocked ${new Date(blocked.blockedAt).toLocaleString()}` : 'Blocked'}</small>
+              </div>
+              <button onClick={() => unblockFromList(blocked.id)} disabled={blockedLoading}>
+                Unblock
+              </button>
+            </article>
+          ))}
+          {!blockedLoading && !blockedUsers.length && <p className="drawer-empty">No blocked users.</p>}
+        </div>
+      </>
+    )
+  }
+
   function renderSessionsMenu() {
     return (
       <>
-        {renderMenuHeader('Active sessions')}
+        {renderMenuHeader(t('privacy.sessions'), 'settings')}
         <div className="drawer-settings-list session-actions">
           <button onClick={refreshSessions} disabled={sessionsLoading}>
             {sessionsLoading ? <LoaderCircle className="send-spinner" size={18} /> : <Smartphone size={18} />}
@@ -806,7 +1274,7 @@ export default function Sidebar({
   function renderPasswordMenu() {
     return (
       <>
-        {renderMenuHeader('Change password')}
+        {renderMenuHeader(t('privacy.changePassword'), 'privacy')}
         <form className="drawer-fields" onSubmit={submitPasswordChange}>
           <label>
             <span>Current password</span>
@@ -853,6 +1321,7 @@ export default function Sidebar({
 
   function renderAppearanceMenu() {
     const wordStream = settings.wordStream
+    const liveWall = settings.liveWall || { enabled: false, opacity: 0.5, speed: 1 }
 
     function updateWordStream(patch) {
       onUpdateSettings({
@@ -863,12 +1332,66 @@ export default function Sidebar({
       })
     }
 
+    function updateLiveWall(patch) {
+      onUpdateSettings({
+        liveWall: {
+          ...liveWall,
+          ...patch,
+        },
+      })
+    }
+
     return (
       <>
-        {renderMenuHeader('Chat appearance')}
+        {renderMenuHeader(t('menu.chatAppearance'), 'settings')}
+        <div className="drawer-fields appearance-settings live-wall-settings">
+          <label className="drawer-toggle appearance-master-toggle">
+            <span>{t('appearance.liveWall')}</span>
+            <input
+              type="checkbox"
+              checked={liveWall.enabled}
+              onChange={(event) => updateLiveWall({ enabled: event.target.checked })}
+            />
+          </label>
+
+          {liveWall.enabled && (
+            <>
+              <label className="drawer-range">
+                <span>
+                  {t('appearance.brightness')} <output>{Math.round(liveWall.opacity * 100)}%</output>
+                </span>
+                <input
+                  type="range"
+                  min="0.15"
+                  max="1"
+                  step="0.05"
+                  value={liveWall.opacity}
+                  onChange={(event) => updateLiveWall({ opacity: Number(event.target.value) })}
+                />
+              </label>
+              <label className="drawer-range">
+                <span>
+                  {t('appearance.speed')} <output>{liveWall.speed.toFixed(2)}x</output>
+                </span>
+                <input
+                  type="range"
+                  min="0.5"
+                  max="2.5"
+                  step="0.25"
+                  value={liveWall.speed}
+                  onChange={(event) => updateLiveWall({ speed: Number(event.target.value) })}
+                />
+              </label>
+              {onSendWallMessage && <WallComposer onSend={onSendWallMessage} />}
+            </>
+          )}
+        </div>
+        <p className="appearance-privacy-note">
+          {t('appearance.wallNote')}
+        </p>
         <div className="drawer-fields appearance-settings">
           <div className="drawer-setting-row drawer-wallpaper">
-            <span>Chat wallpaper</span>
+            <span>{t('appearance.wallpaper')}</span>
             <div className="wallpaper-grid">
               {WALLPAPERS.map((bg) => (
                 <button
@@ -885,7 +1408,7 @@ export default function Sidebar({
             </div>
           </div>
           <label className="drawer-toggle appearance-master-toggle">
-            <span>Live word background</span>
+            <span>{t('appearance.wordStream')}</span>
             <input
               type="checkbox"
               checked={wordStream.enabled}
@@ -895,7 +1418,7 @@ export default function Sidebar({
 
           <label className="drawer-range">
             <span>
-              Speed <output>{wordStream.speed.toFixed(2)}x</output>
+              {t('appearance.speed')} <output>{wordStream.speed.toFixed(2)}x</output>
             </span>
             <input
               type="range"
@@ -909,7 +1432,7 @@ export default function Sidebar({
 
           <label className="drawer-range">
             <span>
-              Lines <output>{wordStream.density}</output>
+              {t('appearance.lines')} <output>{wordStream.density}</output>
             </span>
             <input
               type="range"
@@ -923,7 +1446,7 @@ export default function Sidebar({
 
           <label className="drawer-range">
             <span>
-              Visibility <output>{Math.round(wordStream.opacity * 100)}%</output>
+              {t('appearance.visibility')} <output>{Math.round(wordStream.opacity * 100)}%</output>
             </span>
             <input
               type="range"
@@ -937,7 +1460,7 @@ export default function Sidebar({
 
           <label className="drawer-range">
             <span>
-              Blur <output>{wordStream.blur}px</output>
+              {t('appearance.blur')} <output>{wordStream.blur}px</output>
             </span>
             <input
               type="range"
@@ -951,9 +1474,7 @@ export default function Sidebar({
         </div>
 
         <p className="appearance-privacy-note">
-          Words appear after their first use in your local outgoing messages. Names,
-          links, phone numbers, email addresses, usernames and sensitive terms are
-          filtered. Nothing is sent to the server.
+          {t('appearance.wordNote')}
         </p>
       </>
     )
@@ -961,7 +1482,10 @@ export default function Sidebar({
 
   function renderFolderTabs() {
     const folders = [
-      ...systemFolders,
+      ...systemFolders.map((folder) => ({
+        ...folder,
+        title: t(`folders.${folder.id}`),
+      })),
       ...customFolders.map((folder) => ({
         ...folder,
         custom: true,
@@ -1000,14 +1524,15 @@ export default function Sidebar({
   }
 
   return (
+    <>
     <aside className="sidebar">
       <header className="sidebar-header">
-        <IconButton label="Menu" onClick={menuOpen ? closeMenu : openMainMenu} className={menuOpen ? 'is-active' : ''}>
-          <Menu size={20} />
-        </IconButton>
         <div className="brand">
-          <div className="brand-mark">A</div>
-          <strong>AstraChat</strong>
+          <div className="brand-mark"><Waves size={18} /></div>
+          <div className="brand-text">
+            <strong>Onda</strong>
+            <span className="brand-subtitle">спокойный мессенджер</span>
+          </div>
         </div>
         <IconButton
           label="New private chat"
@@ -1016,7 +1541,10 @@ export default function Sidebar({
             if (!menuOpen) onToggleMenu()
           }}
         >
-          <MessageCirclePlus size={20} />
+          <Pencil size={18} />
+        </IconButton>
+        <IconButton label="Menu" onClick={menuOpen ? closeMenu : openMainMenu} className={menuOpen ? 'is-active' : ''}>
+          <Menu size={20} />
         </IconButton>
       </header>
 
@@ -1031,7 +1559,10 @@ export default function Sidebar({
             {menuView === 'folders' && renderFoldersMenu()}
             {menuView === 'privacy' && renderPrivacyMenu()}
             {menuView === 'password' && renderPasswordMenu()}
+            {menuView === 'twoFactor' && renderTwoFactorMenu()}
             {menuView === 'sessions' && renderSessionsMenu()}
+            {menuView === 'security' && renderSecurityMenu()}
+            {menuView === 'blocked' && renderBlockedMenu()}
             {menuView === 'appearance' && renderAppearanceMenu()}
           </nav>
           <button className="menu-scrim" onClick={closeMenu} aria-label="Close menu" />
@@ -1040,14 +1571,25 @@ export default function Sidebar({
 
       {renderFolderTabs()}
 
-      <label className="search-field">
-        <Search size={17} />
-        <input
-          value={search}
-          onChange={(event) => onSearch(event.target.value)}
-          placeholder="Search chats"
-        />
-      </label>
+      <div className="search-row">
+        <label className="search-field">
+          <Search size={17} />
+          <input
+            value={search}
+            onChange={(event) => onSearch(event.target.value)}
+            placeholder={t('search.chats')}
+          />
+        </label>
+        <button
+          className="global-search-btn"
+          onClick={onOpenGlobalSearch}
+          title="Global search (Ctrl+K)"
+          aria-label="Global search"
+        >
+          <Search size={16} />
+          <kbd>K</kbd>
+        </button>
+      </div>
 
       <ChatList
         chats={visibleChats}
@@ -1061,5 +1603,7 @@ export default function Sidebar({
         onToggleFolderPin={(chatId) => onToggleFolderPin(selectedCustomFolder?.id, chatId)}
       />
     </aside>
+    {dialog}
+    </>
   )
 }

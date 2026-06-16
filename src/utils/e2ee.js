@@ -162,6 +162,79 @@ export async function importUserKeyBackup(userId, backupText) {
   return record
 }
 
+// Passphrase-wrapped key backup for cloud sync between devices.
+// PBKDF2(SHA-256, 210k iterations) -> AES-256-GCM. The server stores only
+// this opaque blob and can never recover the private key without the phrase.
+const PASSPHRASE_ITERATIONS = 210000
+
+function toBase64(bytes) {
+  return btoa(String.fromCharCode(...new Uint8Array(bytes)))
+}
+
+function fromBase64(text) {
+  return Uint8Array.from(atob(text), (char) => char.charCodeAt(0))
+}
+
+async function derivePassphraseKey(passphrase, salt) {
+  const material = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(passphrase),
+    'PBKDF2',
+    false,
+    ['deriveKey'],
+  )
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: PASSPHRASE_ITERATIONS, hash: 'SHA-256' },
+    material,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt'],
+  )
+}
+
+export async function encryptKeyBackupWithPassphrase(backupText, passphrase) {
+  const salt = crypto.getRandomValues(new Uint8Array(16))
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const key = await derivePassphraseKey(passphrase, salt)
+  const data = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    new TextEncoder().encode(backupText),
+  )
+  return JSON.stringify({
+    type: 'astrachat-cloud-key',
+    version: 1,
+    iterations: PASSPHRASE_ITERATIONS,
+    salt: toBase64(salt),
+    iv: toBase64(iv),
+    data: toBase64(data),
+  })
+}
+
+export async function decryptKeyBackupWithPassphrase(payloadText, passphrase) {
+  let payload
+  try {
+    payload = JSON.parse(payloadText)
+  } catch {
+    throw new Error('Cloud key backup is corrupted.')
+  }
+  if (payload.type !== 'astrachat-cloud-key' || payload.version !== 1) {
+    throw new Error('Cloud key backup format is unsupported.')
+  }
+  const key = await derivePassphraseKey(passphrase, fromBase64(payload.salt))
+  let decrypted
+  try {
+    decrypted = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: fromBase64(payload.iv) },
+      key,
+      fromBase64(payload.data),
+    )
+  } catch {
+    throw new Error('Wrong passphrase.')
+  }
+  return new TextDecoder().decode(decrypted)
+}
+
 export async function encryptTextForRecipients(plaintext, recipients) {
   if (!plaintext) return ''
   const uniqueRecipients = Array.from(

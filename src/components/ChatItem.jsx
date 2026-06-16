@@ -1,6 +1,7 @@
-import { Archive, BellOff, MoreVertical, Pin } from 'lucide-react'
+import { Archive, BellOff, Pin } from 'lucide-react'
 import Avatar from './Avatar'
 import { formatChatTime } from '../utils/formatters'
+import { t } from '../i18n'
 
 export default function ChatItem({
   chat,
@@ -25,10 +26,17 @@ export default function ChatItem({
           <time>{formatChatTime(chat.lastMessageTime)}</time>
         </div>
         <div className="chat-status-line">
-          <span className={contact.status === 'online' ? 'online-text' : ''}>{contact.lastSeen}</span>
+          {contact.customStatus ? (
+            <>
+              <span className="custom-status-text">{contact.customStatus}</span>
+              {contact.lastSeen && <span className={contact.status === 'online' ? 'online-text' : ''}>{contact.lastSeen}</span>}
+            </>
+          ) : (
+            <span className={contact.status === 'online' ? 'online-text' : ''}>{contact.lastSeen}</span>
+          )}
         </div>
         <div className="chat-item-bottom">
-          <p>{chat.lastMessageText || 'No messages yet'}</p>
+          <p>{chat.lastMessageText || t('chat.noMessages')}</p>
           <div className="chat-flags">
             {chat.folderPinned && <Pin size={13} className="folder-pin-flag" />}
             {chat.pinned && <Pin size={13} />}
@@ -41,23 +49,20 @@ export default function ChatItem({
         {canPinInFolder && (
           <button
             onClick={onToggleFolderPin}
-            title={chat.folderPinned ? 'Unpin in folder' : 'Pin in folder'}
+            title={chat.folderPinned ? t('chat.unpinInFolder') : t('chat.pinInFolder')}
             className={chat.folderPinned ? 'active' : ''}
           >
             <Pin size={14} />
           </button>
         )}
-        <button onClick={onTogglePin} title={chat.pinned ? 'Unpin' : 'Pin'}>
+        <button onClick={onTogglePin} title={chat.pinned ? t('chat.unpin') : t('chat.pin')}>
           <Pin size={14} />
         </button>
-        <button onClick={onToggleMute} title={chat.muted ? 'Unmute' : 'Mute'}>
+        <button onClick={onToggleMute} title={chat.muted ? t('chat.unmute') : t('chat.mute')}>
           <BellOff size={14} />
         </button>
-        <button onClick={onArchive} title={chat.archived ? 'Unarchive' : 'Archive'}>
+        <button onClick={onArchive} title={chat.archived ? t('chat.unarchive') : t('chat.archive')}>
           <Archive size={14} />
-        </button>
-        <button title="More options" style={{ pointerEvents: 'none', opacity: 0.5 }}>
-          <MoreVertical size={14} />
         </button>
       </div>
     </article>

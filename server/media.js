@@ -1,10 +1,12 @@
 import multer from 'multer'
 import sharp from 'sharp'
 import ffmpegPath from 'ffmpeg-static'
+import { mkdirSync } from 'node:fs'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { randomUUID } from 'node:crypto'
 
 const IMAGE_TYPES = new Set([
   'image/jpeg',
@@ -22,28 +24,58 @@ const VIDEO_TYPES = new Set([
   'video/x-matroska',
 ])
 
+const AUDIO_TYPES = new Set([
+  'audio/mpeg',
+  'audio/mp4',
+  'audio/ogg',
+  'audio/webm',
+  'audio/wav',
+  'audio/x-wav',
+])
+
 const ENCRYPTED_TYPES = new Set(['application/octet-stream'])
 
+export const mediaUploadMaxBytes = Number(process.env.MEDIA_UPLOAD_MAX_BYTES || 1024 * 1024 * 1024)
+const uploadTempDir = process.env.MEDIA_UPLOAD_TMP_DIR || join(tmpdir(), 'astrachat-uploads')
+mkdirSync(uploadTempDir, { recursive: true })
+
 export const mediaUpload = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination(_request, _file, callback) {
+      callback(null, uploadTempDir)
+    },
+    filename(_request, file, callback) {
+      callback(null, `${Date.now()}-${randomUUID()}-${file.originalname.replace(/[^\w.-]+/g, '_')}`)
+    },
+  }),
   limits: {
-    fileSize: 100 * 1024 * 1024,
+    fileSize: mediaUploadMaxBytes,
     files: 1,
-    fields: 10,
-    parts: 12,
+    fields: 16,
+    parts: 18,
   },
   fileFilter(_request, file, callback) {
-    if (IMAGE_TYPES.has(file.mimetype) || VIDEO_TYPES.has(file.mimetype) || ENCRYPTED_TYPES.has(file.mimetype)) {
+    if (IMAGE_TYPES.has(file.mimetype) || VIDEO_TYPES.has(file.mimetype) || AUDIO_TYPES.has(file.mimetype) || ENCRYPTED_TYPES.has(file.mimetype)) {
       callback(null, true)
       return
     }
-    callback(new Error('Only JPEG, PNG, WebP, AVIF, HEIC, MP4, WebM, MOV and MKV are supported'))
+    callback(new Error('Only image, video, audio and encrypted files are supported'))
   },
 })
+
+export async function readUploadedFile(file) {
+  return readFile(file.path)
+}
+
+export async function cleanupUploadedFile(file) {
+  if (!file?.path) return
+  await rm(file.path, { force: true })
+}
 
 export function getMediaKind(mimeType) {
   if (IMAGE_TYPES.has(mimeType)) return 'image'
   if (VIDEO_TYPES.has(mimeType)) return 'video'
+  if (AUDIO_TYPES.has(mimeType)) return 'audio'
   return null
 }
 

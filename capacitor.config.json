@@ -1,0 +1,15 @@
+{
+  "appId": "app.onda.messenger",
+  "appName": "Onda",
+  "webDir": "dist",
+  "backgroundColor": "#F0E9E1",
+  "android": {
+    "allowMixedContent": false
+  },
+  "ios": {
+    "contentInset": "automatic"
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

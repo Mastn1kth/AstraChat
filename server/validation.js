@@ -27,12 +27,21 @@ export const createChatSchema = z.object({
   memberIds: z.array(z.string().uuid()).max(200).default([]),
 })
 
+const linkPreviewSchema = z.object({
+  url: z.string().url().max(2048),
+  title: z.string().max(512).optional(),
+  description: z.string().max(1024).optional(),
+  image: z.string().max(2048).optional(),
+  site: z.string().max(128).optional(),
+}).optional()
+
 export const messageSchema = z.object({
   text: z.string().max(64000).default(''),
   searchText: z.string().trim().max(64000).default(''),
   mediaId: z.string().uuid().optional(),
   replyToId: z.string().uuid().optional(),
   forwardedFromMessageId: z.string().uuid().optional(),
+  linkPreview: linkPreviewSchema,
 }).refine((message) => message.text.trim().length > 0 || message.mediaId, {
   message: 'Message text or media is required',
 })
@@ -92,6 +101,85 @@ export const callSchema = z.object({
   recipientId: z.string().uuid(),
   chatId: z.string().uuid().optional(),
   kind: z.enum(['audio', 'video']),
+})
+
+export const totpVerifySchema = z.object({
+  code: z.string().trim().regex(/^\d{6}$/, 'Code must be 6 digits'),
+})
+
+export const pushSubscriptionSchema = z.object({
+  subscription: z.object({
+    endpoint: z.string().url().max(2048),
+    expirationTime: z.number().nullable().optional(),
+    keys: z.object({
+      p256dh: z.string().min(1).max(512),
+      auth: z.string().min(1).max(512),
+    }),
+  }),
+})
+
+export const fcmTokenSchema = z.object({
+  token: z.string().trim().min(10).max(4096),
+})
+
+export const deletePushSubscriptionSchema = z.object({
+  endpoint: z.string().url().max(2048).optional(),
+})
+
+export const reportSchema = z.object({
+  targetUserId: z.string().uuid().optional(),
+  chatId: z.string().uuid().optional(),
+  targetMessageId: z.string().uuid().optional(),
+  reason: z.enum(['spam', 'abuse', 'fraud', 'illegal', 'other']).default('other'),
+  details: z.string().trim().max(2000).default(''),
+})
+
+export const memberRoleSchema = z.object({
+  role: z.enum(['owner', 'admin', 'moderator', 'member']),
+})
+
+export const memberPermissionsSchema = z.object({
+  permissions: z.record(z.string().max(64), z.boolean()).default({}),
+})
+
+export const banMemberSchema = z.object({
+  userId: z.string().uuid(),
+  reason: z.string().trim().max(500).default(''),
+  durationSeconds: z.number().int().positive().max(10 * 365 * 24 * 60 * 60).optional(),
+})
+
+export const chatModerationSettingsSchema = z.object({
+  slowModeSeconds: z.number().int().min(0).max(24 * 60 * 60).optional(),
+  defaultPermissions: z.record(z.string().max(64), z.boolean()).optional(),
+})
+
+export const inviteLinkSchema = z.object({
+  name: z.string().trim().max(64).default(''),
+  expiresAt: z.string().datetime({ offset: true }).optional(),
+  usageLimit: z.number().int().positive().max(100000).optional(),
+  requireApproval: z.boolean().default(false),
+})
+
+export const joinInviteSchema = z.object({
+  message: z.string().trim().max(500).default(''),
+})
+
+export const reviewJoinRequestSchema = z.object({
+  approved: z.boolean(),
+})
+
+export const topicSchema = z.object({
+  title: z.string().trim().min(1).max(100),
+})
+
+export const updateTopicSchema = z.object({
+  title: z.string().trim().min(1).max(100).optional(),
+  pinned: z.boolean().optional(),
+  closed: z.boolean().optional(),
+})
+
+export const pollVoteSchema = z.object({
+  optionIds: z.array(z.string().uuid()).min(0).max(10).default([]),
 })
 
 export function parseBody(schema, body) {

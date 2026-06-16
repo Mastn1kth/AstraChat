@@ -1,9 +1,54 @@
 import { PGlite } from '@electric-sql/pglite'
+import pg from 'pg'
 import { randomUUID } from 'node:crypto'
 import { config } from './config.js'
 import { runMigrations } from './migrations.js'
 
-export const db = new PGlite(config.databasePath)
+const { Pool } = pg
+
+function createPostgresDatabase() {
+  const pool = new Pool({
+    connectionString: config.databaseUrl,
+    max: Number(process.env.PG_POOL_MAX || 10),
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 5000,
+  })
+
+  return {
+    async query(sql, params = []) {
+      return pool.query(sql, params)
+    },
+    async exec(sql) {
+      await pool.query(sql)
+    },
+    async transaction(callback) {
+      const client = await pool.connect()
+      try {
+        await client.query('BEGIN')
+        const result = await callback({
+          query: (sql, params = []) => client.query(sql, params),
+          exec: (sql) => client.query(sql),
+        })
+        await client.query('COMMIT')
+        return result
+      } catch (error) {
+        await client.query('ROLLBACK')
+        throw error
+      } finally {
+        client.release()
+      }
+    },
+    async close() {
+      await pool.end()
+    },
+  }
+}
+
+function createPGliteDatabase() {
+  return new PGlite(config.databasePath)
+}
+
+export const db = config.databaseUrl ? createPostgresDatabase() : createPGliteDatabase()
 
 export async function migrateDatabase() {
   await db.exec(`
@@ -13,9 +58,13 @@ export async function migrateDatabase() {
       username TEXT NOT NULL UNIQUE,
       name TEXT NOT NULL,
       bio TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT '',
       avatar TEXT NOT NULL,
       password_salt TEXT NOT NULL,
       password_hash TEXT NOT NULL,
+      totp_secret TEXT,
+      totp_pending_secret TEXT,
+      totp_enabled_at TIMESTAMPTZ,
       encryption_public_key TEXT,
       last_seen_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -96,7 +145,7 @@ export async function migrateDatabase() {
       id UUID PRIMARY KEY,
       chat_id UUID REFERENCES chats(id) ON DELETE SET NULL,
       initiator_id UUID NOT NULL REFERENCES users(id),
-      recipient_id UUID NOT NULL REFERENCES users(id),
+      recipient_id UUID REFERENCES users(id),
       kind TEXT NOT NULL CHECK (kind IN ('audio', 'video')),
       status TEXT NOT NULL CHECK (status IN ('ringing', 'accepted', 'declined', 'ended', 'missed')),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -105,6 +154,27 @@ export async function migrateDatabase() {
     );
 
     CREATE INDEX IF NOT EXISTS calls_participants_idx ON calls(initiator_id, recipient_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS call_participants (
+      call_id UUID NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL DEFAULT 'member',
+      state TEXT NOT NULL DEFAULT 'invited',
+      muted BOOLEAN NOT NULL DEFAULT FALSE,
+      camera_off BOOLEAN NOT NULL DEFAULT FALSE,
+      screen_sharing BOOLEAN NOT NULL DEFAULT FALSE,
+      joined_at TIMESTAMPTZ,
+      left_at TIMESTAMPTZ,
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (call_id, user_id),
+      CHECK (state IN ('invited', 'ringing', 'connected', 'left', 'declined', 'missed', 'disconnected'))
+    );
+
+    CREATE INDEX IF NOT EXISTS call_participants_user_idx
+      ON call_participants(user_id, last_seen_at DESC);
+
+    CREATE INDEX IF NOT EXISTS call_participants_call_idx
+      ON call_participants(call_id, state);
 
     CREATE TABLE IF NOT EXISTS media_files (
       id UUID PRIMARY KEY,
@@ -141,6 +211,18 @@ export async function migrateDatabase() {
     ALTER TABLE users
       ADD COLUMN IF NOT EXISTS encryption_public_key TEXT;
 
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS totp_secret TEXT;
+
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS totp_pending_secret TEXT;
+
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS totp_enabled_at TIMESTAMPTZ;
+
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT '';
+
     ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_storage_name TEXT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_mime TEXT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_iv TEXT;
@@ -168,7 +250,7 @@ export async function migrateDatabase() {
     ALTER TABLE media_files DROP CONSTRAINT IF EXISTS media_files_kind_check;
     ALTER TABLE media_files
       ADD CONSTRAINT media_files_kind_check
-      CHECK (kind IN ('image', 'video', 'voice', 'file'));
+      CHECK (kind IN ('image', 'video', 'voice', 'audio', 'file'));
   `)
   await runMigrations(db)
 }

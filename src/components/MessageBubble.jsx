@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react'
-import { AlertCircle, Check, CheckCheck, CheckSquare, Copy, Download, Edit3, ExternalLink, FileText, Forward, Mic, Pin, Play, RefreshCw, Reply, SmilePlus, Square, Trash2 } from 'lucide-react'
+import { AlertCircle, Check, CheckCheck, CheckSquare, Copy, Download, Edit3, ExternalLink, FileText, Flag, Forward, Pin, Play, RefreshCw, Reply, SmilePlus, Square, Timer, Trash2 } from 'lucide-react'
 import { formatMessageTime } from '../utils/formatters'
+import { t } from '../i18n'
 import FormattedText from '../utils/textFormat'
 import { getLinkPreview } from '../api/client'
+import AudioMessagePlayer from './AudioMessagePlayer'
+import RichMessage from './RichMessage'
+import PollCard from './PollCard'
 
 const URL_REGEX = /\bhttps?:\/\/[^\s<>"']+/g
 const linkPreviewCache = new Map()
@@ -43,12 +47,16 @@ function useLinkPreview(url) {
 
 const reactions = ['\u{1F44D}', '\u{1F499}', '\u{1F602}', '\u{1F525}']
 
-function formatDuration(durationMs) {
-  if (!durationMs || durationMs < 0) return ''
-  const totalSeconds = Math.round(durationMs / 1000)
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = totalSeconds % 60
-  return `${minutes}:${String(seconds).padStart(2, '0')}`
+function formatDisappearTimer(disappearsAt) {
+  const ms = new Date(disappearsAt).getTime() - Date.now()
+  if (ms <= 0) return 'Disappearing…'
+  const secs = Math.floor(ms / 1000)
+  if (secs < 60) return `Disappears in ${secs}s`
+  const mins = Math.floor(secs / 60)
+  if (mins < 60) return `Disappears in ${mins}m`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `Disappears in ${hours}h`
+  return `Disappears in ${Math.floor(hours / 24)}d`
 }
 
 function formatFileSize(bytes) {
@@ -86,7 +94,7 @@ function LinkPreviewCard({ url, preview }) {
         />
       )}
       <div className="link-preview-body">
-        {preview.siteName && <span className="link-preview-site">{preview.siteName}</span>}
+        {(preview.siteName || preview.site) && <span className="link-preview-site">{preview.siteName || preview.site}</span>}
         {preview.title && <strong className="link-preview-title">{preview.title}</strong>}
         {preview.description && <span className="link-preview-desc">{preview.description}</span>}
         <span className="link-preview-url">
@@ -100,6 +108,7 @@ function LinkPreviewCard({ url, preview }) {
 
 export default function MessageBubble({
   message,
+  albumPosition,
   replyMessage,
   sender,
   isOwn,
@@ -116,17 +125,21 @@ export default function MessageBubble({
   onCopy,
   onReact,
   onOpenMedia,
+  onDownloadMedia,
   onForward,
   onPin,
   onToggleSelect,
   onRetry,
+  onReport,
+  onVotePoll,
 }) {
   const reactionEntries = Object.entries(message.reactions || {}).filter(([, count]) => count > 0)
-  const firstUrl = !message.deleted && message.text ? extractFirstUrl(message.text) : null
-  const linkPreview = useLinkPreview(firstUrl)
+  const firstUrl = !message.deleted && !message.linkPreview && message.text ? extractFirstUrl(message.text) : null
+  const fetchedPreview = useLinkPreview(firstUrl)
+  const linkPreview = message.linkPreview || fetchedPreview
 
   return (
-    <div className={`message-row ${isOwn ? 'own' : 'incoming'} ${selected ? 'selected' : ''} ${multiSelectMode ? 'multi-select-mode' : ''} ${multiSelected ? 'multi-selected' : ''}`}>
+    <div className={`message-row ${isOwn ? 'own' : 'incoming'} ${selected ? 'selected' : ''} ${multiSelectMode ? 'multi-select-mode' : ''} ${multiSelected ? 'multi-selected' : ''} ${albumPosition?.previous ? 'album-continued' : ''} ${albumPosition?.next ? 'album-has-next' : ''}`}>
       {multiSelectMode && (
         <button
           className={`message-select-checkbox ${multiSelected ? 'checked' : ''}`}
@@ -139,13 +152,20 @@ export default function MessageBubble({
 
       <div
         className={`message-bubble ${matched ? 'matched' : ''} ${highlighted ? 'flash' : ''} ${message.status === 'failed' ? 'failed' : ''}`}
-        onClick={onSelect}
+        onClick={multiSelectMode ? onSelect : undefined}
+        onContextMenu={(e) => { e.preventDefault(); onSelect() }}
         onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') onSelect()
         }}
         role="button"
         tabIndex={0}
       >
+        {message.disappearsAt && !message.deleted && (
+          <div className="msg-timer-badge">
+            <Timer size={11} />
+            {formatDisappearTimer(message.disappearsAt)}
+          </div>
+        )}
         {replyMessage && (
           <button
             type="button"
@@ -165,22 +185,15 @@ export default function MessageBubble({
           </button>
         )}
         {message.media && !message.deleted && !message.media.decryptFailed && (
-          message.media.kind === 'voice' ? (
-            <div className="message-voice" onClick={(event) => event.stopPropagation()}>
-              <span className="message-voice-icon">
-                <Mic size={16} />
-              </span>
-              <audio src={message.media.url} controls preload="metadata" />
-              {message.media.durationMs ? (
-                <span className="message-voice-time">{formatDuration(message.media.durationMs)}</span>
-              ) : null}
-            </div>
+          message.media.kind === 'voice' || message.media.kind === 'audio' ? (
+            <AudioMessagePlayer media={message.media} compact={message.media.kind === 'voice'} />
           ) : message.media.kind === 'file' ? (
-            <a
+            <button
               className="message-file"
-              href={message.media.url}
-              download={message.media.name || 'file'}
-              onClick={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation()
+                onDownloadMedia?.(message.media)
+              }}
             >
               <span className="message-file-icon">
                 <FileText size={20} />
@@ -192,13 +205,13 @@ export default function MessageBubble({
               <span className="message-file-download">
                 <Download size={18} />
               </span>
-            </a>
+            </button>
           ) : (
             <button
               className={`message-media ${message.media.kind}`}
               onClick={(event) => {
                 event.stopPropagation()
-                onOpenMedia(message.media)
+                onOpenMedia(message.media, message)
               }}
               aria-label={`Open ${message.media.kind}`}
             >
@@ -215,8 +228,23 @@ export default function MessageBubble({
             </button>
           )
         )}
+        {message.albumId && (
+          <small className="album-label">
+            Album {message.albumIndex || 1}/{message.albumCount || 1}
+          </small>
+        )}
+        {!message.deleted && message.poll && (
+          <PollCard
+            poll={message.poll}
+            isOwn={isOwn}
+            onVote={onVotePoll ? (optionIds) => onVotePoll(message.id, optionIds) : null}
+          />
+        )}
+        {!message.deleted && message.rich && message.rich.type !== 'album' && <RichMessage rich={message.rich} />}
         {message.deleted ? (
           <em className="deleted-message">Message deleted</em>
+        ) : message.rich ? (
+          <RichMessage rich={message.rich} />
         ) : message.text ? (
           <>
             {message.forwarded && <small className="forwarded-label">Forwarded</small>}
@@ -229,8 +257,7 @@ export default function MessageBubble({
         {linkPreview && <LinkPreviewCard url={firstUrl} preview={linkPreview} />}
 
         <span className="message-meta">
-          {message.mock && <small>mock</small>}
-          {message.edited && <small>edited</small>}
+          {message.edited && <small>{t('msg.edited')}</small>}
           <time>{formatMessageTime(message.time)}</time>
           {isOwn && <StatusIcon status={message.status} />}
           {isOwn && message.status === 'failed' && onRetry && (
@@ -258,37 +285,42 @@ export default function MessageBubble({
       {selected && !message.deleted && !multiSelectMode && (
         <div className={`message-context ${isOwn ? 'context-own' : ''}`}>
           <button onClick={onStartReply}>
-            <Reply size={15} /> Reply
+            <Reply size={15} /> {t('msg.reply')}
           </button>
           <button onClick={onCopy}>
-            <Copy size={15} /> Copy
+            <Copy size={15} /> {t('msg.copy')}
           </button>
           <button onClick={() => onReact('\u{1F44D}')}>
-            <SmilePlus size={15} /> React
+            <SmilePlus size={15} /> {t('msg.react')}
           </button>
           <button onClick={onForward}>
-            <Forward size={15} /> Forward
+            <Forward size={15} /> {t('msg.forward')}
           </button>
           <button onClick={onToggleSelect}>
-            <CheckSquare size={15} /> Select
+            <CheckSquare size={15} /> {t('msg.select')}
           </button>
           {onPin && (
             <button onClick={onPin}>
-              <Pin size={15} /> Pin
+              <Pin size={15} /> {t('msg.pin')}
             </button>
           )}
           {isOwn && (
             <button onClick={onStartEdit}>
-              <Edit3 size={15} /> Edit
+              <Edit3 size={15} /> {t('msg.edit')}
             </button>
           )}
           {isOwn && message.status === 'failed' && onRetry && (
             <button onClick={onRetry}>
-              <RefreshCw size={15} /> Retry
+              <RefreshCw size={15} /> {t('msg.retry')}
+            </button>
+          )}
+          {!isOwn && onReport && (
+            <button onClick={onReport}>
+              <Flag size={15} /> {t('msg.report')}
             </button>
           )}
           <button className="danger" onClick={onDelete}>
-            <Trash2 size={15} /> Delete
+            <Trash2 size={15} /> {t('msg.delete')}
           </button>
           <div className="quick-reactions">
             {reactions.map((emoji) => (

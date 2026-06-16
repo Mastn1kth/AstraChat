@@ -91,6 +91,18 @@ async function setupDb() {
       expires_at TIMESTAMPTZ NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS calls (
+      id UUID PRIMARY KEY,
+      chat_id UUID REFERENCES chats(id) ON DELETE CASCADE,
+      initiator_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      recipient_id UUID REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL DEFAULT 'audio',
+      status TEXT NOT NULL DEFAULT 'ringing',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      answered_at TIMESTAMPTZ,
+      ended_at TIMESTAMPTZ
+    );
   `)
 
   await runMigrations(db)
@@ -171,6 +183,74 @@ async function getVisibleMessages(db, chatId, userId, { before, limit = 50 } = {
   const pageRows = hasMore ? result.rows.slice(0, limit) : result.rows
   pageRows.reverse() // chronological
   return { ids: pageRows.map((r) => r.id), hasMore }
+}
+
+async function getVisibleMessageContext(db, chatId, userId, messageId, { limit = 5 } = {}) {
+  const targetResult = await db.query(
+    `SELECT m.id, m.created_at
+     FROM messages m
+     LEFT JOIN chat_history_clears chc
+       ON chc.chat_id = m.chat_id AND chc.user_id = $2
+     WHERE m.chat_id = $1
+       AND m.id = $3
+       AND m.deleted_at IS NULL
+       AND (chc.cleared_at IS NULL OR m.created_at > chc.cleared_at)
+       AND NOT EXISTS (
+         SELECT 1 FROM message_user_deletions mud
+         WHERE mud.message_id = m.id AND mud.user_id = $2
+       )
+     LIMIT 1`,
+    [chatId, userId, messageId],
+  )
+  const target = targetResult.rows[0]
+  if (!target) return { ids: [], hasMoreBefore: false, hasMoreAfter: false }
+
+  const beforeLimit = Math.floor((limit - 1) / 2)
+  const afterLimit = limit - 1 - beforeLimit
+  const beforeResult = await db.query(
+    `SELECT m.id, m.created_at
+     FROM messages m
+     LEFT JOIN chat_history_clears chc
+       ON chc.chat_id = m.chat_id AND chc.user_id = $2
+     WHERE m.chat_id = $1
+       AND m.created_at < $3
+       AND m.deleted_at IS NULL
+       AND (chc.cleared_at IS NULL OR m.created_at > chc.cleared_at)
+       AND NOT EXISTS (
+         SELECT 1 FROM message_user_deletions mud
+         WHERE mud.message_id = m.id AND mud.user_id = $2
+       )
+     ORDER BY m.created_at DESC
+     LIMIT $4`,
+    [chatId, userId, target.created_at, beforeLimit + 1],
+  )
+  const afterResult = await db.query(
+    `SELECT m.id, m.created_at
+     FROM messages m
+     LEFT JOIN chat_history_clears chc
+       ON chc.chat_id = m.chat_id AND chc.user_id = $2
+     WHERE m.chat_id = $1
+       AND m.created_at > $3
+       AND m.deleted_at IS NULL
+       AND (chc.cleared_at IS NULL OR m.created_at > chc.cleared_at)
+       AND NOT EXISTS (
+         SELECT 1 FROM message_user_deletions mud
+         WHERE mud.message_id = m.id AND mud.user_id = $2
+       )
+     ORDER BY m.created_at ASC
+     LIMIT $4`,
+    [chatId, userId, target.created_at, afterLimit + 1],
+  )
+
+  return {
+    ids: [
+      ...beforeResult.rows.slice(0, beforeLimit).reverse().map((row) => row.id),
+      target.id,
+      ...afterResult.rows.slice(0, afterLimit).map((row) => row.id),
+    ],
+    hasMoreBefore: beforeResult.rows.length > beforeLimit,
+    hasMoreAfter: afterResult.rows.length > afterLimit,
+  }
 }
 
 // ────────────────────────────────────────────────────────────
@@ -315,6 +395,58 @@ describe('Message visibility', () => {
     assert.equal(page3.ids.length, 1, 'Page 3 should have 1 remaining message')
     assert.ok(!page3.hasMore, 'Page 3 should indicate no more messages')
     assert.deepEqual(page3.ids, [msgIds[0]], 'Page 3 should be first message only')
+  })
+
+  it('returns jump-to-message context without exposing hidden history', async () => {
+    const contextChatId = await createChat(db, alice)
+    await db.query(
+      `INSERT INTO chat_members (chat_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+      [contextChatId, bob],
+    )
+
+    const timestamps = [
+      '2026-06-07T15:00:00Z',
+      '2026-06-07T15:01:00Z',
+      '2026-06-07T15:02:00Z',
+      '2026-06-07T15:03:00Z',
+      '2026-06-07T15:04:00Z',
+      '2026-06-07T15:05:00Z',
+      '2026-06-07T15:06:00Z',
+    ]
+    const msgIds = []
+    for (const ts of timestamps) {
+      msgIds.push(await insertMessage(db, contextChatId, alice, ts))
+    }
+
+    await db.query(
+      `INSERT INTO chat_history_clears (chat_id, user_id, cleared_at)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (chat_id, user_id) DO UPDATE SET cleared_at = EXCLUDED.cleared_at`,
+      [contextChatId, bob, '2026-06-07T15:01:30Z'],
+    )
+    await db.query(
+      `INSERT INTO message_user_deletions (message_id, user_id) VALUES ($1, $2)`,
+      [msgIds[4], bob],
+    )
+
+    const aliceContext = await getVisibleMessageContext(db, contextChatId, alice, msgIds[3], { limit: 5 })
+    assert.deepEqual(
+      aliceContext.ids,
+      [msgIds[1], msgIds[2], msgIds[3], msgIds[4], msgIds[5]],
+      'Alice should get a centered context window',
+    )
+    assert.ok(aliceContext.hasMoreBefore)
+    assert.ok(aliceContext.hasMoreAfter)
+
+    const bobContext = await getVisibleMessageContext(db, contextChatId, bob, msgIds[3], { limit: 5 })
+    assert.deepEqual(
+      bobContext.ids,
+      [msgIds[2], msgIds[3], msgIds[5], msgIds[6]],
+      'Bob context should skip cleared and delete-for-me messages',
+    )
+    assert.ok(!bobContext.ids.includes(msgIds[0]))
+    assert.ok(!bobContext.ids.includes(msgIds[1]))
+    assert.ok(!bobContext.ids.includes(msgIds[4]))
   })
 
   // ── Combination: clear history + delete-for-me ─────────────

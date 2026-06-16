@@ -1,6 +1,6 @@
 # AstraChat Roadmap
 
-This roadmap is based on the source prompt and the current codebase state.
+Staged plan from current MVP to a fully production-grade messenger.
 
 ## Phase 0 - Project Hygiene
 
@@ -39,9 +39,9 @@ Goal: make the existing messenger core reliable locally.
 - [ ] Integration tests for auth, media and WebSocket flows.
 - [ ] Add e2e tests for the main user workflows.
 
-## Phase 2 - Telegram-Parity Core
+## Phase 2 - Core Feature Completeness
 
-Goal: move mock Telegram-like surfaces to real server-backed behavior.
+Goal: replace remaining mock surfaces with real server-backed behavior.
 
 - [ ] Phone-number login flow or explicit decision to keep username/password auth.
 - [ ] QR login.
@@ -52,7 +52,7 @@ Goal: move mock Telegram-like surfaces to real server-backed behavior.
 - [x] Pinned chats. Pinned messages (backend + WS broadcast + UI bar with jump/unpin).
 - [x] Mute/unmute per chat with mute-until date. Duration picker: 1h, 8h, 1d, 1w, Forever.
 - [ ] Global search across users, chats and messages. Users/chats are server-backed; message search is limited by encrypted payloads unless `searchText` is provided.
-- [ ] In-chat message search with jump-to-message. Local loaded-message jump exists; server-side encrypted history search is limited by `searchText`.
+- [x] In-chat message search with jump-to-message. Server-backed search is intentionally limited by encrypted payloads and explicit `searchText`; jump-to-message loads visible history context around the target instead of requiring the message to be already loaded.
 - [x] Forward single and selected messages. Multi-select with bulk forward and bulk delete implemented.
 - [x] Multi-select messages (checkbox mode, bulk forward/delete bar).
 - [x] Clear history and delete-for-me.
@@ -65,24 +65,24 @@ Goal: move mock Telegram-like surfaces to real server-backed behavior.
 
 Goal: make group/channel workflows real, not only UI states.
 
-- [ ] Group roles: owner, admin, moderator, member.
-- [ ] Admin permissions.
-- [ ] Member permissions.
-- [ ] Invite links and join requests.
-- [ ] Ban/kick/temporary ban.
-- [ ] Group rules and slow mode.
-- [ ] Admin action log.
+- [x] Group roles: owner, admin, moderator, member.
+- [x] Admin permissions.
+- [x] Member permissions.
+- [x] Invite links and join requests.
+- [x] Ban/kick/temporary ban.
+- [x] Group rules and slow mode.
+- [x] Admin action log.
 - [ ] Mentions and replies counters.
-- [ ] Topics/threads inside groups.
+- [x] Topics/threads inside groups.
 - [ ] Topic unread counters and pinned topics.
-- [ ] Polls and quiz polls.
-- [ ] Channel subscribers.
-- [ ] Channel admins and permissions.
-- [ ] Channel post publishing/editing/deletion.
-- [ ] Scheduled and silent posts.
-- [ ] Post views and repost counters.
+- [x] Polls and quiz polls.
+- [x] Channel subscribers.
+- [x] Channel admins and permissions.
+- [x] Channel post publishing/editing/deletion.
+- [x] Scheduled and silent posts.
+- [x] Post views and repost counters.
 - [ ] Channel discussion groups.
-- [ ] Channel stats.
+- [x] Channel stats.
 
 ## Phase 4 - Media, Stickers and Rich Messages
 
@@ -106,36 +106,41 @@ Goal: close the gap around expressive messaging.
 
 Goal: implement real-time group calls and ephemeral stories.
 
-- [ ] Group voice chat.
-- [ ] Group video chat.
-- [ ] Call participants and call history.
-- [ ] Screen sharing with real media track support where available.
+- [x] Group voice chat MVP with mesh WebRTC signaling.
+- [x] Group video chat MVP with mesh WebRTC signaling.
+- [x] Call participants and call history API.
+- [x] Screen sharing with real media track support where available.
+- [ ] SFU/MCU media server for large production group calls.
 - [ ] Stories list, viewer and privacy settings.
 
 ## Phase 6 - Security and Production Architecture
 
 Goal: stop treating local MVP infrastructure as production.
 
-- [ ] Threat model.
-- [ ] Separate cloud chats and secret chats in product language.
+- [x] Threat model documented for the current repository.
+- [x] Separate current cloud/MVP chats and future secret chats in documentation.
 - [ ] Audited E2EE protocol for secret chats.
 - [ ] Device verification.
-- [ ] Key rotation and key backup/recovery.
-- [ ] Suspicious-login alerts.
+- [ ] Key rotation and key backup/recovery. Basic key-change warnings exist.
+- [x] Suspicious-login alerts.
 - [ ] Rate limits beyond auth.
-- [ ] Report spam/user/message flows.
+- [x] Backend-enforced block user flow.
+- [x] Report spam/user/message flows.
+- [ ] Admin/moderator report review queue.
 - [ ] Admin panel hidden from normal users.
 - [ ] Managed PostgreSQL.
 - [ ] Redis/cache for presence, typing, sessions and rate limits.
 - [ ] Object storage for media.
 - [ ] CDN for media delivery.
 - [ ] Queue for background jobs.
-- [ ] Push notification service.
+- [x] VAPID Web Push service for offline browser users.
+- [ ] Queue-backed fanout for high-volume push delivery.
+- [ ] Native iOS/Android push service.
 - [ ] Backups and restore procedure.
 - [ ] Observability: structured logs, metrics, health checks and alerts.
-- [x] PWA manifest + service worker (offline caching, installable, push notification stub).
-- [ ] VAPID push notification service (server-side push to offline users).
-- [ ] Docker/deploy setup.
+- [x] PWA manifest + service worker (offline caching, installable, push handling).
+- [x] VAPID push notification service (server-side push to offline users).
+- [x] Docker/deploy setup.
 
 ## Definition of Done
 

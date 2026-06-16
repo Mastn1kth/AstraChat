@@ -5,6 +5,10 @@ export const migrations = [
       ALTER TABLE chats
         ADD COLUMN IF NOT EXISTS pinned_message_id UUID REFERENCES messages(id) ON DELETE SET NULL;
     `,
+    downSql: `
+      ALTER TABLE chats
+        DROP COLUMN IF EXISTS pinned_message_id;
+    `,
   },
   {
     id: '20260607_messenger_foundation',
@@ -82,8 +86,472 @@ export const migrations = [
       ALTER TABLE messages
         ADD COLUMN IF NOT EXISTS search_text TEXT NOT NULL DEFAULT '';
     `,
+    downSql: `
+      ALTER TABLE messages
+        DROP COLUMN IF EXISTS search_text;
+
+      ALTER TABLE messages
+        DROP COLUMN IF EXISTS forwarded_from_chat_id;
+
+      ALTER TABLE messages
+        DROP COLUMN IF EXISTS forwarded_from_message_id;
+
+      DROP TABLE IF EXISTS chat_history_clears;
+      DROP TABLE IF EXISTS message_user_deletions;
+      DROP TABLE IF EXISTS chat_folder_chats;
+      DROP TABLE IF EXISTS chat_folders;
+      DROP TABLE IF EXISTS chat_user_settings;
+    `,
+  },
+  {
+    id: '20260607_web_push_notifications',
+    sql: `
+      ALTER TABLE chat_user_settings
+        ADD COLUMN IF NOT EXISTS push_mode TEXT NOT NULL DEFAULT 'default';
+
+      ALTER TABLE chat_user_settings DROP CONSTRAINT IF EXISTS chat_user_settings_push_mode_check;
+      ALTER TABLE chat_user_settings
+        ADD CONSTRAINT chat_user_settings_push_mode_check
+        CHECK (push_mode IN ('default', 'all', 'mentions', 'off'));
+
+      CREATE TABLE IF NOT EXISTS push_subscriptions (
+        id UUID PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        endpoint TEXT NOT NULL UNIQUE,
+        p256dh TEXT NOT NULL,
+        auth TEXT NOT NULL,
+        expiration_time TIMESTAMPTZ,
+        user_agent TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_success_at TIMESTAMPTZ,
+        last_error TEXT NOT NULL DEFAULT ''
+      );
+
+      CREATE INDEX IF NOT EXISTS push_subscriptions_user_idx
+        ON push_subscriptions(user_id, updated_at DESC);
+    `,
+    downSql: `
+      DROP TABLE IF EXISTS push_subscriptions;
+
+      ALTER TABLE chat_user_settings DROP CONSTRAINT IF EXISTS chat_user_settings_push_mode_check;
+
+      ALTER TABLE chat_user_settings
+        DROP COLUMN IF EXISTS push_mode;
+    `,
+  },
+  {
+    id: '20260607_security_flows',
+    sql: `
+      CREATE TABLE IF NOT EXISTS security_events (
+        id UUID PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        actor_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        type TEXT NOT NULL,
+        severity TEXT NOT NULL DEFAULT 'info',
+        title TEXT NOT NULL,
+        body TEXT NOT NULL DEFAULT '',
+        metadata TEXT NOT NULL DEFAULT '{}',
+        read_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS security_events_user_idx
+        ON security_events(user_id, read_at, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS user_blocks (
+        blocker_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        blocked_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (blocker_id, blocked_id),
+        CHECK (blocker_id <> blocked_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS user_blocks_blocked_idx
+        ON user_blocks(blocked_id, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS reports (
+        id UUID PRIMARY KEY,
+        reporter_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        target_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        target_message_id UUID REFERENCES messages(id) ON DELETE SET NULL,
+        target_chat_id UUID REFERENCES chats(id) ON DELETE SET NULL,
+        reason TEXT NOT NULL,
+        details TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'open',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        reviewed_at TIMESTAMPTZ
+      );
+
+      CREATE INDEX IF NOT EXISTS reports_status_idx
+        ON reports(status, created_at DESC);
+
+      CREATE INDEX IF NOT EXISTS reports_reporter_idx
+        ON reports(reporter_id, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS user_key_changes (
+        id UUID PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        previous_public_key TEXT NOT NULL,
+        next_public_key TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS user_key_changes_user_idx
+        ON user_key_changes(user_id, created_at DESC);
+    `,
+    downSql: `
+      DROP TABLE IF EXISTS user_key_changes;
+      DROP TABLE IF EXISTS reports;
+      DROP TABLE IF EXISTS user_blocks;
+      DROP TABLE IF EXISTS security_events;
+    `,
+  },
+  {
+    id: '20260607_groups_channels_full_management',
+    sql: `
+      ALTER TABLE chats
+        ADD COLUMN IF NOT EXISTS slow_mode_seconds INTEGER NOT NULL DEFAULT 0;
+
+      ALTER TABLE chats
+        ADD COLUMN IF NOT EXISTS default_permissions TEXT NOT NULL DEFAULT '{}';
+
+      ALTER TABLE chat_members
+        ADD COLUMN IF NOT EXISTS permissions TEXT NOT NULL DEFAULT '{}';
+
+      ALTER TABLE chat_members
+        ADD COLUMN IF NOT EXISTS last_message_at TIMESTAMPTZ;
+
+      ALTER TABLE chat_members DROP CONSTRAINT IF EXISTS chat_members_role_check;
+      ALTER TABLE chat_members
+        ADD CONSTRAINT chat_members_role_check
+        CHECK (role IN ('owner', 'admin', 'moderator', 'member'));
+
+      ALTER TABLE messages
+        ADD COLUMN IF NOT EXISTS topic_id UUID;
+
+      ALTER TABLE messages
+        ADD COLUMN IF NOT EXISTS silent BOOLEAN NOT NULL DEFAULT FALSE;
+
+      ALTER TABLE messages
+        ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ;
+
+      ALTER TABLE messages
+        ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ DEFAULT NOW();
+
+      CREATE TABLE IF NOT EXISTS chat_admin_log (
+        id UUID PRIMARY KEY,
+        chat_id UUID NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+        actor_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        target_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        action TEXT NOT NULL,
+        metadata TEXT NOT NULL DEFAULT '{}',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS chat_admin_log_chat_idx
+        ON chat_admin_log(chat_id, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS chat_bans (
+        chat_id UUID NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        banned_by UUID REFERENCES users(id) ON DELETE SET NULL,
+        reason TEXT NOT NULL DEFAULT '',
+        expires_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (chat_id, user_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS chat_bans_expiry_idx
+        ON chat_bans(expires_at);
+
+      CREATE TABLE IF NOT EXISTS chat_invite_links (
+        id UUID PRIMARY KEY,
+        chat_id UUID NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+        token TEXT NOT NULL UNIQUE,
+        created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+        name TEXT NOT NULL DEFAULT '',
+        expires_at TIMESTAMPTZ,
+        usage_limit INTEGER,
+        uses INTEGER NOT NULL DEFAULT 0,
+        require_approval BOOLEAN NOT NULL DEFAULT FALSE,
+        revoked_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS chat_invite_links_chat_idx
+        ON chat_invite_links(chat_id, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS chat_join_requests (
+        chat_id UUID NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        invite_link_id UUID REFERENCES chat_invite_links(id) ON DELETE SET NULL,
+        message TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending',
+        reviewed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+        reviewed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (chat_id, user_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS chat_join_requests_chat_idx
+        ON chat_join_requests(chat_id, status, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS chat_topics (
+        id UUID PRIMARY KEY,
+        chat_id UUID NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+        pinned BOOLEAN NOT NULL DEFAULT FALSE,
+        closed BOOLEAN NOT NULL DEFAULT FALSE,
+        message_count INTEGER NOT NULL DEFAULT 0,
+        last_message_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS chat_topics_chat_idx
+        ON chat_topics(chat_id, pinned DESC, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS polls (
+        id UUID PRIMARY KEY,
+        message_id UUID NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE,
+        question TEXT NOT NULL,
+        multiple_choice BOOLEAN NOT NULL DEFAULT FALSE,
+        anonymous BOOLEAN NOT NULL DEFAULT TRUE,
+        quiz BOOLEAN NOT NULL DEFAULT FALSE,
+        correct_option_id UUID,
+        closed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS poll_options (
+        id UUID PRIMARY KEY,
+        poll_id UUID NOT NULL REFERENCES polls(id) ON DELETE CASCADE,
+        text TEXT NOT NULL,
+        sort_order INTEGER NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS poll_options_poll_idx
+        ON poll_options(poll_id, sort_order);
+
+      CREATE TABLE IF NOT EXISTS poll_votes (
+        poll_id UUID NOT NULL REFERENCES polls(id) ON DELETE CASCADE,
+        option_id UUID NOT NULL REFERENCES poll_options(id) ON DELETE CASCADE,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (poll_id, option_id, user_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS poll_votes_user_idx
+        ON poll_votes(user_id, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS channel_post_stats (
+        message_id UUID PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+        views INTEGER NOT NULL DEFAULT 0,
+        reposts INTEGER NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS message_views (
+        message_id UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        viewed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (message_id, user_id)
+      );
+    `,
+    downSql: `
+      DROP TABLE IF EXISTS message_views;
+      DROP TABLE IF EXISTS channel_post_stats;
+      DROP TABLE IF EXISTS poll_votes;
+      DROP TABLE IF EXISTS poll_options;
+      DROP TABLE IF EXISTS polls;
+      DROP TABLE IF EXISTS chat_topics;
+      DROP TABLE IF EXISTS chat_join_requests;
+      DROP TABLE IF EXISTS chat_invite_links;
+      DROP TABLE IF EXISTS chat_bans;
+      DROP TABLE IF EXISTS chat_admin_log;
+
+      ALTER TABLE messages
+        DROP COLUMN IF EXISTS sent_at;
+
+      ALTER TABLE messages
+        DROP COLUMN IF EXISTS scheduled_at;
+
+      ALTER TABLE messages
+        DROP COLUMN IF EXISTS silent;
+
+      ALTER TABLE messages
+        DROP COLUMN IF EXISTS topic_id;
+
+      ALTER TABLE chat_members DROP CONSTRAINT IF EXISTS chat_members_role_check;
+
+      ALTER TABLE chat_members
+        DROP COLUMN IF EXISTS last_message_at;
+
+      ALTER TABLE chat_members
+        DROP COLUMN IF EXISTS permissions;
+
+      ALTER TABLE chats
+        DROP COLUMN IF EXISTS default_permissions;
+
+      ALTER TABLE chats
+        DROP COLUMN IF EXISTS slow_mode_seconds;
+    `,
+  },
+  {
+    id: '20260607_call_participants',
+    sql: `
+      ALTER TABLE calls
+        ALTER COLUMN recipient_id DROP NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS call_participants (
+        call_id UUID NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role TEXT NOT NULL DEFAULT 'member',
+        state TEXT NOT NULL DEFAULT 'invited',
+        muted BOOLEAN NOT NULL DEFAULT FALSE,
+        camera_off BOOLEAN NOT NULL DEFAULT FALSE,
+        screen_sharing BOOLEAN NOT NULL DEFAULT FALSE,
+        joined_at TIMESTAMPTZ,
+        left_at TIMESTAMPTZ,
+        last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (call_id, user_id),
+        CHECK (state IN ('invited', 'ringing', 'connected', 'left', 'declined', 'missed', 'disconnected'))
+      );
+
+      CREATE INDEX IF NOT EXISTS call_participants_user_idx
+        ON call_participants(user_id, last_seen_at DESC);
+
+      CREATE INDEX IF NOT EXISTS call_participants_call_idx
+        ON call_participants(call_id, state);
+
+      INSERT INTO call_participants (call_id, user_id, role, state, joined_at, left_at)
+      SELECT id, initiator_id, 'initiator',
+             CASE
+               WHEN status IN ('accepted', 'ended') THEN 'connected'
+               WHEN status = 'ringing' THEN 'connected'
+               ELSE status
+             END,
+             created_at,
+             ended_at
+      FROM calls
+      ON CONFLICT (call_id, user_id) DO NOTHING;
+
+      INSERT INTO call_participants (call_id, user_id, role, state, joined_at, left_at)
+      SELECT id, recipient_id, 'member',
+             CASE
+               WHEN status = 'accepted' THEN 'connected'
+               WHEN status = 'ringing' THEN 'ringing'
+               ELSE status
+             END,
+             answered_at,
+             ended_at
+      FROM calls
+      WHERE recipient_id IS NOT NULL
+      ON CONFLICT (call_id, user_id) DO NOTHING;
+    `,
+    downSql: `
+      DELETE FROM call_participants
+      WHERE call_id IN (SELECT id FROM calls);
+    `,
+  },
+  {
+    id: '20260607_audio_media_kind',
+    sql: `
+      ALTER TABLE media_files DROP CONSTRAINT IF EXISTS media_files_kind_check;
+      ALTER TABLE media_files
+        ADD CONSTRAINT media_files_kind_check
+        CHECK (kind IN ('image', 'video', 'voice', 'audio', 'file'));
+    `,
+    downSql: `
+      ALTER TABLE media_files DROP CONSTRAINT IF EXISTS media_files_kind_check;
+      ALTER TABLE media_files
+        ADD CONSTRAINT media_files_kind_check
+        CHECK (kind IN ('image', 'video'));
+    `,
+  },
+  {
+    id: '20260608_totp_2fa',
+    sql: `
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS totp_secret TEXT;
+
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS totp_pending_secret TEXT;
+
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS totp_enabled_at TIMESTAMPTZ;
+    `,
+    downSql: `
+      ALTER TABLE users
+        DROP COLUMN IF EXISTS totp_enabled_at;
+
+      ALTER TABLE users
+        DROP COLUMN IF EXISTS totp_pending_secret;
+
+      ALTER TABLE users
+        DROP COLUMN IF EXISTS totp_secret;
+    `,
+  },
+  {
+    id: '20260610_live_wall',
+    sql: `
+      CREATE TABLE IF NOT EXISTS wall_messages (
+        id UUID PRIMARY KEY,
+        text TEXT NOT NULL,
+        hue SMALLINT NOT NULL DEFAULT 20,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS wall_messages_created_idx
+        ON wall_messages(created_at DESC);
+    `,
+    downSql: `
+      DROP TABLE IF EXISTS wall_messages;
+    `,
+  },
+  {
+    id: '20260612_key_backups',
+    sql: `
+      CREATE TABLE IF NOT EXISTS key_backups (
+        user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        payload TEXT NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `,
+    downSql: `
+      DROP TABLE IF EXISTS key_backups;
+    `,
+  },
+  {
+    id: '20260616_link_preview',
+    sql: `
+      ALTER TABLE messages
+        ADD COLUMN IF NOT EXISTS link_preview JSONB;
+    `,
+    downSql: `
+      ALTER TABLE messages
+        DROP COLUMN IF EXISTS link_preview;
+    `,
   },
 ]
+
+async function getAppliedMigrationIds(database) {
+  try {
+    const appliedResult = await database.query('SELECT id FROM schema_migrations')
+    return new Set(appliedResult.rows.map((row) => row.id))
+  } catch (error) {
+    if (
+      error.code === '42P01' ||
+      String(error.message || '').includes('schema_migrations')
+    ) {
+      return new Set()
+    }
+    throw error
+  }
+}
 
 export async function runMigrations(database) {
   await database.exec(`
@@ -101,4 +569,32 @@ export async function runMigrations(database) {
     await database.exec(migration.sql)
     await database.query('INSERT INTO schema_migrations (id) VALUES ($1)', [migration.id])
   }
+}
+
+export async function getMigrationStatus(database) {
+  const applied = await getAppliedMigrationIds(database)
+  return migrations.map((migration) => ({
+    id: migration.id,
+    applied: applied.has(migration.id),
+  }))
+}
+
+export async function rollbackMigrations(database, count = 1) {
+  const applied = await getAppliedMigrationIds(database)
+  const targets = migrations
+    .filter((migration) => applied.has(migration.id))
+    .reverse()
+    .slice(0, count)
+
+  if (!targets.length) return []
+
+  for (const migration of targets) {
+    if (!migration.downSql) {
+      throw new Error(`Migration ${migration.id} does not define rollback SQL`)
+    }
+    await database.exec(migration.downSql)
+    await database.query('DELETE FROM schema_migrations WHERE id = $1', [migration.id])
+  }
+
+  return targets.map((migration) => migration.id)
 }

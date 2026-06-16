@@ -1,0 +1,5 @@
+{
+  "main": "dist-admin/launcher.cjs",
+  "output": "dist-admin/sea-prep.blob",
+  "disableExperimentalSEAWarning": true
+}

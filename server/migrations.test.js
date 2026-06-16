@@ -1,0 +1,115 @@
+import { describe, it } from 'node:test'
+import assert from 'node:assert/strict'
+import { PGlite } from '@electric-sql/pglite'
+import { getMigrationStatus, migrations, rollbackMigrations, runMigrations } from './migrations.js'
+
+async function createBaseSchema(db) {
+  await db.exec(`
+    CREATE TABLE users (
+      id UUID PRIMARY KEY,
+      login TEXT NOT NULL UNIQUE,
+      username TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      bio TEXT NOT NULL DEFAULT '',
+      avatar TEXT NOT NULL DEFAULT '',
+      password_salt TEXT NOT NULL DEFAULT '',
+      password_hash TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE chats (
+      id UUID PRIMARY KEY,
+      type TEXT NOT NULL DEFAULT 'private',
+      title TEXT NOT NULL DEFAULT '',
+      created_by UUID NOT NULL REFERENCES users(id),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE chat_members (
+      chat_id UUID NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL DEFAULT 'member',
+      joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (chat_id, user_id)
+    );
+
+    CREATE TABLE messages (
+      id UUID PRIMARY KEY,
+      chat_id UUID NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      sender_id UUID NOT NULL REFERENCES users(id),
+      ciphertext TEXT NOT NULL DEFAULT '',
+      iv TEXT NOT NULL DEFAULT '',
+      auth_tag TEXT NOT NULL DEFAULT '',
+      encryption_version INTEGER NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      edited_at TIMESTAMPTZ,
+      deleted_at TIMESTAMPTZ
+    );
+
+    CREATE TABLE media_files (
+      id UUID PRIMARY KEY,
+      owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL DEFAULT 'image',
+      original_name TEXT NOT NULL DEFAULT '',
+      mime_type TEXT NOT NULL DEFAULT '',
+      storage_name TEXT NOT NULL UNIQUE,
+      encrypted_size BIGINT NOT NULL DEFAULT 0,
+      plain_size BIGINT NOT NULL DEFAULT 0,
+      original_size BIGINT NOT NULL DEFAULT 0,
+      iv TEXT NOT NULL DEFAULT '',
+      auth_tag TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE calls (
+      id UUID PRIMARY KEY,
+      chat_id UUID REFERENCES chats(id) ON DELETE SET NULL,
+      initiator_id UUID NOT NULL REFERENCES users(id),
+      recipient_id UUID NOT NULL REFERENCES users(id),
+      kind TEXT NOT NULL DEFAULT 'audio',
+      status TEXT NOT NULL DEFAULT 'ringing',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      answered_at TIMESTAMPTZ,
+      ended_at TIMESTAMPTZ
+    );
+  `)
+}
+
+describe('database migrations', () => {
+  it('reports pending migrations before the migration table exists', async () => {
+    const db = new PGlite()
+    try {
+      const status = await getMigrationStatus(db)
+      assert.equal(status.length, migrations.length)
+      assert.equal(status.every((migration) => !migration.applied), true)
+    } finally {
+      await db.close()
+    }
+  })
+
+  it('applies migrations and rolls back the latest migration marker and schema', async () => {
+    const db = new PGlite()
+    try {
+      await createBaseSchema(db)
+      await runMigrations(db)
+
+      const applied = await getMigrationStatus(db)
+      assert.equal(applied.every((migration) => migration.applied), true)
+
+      const rolledBack = await rollbackMigrations(db, 1)
+      assert.deepEqual(rolledBack, [migrations.at(-1).id])
+
+      const afterRollback = await getMigrationStatus(db)
+      assert.equal(afterRollback.at(-1).applied, false)
+      assert.equal(afterRollback.slice(0, -1).every((migration) => migration.applied), true)
+
+      await assert.rejects(
+        () => db.query('SELECT user_id FROM key_backups LIMIT 1'),
+        /key_backups|relation/i,
+      )
+    } finally {
+      await db.close()
+    }
+  })
+})

@@ -17,6 +17,7 @@ const statusText = {
   ringing: 'Ringing...',
   connecting: 'Connecting...',
   active: 'Encrypted peer-to-peer call',
+  reconnecting: 'Reconnecting...',
   declined: 'Call declined',
   ended: 'Call ended',
   unavailable: 'User unavailable',
@@ -60,6 +61,8 @@ export default function CallModal({
   call,
   localStream,
   remoteStream,
+  remoteStreams = {},
+  connectionStats,
   onAccept,
   onEnd,
   onDismiss,
@@ -71,8 +74,25 @@ export default function CallModal({
   const [duration, setDuration] = useState(0)
   const terminal = ['declined', 'ended', 'unavailable', 'failed'].includes(call.status)
   const incoming = call.direction === 'incoming' && call.status === 'ringing'
-  const hasRemoteVideo = call.kind === 'video' && remoteStream?.getVideoTracks().length > 0
+  const participants = call.participants?.length
+    ? call.participants
+    : [{ ...call.peer, state: call.status === 'active' ? 'connected' : call.status }]
+  const remoteVideoEntries = Object.entries(remoteStreams).filter(([, stream]) =>
+    call.kind === 'video' && stream?.getVideoTracks().length > 0
+  )
+  const hasRemoteVideo = remoteVideoEntries.length > 0 || (
+    call.kind === 'video' && remoteStream?.getVideoTracks().length > 0
+  )
   const hasLocalVideo = localStream?.getVideoTracks().length > 0 && !call.cameraOff
+  const quality = connectionStats || {
+    level: call.status === 'active' ? 'unknown' : 'idle',
+    label: call.status === 'active' ? 'Measuring' : 'Waiting',
+    packetsLost: 0,
+    packetsReceived: 0,
+    lossRate: 0,
+    jitterMs: 0,
+  }
+  const lossPercent = Math.round((quality.lossRate || 0) * 100)
 
   useEffect(() => {
     if (call.status !== 'active') return undefined
@@ -91,15 +111,46 @@ export default function CallModal({
             <strong>{call.kind === 'video' ? 'Video call' : 'Audio call'}</strong>
             <span>{call.status === 'active' ? formatDuration(duration) : statusText[call.status]}</span>
           </div>
+          <div
+            className={`call-quality ${quality.level}`}
+            title={`Packet loss ${lossPercent}%, jitter ${quality.jitterMs || 0} ms`}
+            aria-label={`Connection quality: ${quality.label}. Packet loss ${lossPercent} percent, jitter ${quality.jitterMs || 0} milliseconds.`}
+          >
+            <i />
+            <span>{quality.label}</span>
+            <small>{lossPercent}% loss / {quality.jitterMs || 0} ms</small>
+          </div>
           <button onClick={terminal ? onDismiss : onEnd} aria-label="Close call">
             <X size={20} />
           </button>
         </header>
 
-        <div className="call-media">
-          {hasRemoteVideo ? (
+        <div className={`call-media ${participants.length > 2 ? 'group-call-media' : ''}`}>
+          {hasRemoteVideo && participants.length > 2 ? (
+            <div className="call-video-grid">
+              {remoteVideoEntries.map(([userId, stream]) => {
+                const participant = participants.find((item) => item.id === userId)
+                return (
+                  <div className="call-video-tile" key={userId}>
+                    <StreamVideo
+                      stream={stream}
+                      muted={call.speakerMuted}
+                      className="remote-video"
+                    />
+                    <span>{participant?.name || 'Participant'}</span>
+                  </div>
+                )
+              })}
+              {hasLocalVideo && (
+                <div className="call-video-tile local-tile">
+                  <StreamVideo stream={localStream} muted className="remote-video" />
+                  <span>You</span>
+                </div>
+              )}
+            </div>
+          ) : hasRemoteVideo ? (
             <StreamVideo
-              stream={remoteStream}
+              stream={remoteStream || remoteVideoEntries[0]?.[1]}
               muted={call.speakerMuted}
               className="remote-video"
             />
@@ -113,11 +164,16 @@ export default function CallModal({
             </div>
           )}
 
-          {call.kind === 'video' && hasLocalVideo && (
+          {call.kind === 'video' && hasLocalVideo && participants.length <= 2 && (
             <StreamVideo stream={localStream} muted className="local-video" />
           )}
 
           {!hasRemoteVideo && <StreamAudio stream={remoteStream} muted={call.speakerMuted} />}
+          {Object.entries(remoteStreams)
+            .filter(([, stream]) => !stream?.getVideoTracks().length)
+            .map(([userId, stream]) => (
+            <StreamAudio key={userId} stream={stream} muted={call.speakerMuted} />
+          ))}
 
           {hasRemoteVideo && (
             <div className="video-call-caption">
@@ -126,6 +182,22 @@ export default function CallModal({
             </div>
           )}
         </div>
+
+        {participants.length > 1 && (
+          <div className="call-participants">
+            {participants.map((participant) => (
+              <div className="call-participant" key={participant.id}>
+                <span className={`participant-dot ${participant.state || 'invited'}`} />
+                <strong>{participant.self ? 'You' : participant.name}</strong>
+                <small>
+                  {participant.sharingScreen
+                    ? 'sharing screen'
+                    : participant.state || 'invited'}
+                </small>
+              </div>
+            ))}
+          </div>
+        )}
 
         {incoming ? (
           <div className="incoming-call-actions">

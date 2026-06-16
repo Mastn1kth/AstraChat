@@ -1,15 +1,49 @@
 import express from 'express'
 import cookieParser from 'cookie-parser'
 import helmet from 'helmet'
-import { rateLimit } from 'express-rate-limit'
+import { ipKeyGenerator, rateLimit } from 'express-rate-limit'
+import { RedisStore } from 'rate-limit-redis'
 import { createServer } from 'node:http'
-import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
-import { readFile, rm, writeFile } from 'node:fs/promises'
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto'
+import { cpSync, createReadStream, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { Transform } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
+import { fileURLToPath } from 'node:url'
+import webpush from 'web-push'
+import { isFcmEnabled, sendFcmMessage } from './fcm.js'
 import WebSocket, { WebSocketServer } from 'ws'
 import { config } from './config.js'
 import { createSavedChat, db, migrateDatabase, cleanupExpiredSessions } from './db.js'
+import {
+  checkStorage,
+  deleteMediaObject,
+  getMediaObject,
+  getMediaObjectStream,
+  saveMediaObject,
+  saveMediaObjectStream,
+} from './storage.js'
+import {
+  addPresence,
+  closeRedis,
+  checkRedis,
+  deleteCachedSession,
+  deleteCachedSessions,
+  getOnlineUserIds,
+  initRedis,
+  isUserOnline,
+  onSocketMessage,
+  publishSocketMessage,
+  redis,
+  refreshPresence,
+  removePresence,
+} from './redis.js'
+import {
+  httpRequestDuration,
+  metricsContentType,
+  metricsText,
+  websocketConnections,
+} from './metrics.js'
 import {
   createSession,
   destroySession,
@@ -22,16 +56,36 @@ import {
   decryptMessage,
   encryptBuffer,
   encryptMessage,
+  createTotpSecret,
+  createTotpUri,
   hashPassword,
+  verifyTotpCode,
   verifyPassword,
 } from './crypto.js'
-import { compressAvatar, compressImage, compressVideo, getMediaKind, mediaUpload } from './media.js'
+import {
+  cleanupUploadedFile,
+  compressAvatar,
+  compressImage,
+  compressVideo,
+  getMediaKind,
+  mediaUpload,
+  mediaUploadMaxBytes,
+  readUploadedFile,
+} from './media.js'
 import {
   callSchema,
+  banMemberSchema,
   changePasswordSchema,
   chatFolderChatSettingsSchema,
   chatFolderSchema,
+  chatModerationSettingsSchema,
   chatSettingsSchema,
+  deletePushSubscriptionSchema,
+  fcmTokenSchema,
+  inviteLinkSchema,
+  joinInviteSchema,
+  memberPermissionsSchema,
+  memberRoleSchema,
   pinMessageSchema,
   createChatSchema,
   editMessageSchema,
@@ -39,9 +93,16 @@ import {
   loginSchema,
   messageSchema,
   parseBody,
+  pollVoteSchema,
   profileSchema,
+  pushSubscriptionSchema,
   reactionSchema,
   registerSchema,
+  reportSchema,
+  reviewJoinRequestSchema,
+  topicSchema,
+  totpVerifySchema,
+  updateTopicSchema,
   updateChatFolderSchema,
 } from './validation.js'
 
@@ -49,13 +110,65 @@ const app = express()
 const server = createServer(app)
 const wss = new WebSocketServer({ noServer: true })
 const socketsByUserId = new Map()
+let onlineUserIdCache = new Set()
+
+if (config.vapid.enabled) {
+  webpush.setVapidDetails(
+    config.vapid.subject,
+    config.vapid.publicKey,
+    config.vapid.privateKey,
+  )
+}
 
 app.disable('x-powered-by')
+if (config.trustProxy) app.set('trust proxy', config.trustProxy)
 app.use(helmet({ crossOriginResourcePolicy: false }))
 app.use(express.json({ limit: '512kb' }))
 app.use(cookieParser())
 app.use((request, response, next) => {
+  if (!config.allowedOrigins.length) {
+    next()
+    return
+  }
+  const origin = request.headers.origin
+  if (!origin) {
+    next()
+    return
+  }
+  if (!config.allowedOrigins.includes(origin)) {
+    response.status(403).json({ error: 'Origin is not allowed' })
+    return
+  }
+  // Cross-origin clients (the Capacitor mobile shell, a separately hosted
+  // frontend) need real CORS headers, including credentialed cookies.
+  response.setHeader('Access-Control-Allow-Origin', origin)
+  response.setHeader('Access-Control-Allow-Credentials', 'true')
+  response.setHeader('Vary', 'Origin')
+  if (request.method === 'OPTIONS') {
+    response.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS')
+    response.setHeader(
+      'Access-Control-Allow-Headers',
+      request.headers['access-control-request-headers'] || 'Content-Type',
+    )
+    response.setHeader('Access-Control-Max-Age', '86400')
+    response.status(204).end()
+    return
+  }
+  next()
+})
+app.use((request, response, next) => {
   response.setHeader('Cache-Control', 'no-store')
+  next()
+})
+app.use((request, response, next) => {
+  const end = httpRequestDuration.startTimer()
+  response.on('finish', () => {
+    end({
+      method: request.method,
+      route: request.route?.path || request.path,
+      status: String(response.statusCode),
+    })
+  })
   next()
 })
 
@@ -64,6 +177,25 @@ const authLimiter = rateLimit({
   limit: 30,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
+  store: redis
+    ? new RedisStore({
+        sendCommand: (...args) => redis.call(...args),
+      })
+    : undefined,
+})
+
+const wallLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 4,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (request) => request.user?.id || ipKeyGenerator(request.ip),
+  store: redis
+    ? new RedisStore({
+        prefix: 'rl:wall:',
+        sendCommand: (...args) => redis.call(...args),
+      })
+    : undefined,
 })
 
 function publicUser(user) {
@@ -73,10 +205,14 @@ function publicUser(user) {
     username: user.username,
     name: user.name,
     bio: user.bio,
+    status: user.status || '',
     avatar: user.avatar,
     encryptionPublicKey: parsePublicKey(user.encryption_public_key),
+    totpEnabled: Boolean(user.totp_enabled_at || user.totp_secret),
     lastSeenAt: user.last_seen_at || null,
-    online: socketsByUserId.has(user.id),
+    online: socketsByUserId.has(user.id) || onlineUserIdCache.has(user.id),
+    blockedByMe: isDatabaseTrue(user.blocked_by_me),
+    blockedMe: isDatabaseTrue(user.blocked_me),
   }
 }
 
@@ -99,12 +235,162 @@ function stringifyPublicKey(publicKey) {
   return value
 }
 
+function sealTotpSecret(secret) {
+  return JSON.stringify(encryptMessage(secret))
+}
+
+function openTotpSecret(value) {
+  if (!value) return ''
+  try {
+    const envelope = JSON.parse(value)
+    if (envelope?.ciphertext && envelope?.iv && envelope?.authTag) {
+      return decryptMessage(envelope)
+    }
+  } catch {
+    // Older/local dev rows may contain a plain base32 secret.
+  }
+  return value
+}
+
+async function loadOwnTotpState(userId) {
+  const result = await db.query(
+    `SELECT id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
+            totp_secret, totp_pending_secret, totp_enabled_at
+     FROM users WHERE id = $1 LIMIT 1`,
+    [userId],
+  )
+  return result.rows[0] || null
+}
+
 function parseBooleanFormValue(value) {
   return value === true || value === 'true' || value === '1'
 }
 
 function isDatabaseTrue(value) {
   return value === true || value === 'true' || value === 't' || value === 1 || value === '1'
+}
+
+const serverMediaTransformMaxBytes = 100 * 1024 * 1024
+
+function formatByteSize(bytes) {
+  const size = Number(bytes)
+  if (!Number.isFinite(size) || size <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = size
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+  return `${Number(value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1))} ${units[unitIndex]}`
+}
+
+async function encryptUploadedFileToStorage(file, storageName) {
+  const iv = randomBytes(12)
+  const cipher = createCipheriv('aes-256-gcm', config.messageKey, iv)
+  const input = createReadStream(file.path)
+  input.on('error', (error) => cipher.destroy(error))
+
+  await saveMediaObjectStream(storageName, input.pipe(cipher), { contentLength: file.size })
+  return {
+    encryptedSize: file.size,
+    iv: iv.toString('base64'),
+    authTag: cipher.getAuthTag().toString('base64'),
+  }
+}
+
+function createMediaDecipher(media) {
+  const decipher = createDecipheriv(
+    'aes-256-gcm',
+    config.messageKey,
+    Buffer.from(media.iv, 'base64'),
+  )
+  decipher.setAuthTag(Buffer.from(media.auth_tag, 'base64'))
+  return decipher
+}
+
+class ByteRangeTransform extends Transform {
+  constructor(start, end) {
+    super()
+    this.start = start
+    this.end = end
+    this.offset = 0
+  }
+
+  _transform(chunk, _encoding, callback) {
+    const chunkStart = this.offset
+    const chunkEnd = this.offset + chunk.length - 1
+    this.offset += chunk.length
+
+    if (chunkEnd < this.start || chunkStart > this.end) {
+      callback()
+      return
+    }
+
+    const sliceStart = Math.max(0, this.start - chunkStart)
+    const sliceEnd = Math.min(chunk.length, this.end - chunkStart + 1)
+    this.push(chunk.subarray(sliceStart, sliceEnd))
+    callback()
+  }
+}
+
+function parseByteRange(range, totalSize) {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(String(range || ''))
+  if (!match) return null
+  const [, rawStart, rawEnd] = match
+  if (!rawStart && !rawEnd) return null
+
+  let start
+  let end
+  if (!rawStart) {
+    const suffixLength = Number(rawEnd)
+    if (!Number.isFinite(suffixLength) || suffixLength <= 0) return null
+    start = Math.max(totalSize - suffixLength, 0)
+    end = totalSize - 1
+  } else {
+    start = Number(rawStart)
+    end = rawEnd ? Number(rawEnd) : totalSize - 1
+  }
+
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) return null
+  end = Math.min(end, totalSize - 1)
+  if (start > end || start >= totalSize) return null
+  return { start, end }
+}
+
+async function streamDecryptedMedia(response, media, rangeHeader) {
+  const contentLength = isDatabaseTrue(media.client_encrypted)
+    ? Number(media.encrypted_size)
+    : Number(media.plain_size)
+  const totalSize = Number.isFinite(contentLength) ? contentLength : 0
+
+  response.setHeader(
+    'Content-Type',
+    isDatabaseTrue(media.client_encrypted) ? 'application/octet-stream' : media.mime_type,
+  )
+  response.setHeader('Accept-Ranges', 'bytes')
+  response.setHeader('Content-Disposition', 'inline')
+
+  if (!rangeHeader) {
+    const encryptedStream = await getMediaObjectStream(media.storage_name)
+    const decipher = createMediaDecipher(media)
+    response.setHeader('Content-Length', totalSize)
+    await pipeline(encryptedStream, decipher, response)
+    return
+  }
+
+  const range = parseByteRange(rangeHeader, totalSize)
+  if (!range) {
+    response.status(416).setHeader('Content-Range', `bytes */${totalSize}`).end()
+    return
+  }
+
+  const encryptedStream = await getMediaObjectStream(media.storage_name)
+  const decipher = createMediaDecipher(media)
+  response.status(206)
+  response.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${totalSize}`)
+  response.setHeader('Content-Length', range.end - range.start + 1)
+  await pipeline(encryptedStream, decipher, new ByteRangeTransform(range.start, range.end), response)
 }
 
 const INDEFINITE_MUTE_UNTIL = '9999-12-31T23:59:59.000Z'
@@ -115,6 +401,30 @@ function normalizeSearchText(value) {
 
 function normalizeSearchQuery(value) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 120)
+}
+
+const MESSAGE_SELECT_COLUMNS = `
+  m.id, m.chat_id, m.sender_id, m.media_id, m.reply_to_id, m.topic_id, m.ciphertext, m.iv,
+  m.auth_tag, m.encryption_version, m.created_at, m.edited_at, m.deleted_at,
+  m.forwarded_from_message_id, m.forwarded_from_chat_id,
+  m.silent, m.scheduled_at, m.sent_at, m.link_preview,
+  mf.kind AS media_kind, mf.original_name AS media_name,
+  mf.mime_type AS media_mime_type, mf.plain_size AS media_size,
+  mf.original_size AS media_original_size, mf.width AS media_width,
+  mf.height AS media_height, mf.client_encrypted AS media_client_encrypted,
+  mf.media_envelope AS media_envelope, mf.duration_ms AS media_duration
+`
+
+function visibleMessageFilter(userParam = '$2') {
+  return `
+    AND (m.scheduled_at IS NULL OR m.scheduled_at <= NOW())
+    AND m.sent_at IS NOT NULL
+    AND (chc.cleared_at IS NULL OR m.created_at > chc.cleared_at)
+    AND NOT EXISTS (
+      SELECT 1 FROM message_user_deletions mud
+      WHERE mud.message_id = m.id AND mud.user_id = ${userParam}
+    )
+  `
 }
 
 function normalizeFolderTitle(value) {
@@ -136,6 +446,7 @@ function publicChatSettings(row = {}) {
     mutedUntil,
     archived: isDatabaseTrue(row.archived),
     archivedAt: row.archived_at || null,
+    pushMode: row.push_mode || 'default',
   }
 }
 
@@ -152,7 +463,7 @@ function validateClientMediaMetadata(body) {
   const mimeType = String(body.mimeType || '')
   const envelope = String(body.envelope || '')
   const originalName = String(body.originalName || 'encrypted-media').slice(0, 255)
-  if (!['image', 'video', 'voice', 'file'].includes(kind)) {
+  if (!['image', 'video', 'voice', 'audio', 'file'].includes(kind)) {
     const error = new Error('Encrypted media kind is invalid')
     error.status = 400
     throw error
@@ -162,7 +473,7 @@ function validateClientMediaMetadata(body) {
       ? /^image\/[-+.\w]+$/.test(mimeType)
       : kind === 'video'
         ? /^video\/[-+.\w]+$/.test(mimeType)
-        : kind === 'voice'
+        : kind === 'voice' || kind === 'audio'
           ? /^audio\/[-+.\w]+$/.test(mimeType)
           : MIME_PATTERN.test(mimeType)
   if (!mimeOk) {
@@ -227,6 +538,95 @@ function publicSession(session, currentTokenHash) {
   }
 }
 
+function parseSecurityMetadata(value) {
+  try {
+    return JSON.parse(value || '{}')
+  } catch {
+    return {}
+  }
+}
+
+function publicSecurityEvent(event) {
+  return {
+    id: event.id,
+    type: event.type,
+    severity: event.severity,
+    title: event.title,
+    body: event.body || '',
+    metadata: parseSecurityMetadata(event.metadata),
+    readAt: event.read_at || null,
+    createdAt: event.created_at,
+    actor: event.actor_user_id
+      ? {
+          id: event.actor_user_id,
+          username: event.actor_username || '',
+          name: event.actor_name || '',
+          avatar: event.actor_avatar || '',
+        }
+      : null,
+  }
+}
+
+async function createSecurityEvent({ userId, actorUserId = null, type, severity = 'info', title, body = '', metadata = {} }) {
+  const id = randomUUID()
+  const result = await db.query(
+    `INSERT INTO security_events
+      (id, user_id, actor_user_id, type, severity, title, body, metadata)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id, user_id, actor_user_id, type, severity, title, body, metadata, read_at, created_at`,
+    [id, userId, actorUserId, type, severity, title, body, JSON.stringify(metadata)],
+  )
+  const event = publicSecurityEvent(result.rows[0])
+  await sendToUser(userId, { type: 'security:event', event })
+  return event
+}
+
+async function hasBlockBetween(firstUserId, secondUserId) {
+  const result = await db.query(
+    `SELECT blocker_id, blocked_id
+     FROM user_blocks
+     WHERE (blocker_id = $1 AND blocked_id = $2)
+        OR (blocker_id = $2 AND blocked_id = $1)
+     LIMIT 1`,
+    [firstUserId, secondUserId],
+  )
+  return result.rows[0] || null
+}
+
+async function privateChatCounterpart(chatId, userId) {
+  const result = await db.query(
+    `SELECT c.id, c.type, cm.user_id
+     FROM chats c
+     JOIN chat_members mine ON mine.chat_id = c.id AND mine.user_id = $2
+     JOIN chat_members cm ON cm.chat_id = c.id AND cm.user_id <> $2
+     WHERE c.id = $1 AND c.type = 'private'
+     LIMIT 1`,
+    [chatId, userId],
+  )
+  return result.rows[0]?.user_id || null
+}
+
+async function requireUnblockedPrivateChat(chatId, userId) {
+  const counterpartId = await privateChatCounterpart(chatId, userId)
+  if (!counterpartId) return true
+  const block = await hasBlockBetween(userId, counterpartId)
+  if (!block) return true
+  const error = new Error(block.blocker_id === userId ? 'You blocked this user' : 'This user is not available')
+  error.status = 403
+  throw error
+}
+
+async function sharedUserIdsForKeyWarnings(userId) {
+  const result = await db.query(
+    `SELECT DISTINCT cm.user_id
+     FROM chat_members mine
+     JOIN chat_members cm ON cm.chat_id = mine.chat_id AND cm.user_id <> $1
+     WHERE mine.user_id = $1`,
+    [userId],
+  )
+  return result.rows.map((row) => row.user_id)
+}
+
 function initials(name) {
   return name
     .split(/\s+/)
@@ -246,7 +646,8 @@ async function isChatMember(chatId, userId) {
 
 async function requireChatMemberRow(chatId, userId) {
   const result = await db.query(
-    `SELECT c.id, c.type, c.title, cm.role
+    `SELECT c.id, c.type, c.title, c.slow_mode_seconds, c.default_permissions,
+            cm.role, cm.permissions, cm.last_message_at
      FROM chats c
      JOIN chat_members cm ON cm.chat_id = c.id
      WHERE c.id = $1 AND cm.user_id = $2
@@ -256,12 +657,167 @@ async function requireChatMemberRow(chatId, userId) {
   return result.rows[0] || null
 }
 
+const ROLE_PERMISSIONS = {
+  owner: {
+    manage_chat: true,
+    manage_members: true,
+    manage_roles: true,
+    ban_users: true,
+    delete_messages: true,
+    pin_messages: true,
+    invite_users: true,
+    approve_join_requests: true,
+    manage_topics: true,
+    send_messages: true,
+    send_media: true,
+    send_polls: true,
+    post_messages: true,
+    view_stats: true,
+  },
+  admin: {
+    manage_chat: true,
+    manage_members: true,
+    manage_roles: false,
+    ban_users: true,
+    delete_messages: true,
+    pin_messages: true,
+    invite_users: true,
+    approve_join_requests: true,
+    manage_topics: true,
+    send_messages: true,
+    send_media: true,
+    send_polls: true,
+    post_messages: true,
+    view_stats: true,
+  },
+  moderator: {
+    manage_chat: false,
+    manage_members: false,
+    manage_roles: false,
+    ban_users: true,
+    delete_messages: true,
+    pin_messages: true,
+    invite_users: true,
+    approve_join_requests: true,
+    manage_topics: true,
+    send_messages: true,
+    send_media: true,
+    send_polls: true,
+    post_messages: false,
+    view_stats: false,
+  },
+  member: {
+    manage_chat: false,
+    manage_members: false,
+    manage_roles: false,
+    ban_users: false,
+    delete_messages: false,
+    pin_messages: false,
+    invite_users: false,
+    approve_join_requests: false,
+    manage_topics: false,
+    send_messages: true,
+    send_media: true,
+    send_polls: true,
+    post_messages: false,
+    view_stats: false,
+  },
+}
+
+function parseJsonObject(value, fallback = {}) {
+  if (!value) return fallback
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function publicChatPermissions(memberRow = {}) {
+  const rolePermissions = ROLE_PERMISSIONS[memberRow.role] || ROLE_PERMISSIONS.member
+  const defaultPermissions = parseJsonObject(memberRow.default_permissions)
+  const memberPermissions = parseJsonObject(memberRow.permissions)
+  return {
+    ...rolePermissions,
+    ...defaultPermissions,
+    ...memberPermissions,
+  }
+}
+
+function hasPermission(memberRow, permission) {
+  if (!memberRow) return false
+  if (memberRow.role === 'owner') return true
+  return Boolean(publicChatPermissions(memberRow)[permission])
+}
+
+function requirePermission(memberRow, permission, message = 'Not enough permissions') {
+  if (hasPermission(memberRow, permission)) return
+  const error = new Error(message)
+  error.status = 403
+  throw error
+}
+
+async function appendAdminLog(tx, { chatId, actorUserId, targetUserId = null, action, metadata = {} }) {
+  await tx.query(
+    `INSERT INTO chat_admin_log
+      (id, chat_id, actor_user_id, target_user_id, action, metadata)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [randomUUID(), chatId, actorUserId, targetUserId, action, JSON.stringify(metadata)],
+  )
+}
+
+async function isBannedFromChat(chatId, userId) {
+  const result = await db.query(
+    `SELECT 1
+     FROM chat_bans
+     WHERE chat_id = $1 AND user_id = $2
+       AND (expires_at IS NULL OR expires_at > NOW())
+     LIMIT 1`,
+    [chatId, userId],
+  )
+  return result.rows.length > 0
+}
+
+async function assertCanSendToChat(chatId, userId, { media = false, poll = false } = {}) {
+  const member = await requireChatMemberRow(chatId, userId)
+  if (!member) {
+    const error = new Error('Chat not found')
+    error.status = 404
+    throw error
+  }
+  if (await isBannedFromChat(chatId, userId)) {
+    const error = new Error('You are banned in this chat')
+    error.status = 403
+    throw error
+  }
+  if (member.type === 'channel') {
+    requirePermission(member, 'post_messages', 'Only channel admins can post')
+  } else {
+    requirePermission(member, 'send_messages', 'Sending messages is not allowed')
+  }
+  if (media) requirePermission(member, 'send_media', 'Sending media is not allowed')
+  if (poll) requirePermission(member, 'send_polls', 'Sending polls is not allowed')
+
+  const slowModeSeconds = Number(member.slow_mode_seconds || 0)
+  if (slowModeSeconds > 0 && !['owner', 'admin', 'moderator'].includes(member.role)) {
+    const lastMessageAt = member.last_message_at ? new Date(member.last_message_at).getTime() : 0
+    const remainingMs = lastMessageAt + slowModeSeconds * 1000 - Date.now()
+    if (remainingMs > 0) {
+      const error = new Error(`Slow mode is active. Try again in ${Math.ceil(remainingMs / 1000)} seconds`)
+      error.status = 429
+      throw error
+    }
+  }
+  return member
+}
+
 async function ensureChatSettings(chatId, userId) {
   const result = await db.query(
     `INSERT INTO chat_user_settings (chat_id, user_id)
      VALUES ($1, $2)
      ON CONFLICT (chat_id, user_id) DO UPDATE SET updated_at = chat_user_settings.updated_at
-     RETURNING pinned, pinned_at, muted_until, archived, archived_at`,
+     RETURNING pinned, pinned_at, muted_until, archived, archived_at, push_mode`,
     [chatId, userId],
   )
   return result.rows[0]
@@ -295,20 +851,155 @@ async function getReactionCounts(messageId) {
   return Object.fromEntries(result.rows.map((reaction) => [reaction.emoji, reaction.count]))
 }
 
+async function publicMessagesFromRows(chatId, rows, currentUserId = null) {
+  const reactionResult = await db.query(
+    `SELECT mr.message_id, mr.emoji, COUNT(*)::integer AS count
+     FROM message_reactions mr
+     JOIN messages m ON m.id = mr.message_id
+     WHERE m.chat_id = $1
+     GROUP BY mr.message_id, mr.emoji`,
+    [chatId],
+  )
+  const reactionsByMessage = new Map()
+  reactionResult.rows.forEach((reaction) => {
+    const reactions = reactionsByMessage.get(reaction.message_id) || {}
+    reactions[reaction.emoji] = reaction.count
+    reactionsByMessage.set(reaction.message_id, reactions)
+  })
+  const readResult = await db.query(
+    `SELECT mr.message_id
+     FROM message_reads mr
+     JOIN messages m ON m.id = mr.message_id
+     WHERE m.chat_id = $1 AND mr.user_id <> m.sender_id
+     GROUP BY mr.message_id`,
+    [chatId],
+  )
+  const readMessages = new Set(readResult.rows.map((read) => read.message_id))
+  const messageIds = rows.map((message) => message.id)
+  const pollResult = messageIds.length
+    ? await db.query(
+        `SELECT p.id AS poll_id, p.message_id, p.question, p.multiple_choice,
+                p.anonymous, p.quiz, p.closed_at,
+                po.id AS option_id, po.text, po.sort_order,
+                COUNT(pv.user_id)::integer AS votes,
+                ${currentUserId ? `EXISTS (
+                  SELECT 1 FROM poll_votes mine
+                  WHERE mine.poll_id = p.id
+                    AND mine.option_id = po.id
+                    AND mine.user_id = $2
+                )` : 'FALSE'} AS voted_by_me
+         FROM polls p
+         JOIN poll_options po ON po.poll_id = p.id
+         LEFT JOIN poll_votes pv ON pv.option_id = po.id
+         WHERE p.message_id = ANY($1::uuid[])
+         GROUP BY p.id, p.message_id, p.question, p.multiple_choice,
+                  p.anonymous, p.quiz, p.closed_at, po.id, po.text, po.sort_order
+         ORDER BY po.sort_order`,
+        currentUserId ? [messageIds, currentUserId] : [messageIds],
+      )
+    : { rows: [] }
+  const pollsByMessage = new Map()
+  pollResult.rows.forEach((row) => {
+    const poll = pollsByMessage.get(row.message_id) || {
+      id: row.poll_id,
+      question: row.question,
+      multipleChoice: isDatabaseTrue(row.multiple_choice),
+      anonymous: isDatabaseTrue(row.anonymous),
+      quiz: isDatabaseTrue(row.quiz),
+      closedAt: row.closed_at || null,
+      options: [],
+    }
+    poll.options.push({
+      id: row.option_id,
+      text: row.text,
+      votes: Number(row.votes || 0),
+      votedByMe: isDatabaseTrue(row.voted_by_me),
+    })
+    pollsByMessage.set(row.message_id, poll)
+  })
+  const statsResult = messageIds.length
+    ? await db.query(
+        `SELECT message_id, views, reposts
+         FROM channel_post_stats
+         WHERE message_id = ANY($1::uuid[])`,
+        [messageIds],
+      )
+    : { rows: [] }
+  const statsByMessage = new Map(
+    statsResult.rows.map((row) => [
+      row.message_id,
+      { views: Number(row.views || 0), reposts: Number(row.reposts || 0) },
+    ]),
+  )
+
+  return rows.map((message) => ({
+    id: message.id,
+    chatId: message.chat_id,
+    senderId: message.sender_id,
+    text: message.deleted_at
+      ? ''
+      : decryptMessage({
+          ciphertext: message.ciphertext,
+          iv: message.iv,
+          authTag: message.auth_tag,
+        }),
+    createdAt: message.created_at,
+    topicId: message.topic_id || null,
+    editedAt: message.edited_at,
+    deletedAt: message.deleted_at,
+    silent: isDatabaseTrue(message.silent),
+    scheduledAt: message.scheduled_at || null,
+    sentAt: message.sent_at || null,
+    replyToId: message.reply_to_id,
+    forwarded: Boolean(message.forwarded_from_message_id),
+    forwardedFromMessageId: message.forwarded_from_message_id,
+    forwardedFromChatId: message.forwarded_from_chat_id,
+    reactions: reactionsByMessage.get(message.id) || {},
+    status: readMessages.has(message.id) ? 'read' : 'sent',
+    media: message.media_id
+      ? {
+          id: message.media_id,
+          kind: message.media_kind,
+          name: message.media_name,
+          mimeType: message.media_mime_type,
+          size: Number(message.media_size),
+          originalSize: Number(message.media_original_size),
+          width: message.media_width,
+          height: message.media_height,
+          durationMs: message.media_duration ?? null,
+          url: `/api/media/${message.media_id}`,
+          encrypted: isDatabaseTrue(message.media_client_encrypted),
+          envelope: message.media_envelope || '',
+      }
+      : null,
+    poll: pollsByMessage.get(message.id) || null,
+    stats: statsByMessage.get(message.id) || null,
+    linkPreview: message.link_preview || null,
+  }))
+}
+
 function addSocket(userId, socket) {
   const sockets = socketsByUserId.get(userId) || new Set()
   sockets.add(socket)
   socketsByUserId.set(userId, sockets)
+  websocketConnections.inc()
+  onlineUserIdCache.add(userId)
+  return sockets.size
 }
 
 function removeSocket(userId, socket) {
   const sockets = socketsByUserId.get(userId)
-  if (!sockets) return
+  if (!sockets) return 0
   sockets.delete(socket)
-  if (!sockets.size) socketsByUserId.delete(userId)
+  websocketConnections.dec()
+  if (!sockets.size) {
+    socketsByUserId.delete(userId)
+    onlineUserIdCache.delete(userId)
+  }
+  return sockets.size
 }
 
-function sendToUser(userId, payload) {
+function deliverToLocalUser(userId, payload) {
   const sockets = socketsByUserId.get(userId)
   if (!sockets) return false
   const message = JSON.stringify(payload)
@@ -322,7 +1013,13 @@ function sendToUser(userId, payload) {
   return delivered
 }
 
-function broadcast(payload, excludedUserId = '') {
+async function sendToUser(userId, payload) {
+  const deliveredLocally = deliverToLocalUser(userId, payload)
+  await publishSocketMessage({ kind: 'user', userId, payload })
+  return deliveredLocally || (await isUserOnline(userId))
+}
+
+function deliverLocalBroadcast(payload, excludedUserId = '') {
   const message = JSON.stringify(payload)
   socketsByUserId.forEach((sockets, userId) => {
     if (userId === excludedUserId) return
@@ -332,30 +1029,457 @@ function broadcast(payload, excludedUserId = '') {
   })
 }
 
+async function broadcast(payload, excludedUserId = '') {
+  deliverLocalBroadcast(payload, excludedUserId)
+  await publishSocketMessage({ kind: 'broadcast', excludedUserId, payload })
+}
+
 async function sendToChatExcept(chatId, excludedUserId, payload) {
   const members = await db.query(
     'SELECT user_id FROM chat_members WHERE chat_id = $1 AND user_id <> $2',
     [chatId, excludedUserId],
   )
   let delivered = 0
-  members.rows.forEach((member) => {
-    if (sendToUser(member.user_id, payload)) delivered += 1
-  })
+  for (const member of members.rows) {
+    if (await sendToUser(member.user_id, payload)) delivered += 1
+  }
   return delivered
 }
 
 async function sendToChat(chatId, payload) {
   const members = await db.query('SELECT user_id FROM chat_members WHERE chat_id = $1', [chatId])
   let delivered = 0
-  members.rows.forEach((member) => {
-    if (sendToUser(member.user_id, payload)) delivered += 1
-  })
+  for (const member of members.rows) {
+    if (await sendToUser(member.user_id, payload)) delivered += 1
+  }
   return delivered
 }
 
+async function sendToCall(callId, payload, excludedUserId = '') {
+  const participants = await db.query(
+    'SELECT user_id FROM call_participants WHERE call_id = $1',
+    [callId],
+  )
+  let delivered = 0
+  for (const participant of participants.rows) {
+    if (participant.user_id === excludedUserId) continue
+    if (await sendToUser(participant.user_id, payload)) delivered += 1
+  }
+  return delivered
+}
+
+async function getCallParticipants(callId, currentUserId) {
+  const result = await db.query(
+    `SELECT cp.user_id AS id, cp.role, cp.state, cp.muted, cp.camera_off,
+            cp.screen_sharing, cp.joined_at, cp.left_at, cp.last_seen_at,
+            u.login, u.username, u.name, u.bio, u.status, u.avatar, u.encryption_public_key,
+            u.last_seen_at AS user_last_seen_at,
+            EXISTS (
+              SELECT 1 FROM user_blocks ub
+              WHERE ub.blocker_id = $2 AND ub.blocked_id = u.id
+            ) AS blocked_by_me,
+            EXISTS (
+              SELECT 1 FROM user_blocks ub
+              WHERE ub.blocker_id = u.id AND ub.blocked_id = $2
+            ) AS blocked_me
+     FROM call_participants cp
+     JOIN users u ON u.id = cp.user_id
+     WHERE cp.call_id = $1
+     ORDER BY CASE WHEN cp.role = 'initiator' THEN 0 ELSE 1 END, cp.joined_at, u.name`,
+    [callId, currentUserId],
+  )
+  return result.rows.map((row) => ({
+    ...publicUser({ ...row, last_seen_at: row.user_last_seen_at }),
+    role: row.role,
+    state: row.state,
+    muted: isDatabaseTrue(row.muted),
+    cameraOff: isDatabaseTrue(row.camera_off),
+    sharingScreen: isDatabaseTrue(row.screen_sharing),
+    joinedAt: row.joined_at || null,
+    leftAt: row.left_at || null,
+    callLastSeenAt: row.last_seen_at || null,
+    self: row.id === currentUserId,
+  }))
+}
+
+function publicCallRow(row, participants) {
+  return {
+    id: row.id,
+    chatId: row.chat_id || null,
+    initiatorId: row.initiator_id,
+    recipientId: row.recipient_id || null,
+    kind: row.kind,
+    status: row.status,
+    chatType: row.chat_type || null,
+    chatTitle: row.chat_title || '',
+    createdAt: row.created_at,
+    answeredAt: row.answered_at || null,
+    endedAt: row.ended_at || null,
+    participants,
+  }
+}
+
+function normalizePushExpiration(value) {
+  if (!value) return null
+  const date = new Date(value)
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null
+}
+
+function mentionPattern(username) {
+  return new RegExp(`(^|[^\\w])@${username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=$|[^\\w])`, 'i')
+}
+
+function messageMentionsUser(searchText, user) {
+  const username = String(user.username || '').replace(/^@/, '').trim()
+  if (!username) return false
+  return mentionPattern(username).test(String(searchText || ''))
+}
+
+function messagePushBody(message, mentioned) {
+  if (mentioned) return 'Mentioned you'
+  if (message.media) {
+    const labels = {
+      image: 'Photo',
+      video: 'Video',
+      voice: 'Voice message',
+      file: 'File',
+    }
+    return labels[message.media.kind] || 'Attachment'
+  }
+  return 'New message'
+}
+
+function shouldSendChatPush({ muted, pushMode, mentioned }) {
+  if (pushMode === 'off') return false
+  if (mentioned) return true
+  if (muted) return false
+  if (pushMode === 'mentions') return false
+  return true
+}
+
+function toWebPushSubscription(row) {
+  return {
+    endpoint: row.endpoint,
+    keys: {
+      p256dh: row.p256dh,
+      auth: row.auth,
+    },
+  }
+}
+
+async function sendPushToSubscription(row, payload) {
+  // Native mobile tokens are stored as `fcm:<token>` and go through FCM v1.
+  if (row.endpoint.startsWith('fcm:')) {
+    try {
+      const result = await sendFcmMessage(row.endpoint.slice(4), {
+        title: payload.title,
+        body: payload.body,
+        data: { chatId: payload.chatId || '', messageId: payload.messageId || '' },
+      })
+      if (result.unregistered) {
+        await db.query('DELETE FROM push_subscriptions WHERE id = $1', [row.id])
+        return false
+      }
+      if (result.ok) {
+        await db.query(
+          `UPDATE push_subscriptions
+           SET last_success_at = NOW(), last_error = '', updated_at = NOW()
+           WHERE id = $1`,
+          [row.id],
+        )
+      }
+      return result.ok
+    } catch (error) {
+      console.warn('[push] fcm send failed', error.message)
+      return false
+    }
+  }
+  try {
+    await webpush.sendNotification(toWebPushSubscription(row), JSON.stringify(payload), {
+      TTL: 24 * 60 * 60,
+      urgency: payload.mentioned ? 'high' : 'normal',
+      topic: `chat-${payload.chatId}`.slice(0, 32),
+      timeout: 5000,
+    })
+    await db.query(
+      `UPDATE push_subscriptions
+       SET last_success_at = NOW(), last_error = '', updated_at = NOW()
+       WHERE id = $1`,
+      [row.id],
+    )
+    return true
+  } catch (error) {
+    if (error.statusCode === 404 || error.statusCode === 410) {
+      await db.query('DELETE FROM push_subscriptions WHERE id = $1', [row.id])
+      return false
+    }
+    await db.query(
+      `UPDATE push_subscriptions
+       SET last_error = $1, updated_at = NOW()
+       WHERE id = $2`,
+      [String(error.message || 'Push failed').slice(0, 500), row.id],
+    )
+    console.warn('[push] send failed', error.statusCode || '', error.message)
+    return false
+  }
+}
+
+async function sendOfflineMessagePushes({ chatId, sender, message, searchText }) {
+  if (!config.vapid.enabled && !isFcmEnabled()) return 0
+
+  const recipients = await db.query(
+    `SELECT cm.user_id, u.username, u.name, c.type, c.title,
+            cus.muted_until, cus.push_mode
+     FROM chat_members cm
+     JOIN users u ON u.id = cm.user_id
+     JOIN chats c ON c.id = cm.chat_id
+     LEFT JOIN chat_user_settings cus
+       ON cus.chat_id = cm.chat_id AND cus.user_id = cm.user_id
+     WHERE cm.chat_id = $1 AND cm.user_id <> $2`,
+    [chatId, sender.id],
+  )
+
+  let sent = 0
+  for (const recipient of recipients.rows) {
+    const online = socketsByUserId.has(recipient.user_id) || (await isUserOnline(recipient.user_id))
+    if (online) continue
+
+    const muted = isFutureTimestamp(recipient.muted_until)
+    const pushMode = recipient.push_mode || 'default'
+    const mentioned = messageMentionsUser(searchText, recipient)
+    if (!shouldSendChatPush({ muted, pushMode, mentioned })) continue
+
+    const subscriptions = await db.query(
+      `SELECT id, endpoint, p256dh, auth
+       FROM push_subscriptions
+       WHERE user_id = $1`,
+      [recipient.user_id],
+    )
+    if (!subscriptions.rows.length) continue
+
+    const chatTitle = recipient.type === 'private'
+      ? sender.name
+      : recipient.title || (recipient.type === 'channel' ? 'Channel' : 'Group')
+    const payload = {
+      title: mentioned ? `${sender.name} mentioned you` : chatTitle,
+      body: messagePushBody(message, mentioned),
+      chatId,
+      messageId: message.id,
+      url: `/?chat=${encodeURIComponent(chatId)}`,
+      tag: `chat-${chatId}`,
+      mentioned,
+    }
+
+    for (const subscription of subscriptions.rows) {
+      if (await sendPushToSubscription(subscription, payload)) sent += 1
+    }
+  }
+  return sent
+}
+
+async function publishScheduledMessage(messageId) {
+  const result = await db.query(
+    `UPDATE messages
+     SET sent_at = NOW()
+     WHERE id = $1
+       AND scheduled_at IS NOT NULL
+       AND sent_at IS NULL
+     RETURNING id, chat_id, sender_id, topic_id, forwarded_from_message_id, search_text`,
+    [messageId],
+  )
+  const scheduled = result.rows[0]
+  if (!scheduled) return null
+
+  const rows = await db.query(
+    `SELECT ${MESSAGE_SELECT_COLUMNS}
+     FROM messages m
+     LEFT JOIN media_files mf ON mf.id = m.media_id
+     WHERE m.id = $1`,
+    [messageId],
+  )
+  const [publicMessage] = await publicMessagesFromRows(scheduled.chat_id, rows.rows)
+  if (!publicMessage) return null
+
+  await db.transaction(async (tx) => {
+    await tx.query(
+      'UPDATE chat_members SET last_message_at = NOW() WHERE chat_id = $1 AND user_id = $2',
+      [scheduled.chat_id, scheduled.sender_id],
+    )
+    if (scheduled.topic_id) {
+      await tx.query(
+        `UPDATE chat_topics
+         SET message_count = message_count + 1,
+             last_message_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $1 AND chat_id = $2`,
+        [scheduled.topic_id, scheduled.chat_id],
+      )
+    }
+    const chatResult = await tx.query('SELECT type FROM chats WHERE id = $1 LIMIT 1', [scheduled.chat_id])
+    if (chatResult.rows[0]?.type === 'channel') {
+      await tx.query(
+        `INSERT INTO channel_post_stats (message_id)
+         VALUES ($1)
+         ON CONFLICT (message_id) DO NOTHING`,
+        [messageId],
+      )
+    }
+    if (scheduled.forwarded_from_message_id) {
+      await tx.query(
+        `INSERT INTO channel_post_stats (message_id, reposts)
+         VALUES ($1, 1)
+         ON CONFLICT (message_id)
+         DO UPDATE SET reposts = channel_post_stats.reposts + 1,
+                       updated_at = NOW()`,
+        [scheduled.forwarded_from_message_id],
+      )
+    }
+  })
+
+  await sendToChatExcept(scheduled.chat_id, scheduled.sender_id, {
+    type: 'message:new',
+    message: publicMessage,
+  })
+  const senderResult = await db.query('SELECT * FROM users WHERE id = $1 LIMIT 1', [scheduled.sender_id])
+  if (senderResult.rows[0] && !publicMessage.silent) {
+    await sendOfflineMessagePushes({
+      chatId: scheduled.chat_id,
+      sender: senderResult.rows[0],
+      message: publicMessage,
+      searchText: scheduled.search_text,
+    })
+  }
+  await sendToUser(scheduled.sender_id, {
+    type: 'message:delivered',
+    chatId: scheduled.chat_id,
+    messageId,
+    delivered: true,
+  })
+  return publicMessage
+}
+
+async function publishDueScheduledMessages() {
+  const due = await db.query(
+    `SELECT id
+     FROM messages
+     WHERE scheduled_at IS NOT NULL
+       AND scheduled_at <= NOW()
+       AND sent_at IS NULL
+     ORDER BY scheduled_at ASC
+     LIMIT 50`,
+  )
+  for (const message of due.rows) {
+    try {
+      await publishScheduledMessage(message.id)
+    } catch (error) {
+      console.error('[scheduled] publish failed', message.id, error.message)
+    }
+  }
+}
+
+app.get('/api/live', (_request, response) => {
+  response.json({ ok: true })
+})
+
 app.get('/api/health', async (_request, response) => {
   await db.query('SELECT 1')
-  response.json({ ok: true, database: 'ready', websocket: 'ready' })
+  const storage = await checkStorage()
+  const redisStatus = await checkRedis()
+  response.json({
+    ok: true,
+    database: config.databaseUrl ? 'postgres' : 'pglite',
+    storage,
+    redis: redisStatus,
+    websocket: 'ready',
+  })
+})
+
+app.get('/metrics', async (_request, response) => {
+  response.setHeader('Content-Type', metricsContentType())
+  response.send(await metricsText())
+})
+
+// ── OG / Link preview scraper ──────────────────────────────────────────────
+const ogCache = new Map()
+const OG_CACHE_TTL = 60 * 60 * 1000
+const OG_FETCH_TIMEOUT = 5000
+const OG_MAX_BYTES = 65536
+const OG_BLOCKED_HOSTS = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1|0\.0\.0\.0)/i
+
+function parseOgTags(html) {
+  const meta = {}
+  const ogPropRe = /<meta\s+(?:[^>]*?\s)?(?:property|name)=["']og:([^"']+)["'][^>]*?content=["']([^"']*?)["'][^>]*?\/?>/gi
+  const ogContRe = /<meta\s+(?:[^>]*?\s)?content=["']([^"']*?)["'][^>]*?(?:property|name)=["']og:([^"']+)["'][^>]*?\/?>/gi
+  const titleRe = /<title[^>]*>([^<]{1,512})<\/title>/i
+  const descRe = /<meta\s+(?:[^>]*?\s)?name=["']description["'][^>]*?content=["']([^"']{1,1024})["'][^>]*?\/?>/i
+  const descCRe = /<meta\s+(?:[^>]*?\s)?content=["']([^"']{1,1024})["'][^>]*?name=["']description["'][^>]*?\/?>/i
+  let m
+  while ((m = ogPropRe.exec(html)) !== null) meta[m[1].toLowerCase()] = m[2]
+  while ((m = ogContRe.exec(html)) !== null) meta[m[2].toLowerCase()] = meta[m[2].toLowerCase()] || m[1]
+  if (!meta.title) { const t = titleRe.exec(html); if (t) meta.title = t[1].trim() }
+  if (!meta.description) {
+    const d = descRe.exec(html) || descCRe.exec(html)
+    if (d) meta.description = d[1].trim()
+  }
+  return {
+    title: meta.title?.slice(0, 512) || null,
+    description: meta.description?.slice(0, 1024) || null,
+    image: meta.image?.slice(0, 2048) || null,
+    site: (meta['site_name'] || meta.site)?.slice(0, 128) || null,
+  }
+}
+
+app.get('/api/og', requireAuth, async (request, response) => {
+  const raw = String(request.query.url || '').trim()
+  if (!raw) return response.status(400).json({ error: 'Missing url' })
+  let parsed
+  try { parsed = new URL(raw) } catch { return response.status(400).json({ error: 'Invalid url' }) }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    return response.status(400).json({ error: 'Only http/https allowed' })
+  }
+  if (OG_BLOCKED_HOSTS.test(parsed.hostname)) {
+    return response.status(400).json({ error: 'Private hosts not allowed' })
+  }
+  const cacheKey = raw
+  const cached = ogCache.get(cacheKey)
+  if (cached && Date.now() - cached.ts < OG_CACHE_TTL) {
+    return response.json(cached.data)
+  }
+  try {
+    const mod = parsed.protocol === 'https:' ? await import('node:https') : await import('node:http')
+    const data = await new Promise((resolve, reject) => {
+      const req = mod.get(raw, {
+        headers: { 'User-Agent': 'OndaBot/1.0 (+https://example.com/bot)', Accept: 'text/html' },
+        timeout: OG_FETCH_TIMEOUT,
+      }, (res) => {
+        if (res.statusCode >= 400) { res.destroy(); reject(new Error(`HTTP ${res.statusCode}`)); return }
+        const ct = res.headers['content-type'] || ''
+        if (!ct.includes('text/html') && !ct.includes('text/xml')) {
+          res.destroy(); reject(new Error('Not HTML')); return
+        }
+        let buf = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk) => {
+          buf += chunk
+          if (buf.length > OG_MAX_BYTES) { res.destroy(); resolve(buf) }
+        })
+        res.on('end', () => resolve(buf))
+        res.on('error', reject)
+      })
+      req.on('error', reject)
+      req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')) })
+    })
+    const tags = parseOgTags(data)
+    const result = { url: raw, ...tags }
+    ogCache.set(cacheKey, { ts: Date.now(), data: result })
+    if (ogCache.size > 500) {
+      const oldestKey = ogCache.keys().next().value
+      ogCache.delete(oldestKey)
+    }
+    response.json(result)
+  } catch {
+    response.status(422).json({ error: 'Could not fetch preview' })
+  }
 })
 
 app.post('/api/auth/register', authLimiter, async (request, response) => {
@@ -394,7 +1518,8 @@ app.post('/api/auth/register', authLimiter, async (request, response) => {
 
   await createSession(response, userId, request)
   const userResult = await db.query(
-    `SELECT id, login, username, name, bio, avatar, last_seen_at, encryption_public_key
+    `SELECT id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
+            totp_secret, totp_enabled_at
      FROM users WHERE id = $1`,
     [userId],
   )
@@ -405,6 +1530,8 @@ const TEST_ACCOUNTS = {
   1: { login: 'test_one', name: 'Test One', password: 'astrachat-demo-one' },
   2: { login: 'test_two', name: 'Test Two', password: 'astrachat-demo-two' },
 }
+
+const TEST_ACCOUNT_LOGINS = new Set(Object.values(TEST_ACCOUNTS).map((account) => account.login))
 
 app.post('/api/auth/test-login', authLimiter, async (request, response) => {
   if (config.isProduction) {
@@ -420,7 +1547,8 @@ app.post('/api/auth/test-login', authLimiter, async (request, response) => {
 
   // Ensure the fixed demo account exists, then sign in as it.
   let result = await db.query(
-    `SELECT id, login, username, name, bio, avatar, last_seen_at, encryption_public_key
+    `SELECT id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
+            totp_secret, totp_enabled_at
      FROM users WHERE login = $1 LIMIT 1`,
     [account.login],
   )
@@ -436,7 +1564,8 @@ app.post('/api/auth/test-login', authLimiter, async (request, response) => {
       await createSavedChat(tx, userId)
     })
     result = await db.query(
-      `SELECT id, login, username, name, bio, avatar, last_seen_at, encryption_public_key
+      `SELECT id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
+              totp_secret, totp_enabled_at
        FROM users WHERE id = $1`,
       [userId],
     )
@@ -449,8 +1578,8 @@ app.post('/api/auth/test-login', authLimiter, async (request, response) => {
 app.post('/api/auth/login', authLimiter, async (request, response) => {
   const input = parseBody(loginSchema, request.body)
   const result = await db.query(
-    `SELECT id, login, username, name, bio, avatar, last_seen_at, encryption_public_key,
-            password_salt, password_hash
+    `SELECT id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
+            password_salt, password_hash, totp_secret, totp_enabled_at
      FROM users WHERE login = $1 OR username = $1 LIMIT 1`,
     [input.login.toLowerCase()],
   )
@@ -461,6 +1590,16 @@ app.post('/api/auth/login', authLimiter, async (request, response) => {
 
   if (!valid) {
     response.status(401).json({ error: 'Invalid login or password' })
+    return
+  }
+
+  if (user.totp_secret && !input.totpCode) {
+    response.json({ totpRequired: true })
+    return
+  }
+
+  if (user.totp_secret && !verifyTotpCode(openTotpSecret(user.totp_secret), input.totpCode)) {
+    response.status(401).json({ error: 'Invalid authentication code' })
     return
   }
 
@@ -482,6 +1621,105 @@ app.post('/api/auth/logout', async (request, response) => {
   response.status(204).end()
 })
 
+app.get('/api/auth/totp/status', requireAuth, async (request, response) => {
+  const user = await loadOwnTotpState(request.user.id)
+  response.json({ enabled: Boolean(user?.totp_secret), enabledAt: user?.totp_enabled_at || null })
+})
+
+app.post('/api/auth/totp/setup', requireAuth, async (request, response) => {
+  const user = await loadOwnTotpState(request.user.id)
+  if (!user) {
+    response.status(404).json({ error: 'User not found' })
+    return
+  }
+  if (user.totp_secret) {
+    response.status(409).json({ error: 'Two-factor authentication is already enabled' })
+    return
+  }
+
+  const secret = createTotpSecret()
+  await db.query(
+    `UPDATE users
+     SET totp_pending_secret = $1, updated_at = NOW()
+     WHERE id = $2`,
+    [sealTotpSecret(secret), request.user.id],
+  )
+  response.json({
+    secret,
+    otpauthUrl: createTotpUri({ account: user.login || user.username, secret }),
+  })
+})
+
+app.post('/api/auth/totp/verify', authLimiter, requireAuth, async (request, response) => {
+  const input = parseBody(totpVerifySchema, request.body)
+  const user = await loadOwnTotpState(request.user.id)
+  if (!user?.totp_pending_secret) {
+    response.status(400).json({ error: 'Two-factor setup was not started' })
+    return
+  }
+
+  const secret = openTotpSecret(user.totp_pending_secret)
+  if (!verifyTotpCode(secret, input.code)) {
+    response.status(400).json({ error: 'Invalid authentication code' })
+    return
+  }
+
+  const result = await db.query(
+    `UPDATE users
+     SET totp_secret = $1,
+         totp_pending_secret = NULL,
+         totp_enabled_at = NOW(),
+         updated_at = NOW()
+     WHERE id = $2
+     RETURNING id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
+               totp_secret, totp_enabled_at`,
+    [sealTotpSecret(secret), request.user.id],
+  )
+  await createSecurityEvent({
+    userId: request.user.id,
+    actorUserId: request.user.id,
+    type: 'totp_enabled',
+    severity: 'medium',
+    title: 'Two-factor authentication enabled',
+    body: 'Authenticator app codes are now required when signing in.',
+  })
+  response.json({ user: publicUser(result.rows[0]) })
+})
+
+app.delete('/api/auth/totp', authLimiter, requireAuth, async (request, response) => {
+  const input = parseBody(totpVerifySchema, request.body)
+  const user = await loadOwnTotpState(request.user.id)
+  if (!user?.totp_secret) {
+    response.status(400).json({ error: 'Two-factor authentication is not enabled' })
+    return
+  }
+  if (!verifyTotpCode(openTotpSecret(user.totp_secret), input.code)) {
+    response.status(400).json({ error: 'Invalid authentication code' })
+    return
+  }
+
+  const result = await db.query(
+    `UPDATE users
+     SET totp_secret = NULL,
+         totp_pending_secret = NULL,
+         totp_enabled_at = NULL,
+         updated_at = NOW()
+     WHERE id = $1
+     RETURNING id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
+               totp_secret, totp_enabled_at`,
+    [request.user.id],
+  )
+  await createSecurityEvent({
+    userId: request.user.id,
+    actorUserId: request.user.id,
+    type: 'totp_disabled',
+    severity: 'high',
+    title: 'Two-factor authentication disabled',
+    body: 'Authenticator app codes are no longer required when signing in.',
+  })
+  response.json({ user: publicUser(result.rows[0]) })
+})
+
 app.get('/api/sessions', requireAuth, async (request, response) => {
   const currentTokenHash = getSessionTokenHash(request)
   const result = await db.query(
@@ -496,11 +1734,17 @@ app.get('/api/sessions', requireAuth, async (request, response) => {
 
 app.delete('/api/sessions', requireAuth, async (request, response) => {
   const currentTokenHash = getSessionTokenHash(request)
+  const deleted = await db.query(
+    `SELECT token_hash FROM sessions
+     WHERE user_id = $1 AND token_hash <> $2`,
+    [request.user.id, currentTokenHash],
+  )
   await db.query(
     `DELETE FROM sessions
      WHERE user_id = $1 AND token_hash <> $2`,
     [request.user.id, currentTokenHash],
   )
+  await deleteCachedSessions(deleted.rows.map((session) => session.token_hash))
   response.status(204).end()
 })
 
@@ -527,13 +1771,549 @@ app.delete('/api/sessions/:sessionId', requireAuth, async (request, response) =>
     request.params.sessionId,
     request.user.id,
   ])
+  await deleteCachedSession(session.token_hash)
+  response.status(204).end()
+})
+
+app.get('/api/security/events', requireAuth, async (request, response) => {
+  const unreadOnly = request.query.unread === 'true' || request.query.unread === '1'
+  const result = await db.query(
+    `SELECT se.id, se.actor_user_id, se.type, se.severity, se.title, se.body,
+            se.metadata, se.read_at, se.created_at,
+            u.username AS actor_username, u.name AS actor_name, u.avatar AS actor_avatar
+     FROM security_events se
+     LEFT JOIN users u ON u.id = se.actor_user_id
+     WHERE se.user_id = $1
+       AND ($2 = FALSE OR se.read_at IS NULL)
+     ORDER BY se.created_at DESC
+     LIMIT 50`,
+    [request.user.id, unreadOnly],
+  )
+  response.json({ events: result.rows.map(publicSecurityEvent) })
+})
+
+app.post('/api/security/events/read', requireAuth, async (_request, response) => {
+  await db.query(
+    `UPDATE security_events
+     SET read_at = NOW()
+     WHERE user_id = $1 AND read_at IS NULL`,
+    [_request.user.id],
+  )
+  response.status(204).end()
+})
+
+app.post('/api/security/events/:eventId/read', requireAuth, async (request, response) => {
+  const result = await db.query(
+    `UPDATE security_events
+     SET read_at = COALESCE(read_at, NOW())
+     WHERE id = $1 AND user_id = $2
+     RETURNING id`,
+    [request.params.eventId, request.user.id],
+  )
+  if (!result.rows.length) {
+    response.status(404).json({ error: 'Security event not found' })
+    return
+  }
+  response.status(204).end()
+})
+
+app.get('/api/users/blocks', requireAuth, async (request, response) => {
+  const result = await db.query(
+    `SELECT u.id, u.login, u.username, u.name, u.bio, u.status, u.avatar,
+            u.last_seen_at, u.encryption_public_key,
+            TRUE AS blocked_by_me, FALSE AS blocked_me,
+            ub.created_at AS blocked_at
+     FROM user_blocks ub
+     JOIN users u ON u.id = ub.blocked_id
+     WHERE ub.blocker_id = $1
+     ORDER BY ub.created_at DESC`,
+    [request.user.id],
+  )
+  response.json({
+    users: result.rows.map((row) => ({
+      ...publicUser(row),
+      blockedAt: row.blocked_at,
+    })),
+  })
+})
+
+app.post('/api/users/:userId/block', requireAuth, async (request, response) => {
+  if (request.params.userId === request.user.id) {
+    response.status(400).json({ error: 'Cannot block yourself' })
+    return
+  }
+  const target = await db.query('SELECT id FROM users WHERE id = $1 LIMIT 1', [request.params.userId])
+  if (!target.rows.length) {
+    response.status(404).json({ error: 'User not found' })
+    return
+  }
+  await db.query(
+    `INSERT INTO user_blocks (blocker_id, blocked_id)
+     VALUES ($1, $2)
+     ON CONFLICT (blocker_id, blocked_id) DO NOTHING`,
+    [request.user.id, request.params.userId],
+  )
+  await sendToUser(request.user.id, {
+    type: 'user:block-updated',
+    userId: request.params.userId,
+    blockedByMe: true,
+  })
+  response.status(201).json({ userId: request.params.userId, blockedByMe: true })
+})
+
+app.delete('/api/users/:userId/block', requireAuth, async (request, response) => {
+  await db.query(
+    'DELETE FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2',
+    [request.user.id, request.params.userId],
+  )
+  await sendToUser(request.user.id, {
+    type: 'user:block-updated',
+    userId: request.params.userId,
+    blockedByMe: false,
+  })
+  response.status(204).end()
+})
+
+app.post('/api/reports', requireAuth, async (request, response) => {
+  const input = parseBody(reportSchema, request.body)
+  let targetUserId = input.targetUserId || null
+  let targetChatId = input.chatId || null
+
+  if (targetUserId === request.user.id) {
+    response.status(400).json({ error: 'Cannot report yourself' })
+    return
+  }
+
+  if (targetUserId) {
+    const user = await db.query('SELECT id FROM users WHERE id = $1 LIMIT 1', [targetUserId])
+    if (!user.rows.length) {
+      response.status(404).json({ error: 'Reported user not found' })
+      return
+    }
+  }
+
+  if (input.targetMessageId) {
+    const message = await db.query(
+      `SELECT m.id, m.sender_id, m.chat_id
+       FROM messages m
+       JOIN chat_members cm ON cm.chat_id = m.chat_id AND cm.user_id = $2
+       WHERE m.id = $1
+       LIMIT 1`,
+      [input.targetMessageId, request.user.id],
+    )
+    if (!message.rows.length) {
+      response.status(404).json({ error: 'Reported message not found' })
+      return
+    }
+    targetUserId = targetUserId || message.rows[0].sender_id
+    targetChatId = targetChatId || message.rows[0].chat_id
+  }
+
+  if (targetChatId && !(await isChatMember(targetChatId, request.user.id))) {
+    response.status(404).json({ error: 'Reported chat not found' })
+    return
+  }
+
+  const reportId = randomUUID()
+  await db.query(
+    `INSERT INTO reports
+      (id, reporter_id, target_user_id, target_message_id, target_chat_id, reason, details)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [
+      reportId,
+      request.user.id,
+      targetUserId,
+      input.targetMessageId || null,
+      targetChatId,
+      input.reason,
+      input.details,
+    ],
+  )
+  response.status(201).json({ report: { id: reportId, status: 'open' } })
+})
+
+// Live wall: a public, fully anonymous stream of short notes. Nothing links a
+// wall message back to its author — by design, neither in the DB nor in the API.
+const WALL_MESSAGE_MAX_LENGTH = 120
+
+function publicWallMessage(row) {
+  return {
+    id: row.id,
+    text: row.text,
+    hue: Number(row.hue) || 20,
+    createdAt: row.created_at,
+  }
+}
+
+app.get('/api/wall', requireAuth, async (_request, response) => {
+  const result = await db.query(
+    `SELECT id, text, hue, created_at
+     FROM wall_messages
+     ORDER BY created_at DESC
+     LIMIT 60`,
+  )
+  response.json({ messages: result.rows.map(publicWallMessage).reverse() })
+})
+
+app.post('/api/wall', requireAuth, wallLimiter, async (request, response) => {
+  const text = String(request.body?.text || '')
+    // eslint-disable-next-line no-control-regex -- strip control characters from wall input
+    .replace(/[\u0000-\u001f\u007f]/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+  if (text.length < 2 || text.length > WALL_MESSAGE_MAX_LENGTH) {
+    response.status(400).json({
+      error: `Wall message must be 2-${WALL_MESSAGE_MAX_LENGTH} characters long`,
+    })
+    return
+  }
+  if (/https?:\/\/|www\./iu.test(text)) {
+    response.status(400).json({ error: 'Links are not allowed on the wall' })
+    return
+  }
+
+  // Spam heuristics: shouting, keyboard mashing, copy-paste floods.
+  const letters = text.match(/\p{L}/gu) || []
+  const upper = text.match(/\p{Lu}/gu) || []
+  if (letters.length >= 12 && upper.length / letters.length > 0.8) {
+    response.status(400).json({ error: 'Too much shouting for the wall' })
+    return
+  }
+  if (/(.)\1{6,}/u.test(text)) {
+    response.status(400).json({ error: 'Message looks like spam' })
+    return
+  }
+  const normalized = text.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+  const duplicate = await db.query(
+    `SELECT 1 FROM wall_messages
+     WHERE created_at > NOW() - INTERVAL '15 minutes'
+       AND lower(regexp_replace(text, '[^[:alnum:]]+', ' ', 'g')) = $1
+     LIMIT 1`,
+    [normalized],
+  )
+  if (duplicate.rows.length) {
+    response.status(409).json({ error: 'The wall already heard that recently' })
+    return
+  }
+
+  const hue = Number.isInteger(request.body?.hue)
+    ? Math.min(359, Math.max(0, request.body.hue))
+    : Math.floor(Math.random() * 360)
+  const id = randomUUID()
+  const result = await db.query(
+    `INSERT INTO wall_messages (id, text, hue)
+     VALUES ($1, $2, $3)
+     RETURNING id, text, hue, created_at`,
+    [id, text, hue],
+  )
+  const message = publicWallMessage(result.rows[0])
+  void broadcast({ type: 'wall:new', message })
+  response.status(201).json({ message })
+})
+
+// ── Cloud key backup ─────────────────────────────────────────────────────
+// Stores an opaque passphrase-encrypted blob; the server cannot read keys.
+
+app.get('/api/keys/backup', requireAuth, async (request, response) => {
+  const result = await db.query('SELECT payload, updated_at FROM key_backups WHERE user_id = $1', [
+    request.user.id,
+  ])
+  if (!result.rows.length) {
+    response.status(404).json({ error: 'No cloud key backup' })
+    return
+  }
+  response.json({ payload: result.rows[0].payload, updatedAt: result.rows[0].updated_at })
+})
+
+app.put('/api/keys/backup', requireAuth, async (request, response) => {
+  const payload = String(request.body?.payload || '')
+  if (!payload || payload.length > 32768) {
+    response.status(400).json({ error: 'Invalid key backup payload' })
+    return
+  }
+  await db.query(
+    `INSERT INTO key_backups (user_id, payload, updated_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (user_id) DO UPDATE SET payload = $2, updated_at = NOW()`,
+    [request.user.id, payload],
+  )
+  response.json({ ok: true })
+})
+
+app.delete('/api/keys/backup', requireAuth, async (request, response) => {
+  await db.query('DELETE FROM key_backups WHERE user_id = $1', [request.user.id])
+  response.json({ ok: true })
+})
+
+// ── Admin panel ──────────────────────────────────────────────────────────
+// Token-protected management API + a self-contained HTML panel at /admin.
+// The token lives in ADMIN_TOKEN env or <dataDir>/.admin-token.
+
+function requireAdmin(request, response, next) {
+  const token = request.headers['x-admin-token'] || request.query.token
+  if (!token || token !== config.adminToken) {
+    response.status(401).json({ error: 'Admin token required' })
+    return
+  }
+  next()
+}
+
+const adminBackupsDir = resolve(config.rootDir, 'backups')
+
+function directorySize(path) {
+  if (!existsSync(path)) return 0
+  let total = 0
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    const entryPath = resolve(path, entry.name)
+    total += entry.isDirectory() ? directorySize(entryPath) : statSync(entryPath).size
+  }
+  return total
+}
+
+async function adminCount(sql, params = []) {
+  const result = await db.query(sql, params)
+  return Number(result.rows[0]?.count || 0)
+}
+
+app.get('/admin', (_request, response) => {
+  response.sendFile(resolve(config.rootDir, 'server', 'admin-panel.html'))
+})
+
+app.get('/api/admin/overview', requireAdmin, async (_request, response) => {
+  const [users, chats, groups, channels, messages, messages24h, wall, media, sessions, calls] =
+    await Promise.all([
+      adminCount('SELECT COUNT(*)::integer AS count FROM users'),
+      adminCount('SELECT COUNT(*)::integer AS count FROM chats'),
+      adminCount("SELECT COUNT(*)::integer AS count FROM chats WHERE type = 'group'"),
+      adminCount("SELECT COUNT(*)::integer AS count FROM chats WHERE type = 'channel'"),
+      adminCount('SELECT COUNT(*)::integer AS count FROM messages'),
+      adminCount("SELECT COUNT(*)::integer AS count FROM messages WHERE created_at > NOW() - INTERVAL '24 hours'"),
+      adminCount('SELECT COUNT(*)::integer AS count FROM wall_messages'),
+      adminCount('SELECT COUNT(*)::integer AS count FROM media_files'),
+      adminCount('SELECT COUNT(*)::integer AS count FROM sessions WHERE expires_at > NOW()'),
+      adminCount('SELECT COUNT(*)::integer AS count FROM calls'),
+    ])
+  response.json({
+    database: config.databaseUrl ? 'postgres' : 'pglite',
+    storage: config.storageDriver || 'local',
+    dataSizeBytes: directorySize(config.dataDir),
+    users, chats, groups, channels, messages, messages24h, wall, media, sessions, calls,
+  })
+})
+
+app.get('/api/admin/users', requireAdmin, async (_request, response) => {
+  const result = await db.query(
+    `SELECT u.id, u.username, u.name, u.created_at, u.last_seen_at,
+            COUNT(m.id)::integer AS message_count
+     FROM users u LEFT JOIN messages m ON m.sender_id = u.id
+     GROUP BY u.id ORDER BY u.created_at DESC LIMIT 500`,
+  )
+  response.json({
+    users: result.rows.map((row) => ({
+      id: row.id,
+      username: row.username,
+      name: row.name,
+      createdAt: row.created_at,
+      lastSeenAt: row.last_seen_at,
+      messageCount: Number(row.message_count),
+    })),
+  })
+})
+
+app.delete('/api/admin/users/:userId', requireAdmin, async (request, response) => {
+  const userId = request.params.userId
+  const target = await db.query('SELECT id, login FROM users WHERE id = $1', [userId])
+  if (!target.rows.length) {
+    response.status(404).json({ error: 'User not found' })
+    return
+  }
+  if (TEST_ACCOUNT_LOGINS.has(target.rows[0].login)) {
+    response.status(400).json({ error: 'Test accounts cannot be deleted' })
+    return
+  }
+  await db.transaction(async (tx) => {
+    await tx.query('DELETE FROM messages WHERE sender_id = $1', [userId])
+    await tx.query('DELETE FROM calls WHERE initiator_id = $1 OR recipient_id = $1', [userId])
+    await tx.query('DELETE FROM chats WHERE created_by = $1', [userId])
+    await tx.query('DELETE FROM users WHERE id = $1', [userId])
+  })
+  response.json({ ok: true })
+})
+
+app.post('/api/admin/purge-test-users', requireAdmin, async (_request, response) => {
+  // Auto-generated accounts from old test runs (alice_media_…, profile_b_…, test_xxxxx…).
+  const junk = await db.query(
+    `SELECT id, login FROM users
+     WHERE login ~ '^(alice_media_|bob_media_|profile_[ab]_|sessions_|test_[a-z0-9]{6})'
+       AND login NOT IN ('test_one', 'test_two')`,
+  )
+  for (const row of junk.rows) {
+    await db.transaction(async (tx) => {
+      await tx.query('DELETE FROM messages WHERE sender_id = $1', [row.id])
+      await tx.query('DELETE FROM calls WHERE initiator_id = $1 OR recipient_id = $1', [row.id])
+      await tx.query('DELETE FROM chats WHERE created_by = $1', [row.id])
+      await tx.query('DELETE FROM users WHERE id = $1', [row.id])
+    })
+  }
+  response.json({ ok: true, deleted: junk.rows.map((row) => row.login) })
+})
+
+app.get('/api/admin/wall', requireAdmin, async (_request, response) => {
+  const result = await db.query(
+    'SELECT id, text, hue, created_at FROM wall_messages ORDER BY created_at DESC LIMIT 100',
+  )
+  response.json({ messages: result.rows.map(publicWallMessage) })
+})
+
+app.delete('/api/admin/wall/:messageId', requireAdmin, async (request, response) => {
+  await db.query('DELETE FROM wall_messages WHERE id = $1', [request.params.messageId])
+  response.json({ ok: true })
+})
+
+app.get('/api/admin/reports', requireAdmin, async (_request, response) => {
+  const result = await db.query(
+    `SELECT r.id, r.reason, r.details, r.status, r.created_at,
+            reporter.username AS reporter, target.username AS target
+     FROM reports r
+     LEFT JOIN users reporter ON reporter.id = r.reporter_id
+     LEFT JOIN users target ON target.id = r.target_user_id
+     ORDER BY r.created_at DESC LIMIT 100`,
+  )
+  response.json({ reports: result.rows })
+})
+
+app.get('/api/admin/backups', requireAdmin, (_request, response) => {
+  const backups = existsSync(adminBackupsDir)
+    ? readdirSync(adminBackupsDir)
+        .filter((name) => name.startsWith('onda-'))
+        .sort()
+        .reverse()
+        .map((name) => ({ name, sizeBytes: directorySize(resolve(adminBackupsDir, name)) }))
+    : []
+  response.json({ backups })
+})
+
+app.post('/api/admin/backup', requireAdmin, async (_request, response) => {
+  mkdirSync(adminBackupsDir, { recursive: true })
+  const name = `onda-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`
+  const target = resolve(adminBackupsDir, name)
+  mkdirSync(target, { recursive: true })
+  cpSync(config.dataDir, resolve(target, 'data'), { recursive: true })
+  writeFileSync(
+    resolve(target, 'manifest.json'),
+    JSON.stringify({ createdAt: new Date().toISOString(), database: config.databaseUrl ? 'postgres' : 'pglite' }, null, 2),
+  )
+  response.json({ ok: true, name, sizeBytes: directorySize(target) })
+})
+
+app.delete('/api/admin/backups/:name', requireAdmin, (request, response) => {
+  const name = request.params.name
+  if (!/^onda-[\w-]+$/.test(name)) {
+    response.status(400).json({ error: 'Invalid backup name' })
+    return
+  }
+  rmSync(resolve(adminBackupsDir, name), { recursive: true, force: true })
+  response.json({ ok: true })
+})
+
+app.post('/api/admin/cleanup', requireAdmin, async (_request, response) => {
+  await cleanupExpiredSessions()
+  const wall = await db.query(
+    `DELETE FROM wall_messages
+     WHERE id NOT IN (SELECT id FROM wall_messages ORDER BY created_at DESC LIMIT 500)
+     RETURNING id`,
+  )
+  response.json({ ok: true, wallTrimmed: wall.rows.length })
+})
+
+// Native mobile push: store the FCM device token (Capacitor apps).
+app.post('/api/push/fcm-token', requireAuth, async (request, response) => {
+  if (!isFcmEnabled()) {
+    response.status(503).json({ error: 'Native push (FCM) is not configured on this server' })
+    return
+  }
+  const input = parseBody(fcmTokenSchema, request.body)
+  await db.query(
+    `INSERT INTO push_subscriptions
+      (id, user_id, endpoint, p256dh, auth, user_agent)
+     VALUES ($1, $2, $3, '', '', $4)
+     ON CONFLICT (endpoint) DO UPDATE SET
+       user_id = EXCLUDED.user_id,
+       updated_at = NOW(),
+       last_error = ''`,
+    [randomUUID(), request.user.id, `fcm:${input.token}`, String(request.headers['user-agent'] || '').slice(0, 500)],
+  )
+  response.status(201).json({ ok: true })
+})
+
+app.get('/api/push/vapid-public-key', requireAuth, (_request, response) => {
+  response.json({
+    enabled: config.vapid.enabled,
+    publicKey: config.vapid.enabled ? config.vapid.publicKey : '',
+  })
+})
+
+app.post('/api/push/subscriptions', requireAuth, async (request, response) => {
+  if (!config.vapid.enabled) {
+    response.status(503).json({ error: 'Web Push is not configured' })
+    return
+  }
+
+  const input = parseBody(pushSubscriptionSchema, request.body)
+  const subscription = input.subscription
+  const expirationTime = normalizePushExpiration(subscription.expirationTime)
+
+  await db.query(
+    `INSERT INTO push_subscriptions
+      (id, user_id, endpoint, p256dh, auth, expiration_time, user_agent)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (endpoint) DO UPDATE SET
+       user_id = EXCLUDED.user_id,
+       p256dh = EXCLUDED.p256dh,
+       auth = EXCLUDED.auth,
+       expiration_time = EXCLUDED.expiration_time,
+       user_agent = EXCLUDED.user_agent,
+       updated_at = NOW(),
+       last_error = ''`,
+    [
+      randomUUID(),
+      request.user.id,
+      subscription.endpoint,
+      subscription.keys.p256dh,
+      subscription.keys.auth,
+      expirationTime,
+      String(request.headers['user-agent'] || '').slice(0, 500),
+    ],
+  )
+
+  response.status(201).json({ ok: true })
+})
+
+app.delete('/api/push/subscriptions', requireAuth, async (request, response) => {
+  const input = parseBody(deletePushSubscriptionSchema, request.body || {})
+  if (input.endpoint) {
+    await db.query('DELETE FROM push_subscriptions WHERE user_id = $1 AND endpoint = $2', [
+      request.user.id,
+      input.endpoint,
+    ])
+  } else {
+    await db.query('DELETE FROM push_subscriptions WHERE user_id = $1', [request.user.id])
+  }
   response.status(204).end()
 })
 
 app.get('/api/users', requireAuth, async (request, response) => {
   const search = String(request.query.search || '').trim()
   const result = await db.query(
-    `SELECT id, login, username, name, bio, avatar, last_seen_at, encryption_public_key
+    `SELECT id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
+            EXISTS (
+              SELECT 1 FROM user_blocks ub
+              WHERE ub.blocker_id = $1 AND ub.blocked_id = users.id
+            ) AS blocked_by_me,
+            EXISTS (
+              SELECT 1 FROM user_blocks ub
+              WHERE ub.blocker_id = users.id AND ub.blocked_id = $1
+            ) AS blocked_me
      FROM users
      WHERE id <> $1
        AND ($2 = '' OR username ILIKE '%' || $2 || '%' OR name ILIKE '%' || $2 || '%')
@@ -547,13 +2327,48 @@ app.get('/api/users', requireAuth, async (request, response) => {
 app.patch('/api/users/me/encryption-key', requireAuth, async (request, response) => {
   const input = parseBody(encryptionKeySchema, request.body)
   const keyValue = stringifyPublicKey(input.encryptionPublicKey)
+  const current = await db.query(
+    'SELECT encryption_public_key FROM users WHERE id = $1 LIMIT 1',
+    [request.user.id],
+  )
+  const previousKey = current.rows[0]?.encryption_public_key || ''
   const result = await db.query(
     `UPDATE users
      SET encryption_public_key = $1, updated_at = NOW()
      WHERE id = $2
-     RETURNING id, login, username, name, bio, avatar, last_seen_at, encryption_public_key`,
+     RETURNING id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
+               totp_secret, totp_enabled_at`,
     [keyValue, request.user.id],
   )
+  if (previousKey && previousKey !== keyValue) {
+    const changeId = randomUUID()
+    await db.query(
+      `INSERT INTO user_key_changes
+        (id, user_id, previous_public_key, next_public_key)
+       VALUES ($1, $2, $3, $4)`,
+      [changeId, request.user.id, previousKey, keyValue],
+    )
+    await createSecurityEvent({
+      userId: request.user.id,
+      actorUserId: request.user.id,
+      type: 'own_key_changed',
+      severity: 'medium',
+      title: 'Your encryption key changed',
+      body: 'Other devices may lose access to older encrypted messages unless they import the same key backup.',
+      metadata: { changeId },
+    })
+    for (const userId of await sharedUserIdsForKeyWarnings(request.user.id)) {
+      await createSecurityEvent({
+        userId,
+        actorUserId: request.user.id,
+        type: 'contact_key_changed',
+        severity: 'high',
+        title: `${request.user.name}'s encryption key changed`,
+        body: 'Verify this contact before trusting newly encrypted messages.',
+        metadata: { changeId, changedUserId: request.user.id },
+      })
+    }
+  }
   response.json({ user: publicUser(result.rows[0]) })
 })
 
@@ -562,10 +2377,11 @@ app.patch('/api/users/me/profile', requireAuth, async (request, response) => {
   try {
     const result = await db.query(
       `UPDATE users
-       SET name = $1, username = $2, bio = $3, avatar = $4, updated_at = NOW()
-       WHERE id = $5
-       RETURNING id, login, username, name, bio, avatar, last_seen_at, encryption_public_key`,
-      [input.name, input.username.toLowerCase(), input.bio, initials(input.name), request.user.id],
+       SET name = $1, username = $2, bio = $3, status = $4, avatar = $5, updated_at = NOW()
+       WHERE id = $6
+       RETURNING id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
+                 totp_secret, totp_enabled_at`,
+      [input.name, input.username.toLowerCase(), input.bio, input.status, initials(input.name), request.user.id],
     )
     response.json({ user: publicUser(result.rows[0]) })
   } catch (error) {
@@ -578,39 +2394,41 @@ app.patch('/api/users/me/profile', requireAuth, async (request, response) => {
 })
 
 app.post('/api/users/me/avatar', requireAuth, mediaUpload.single('file'), async (request, response) => {
-  if (!request.file) {
-    response.status(400).json({ error: 'No file uploaded' })
-    return
-  }
-  if (getMediaKind(request.file.mimetype) !== 'image') {
-    response.status(415).json({ error: 'Avatar must be a JPEG, PNG, WebP or AVIF image' })
-    return
-  }
-
-  const compressed = await compressAvatar(request.file.buffer)
-  const encrypted = encryptBuffer(compressed.data)
-  const storageName = `avatar-${request.user.id}-${Date.now()}.bin`
-  await writeFile(resolve(config.mediaDir, storageName), Buffer.from(encrypted.ciphertext, 'base64'), {
-    mode: 0o600,
-  })
-
-  const previous = await db.query('SELECT avatar_storage_name FROM users WHERE id = $1', [request.user.id])
-  await db.query(
-    `UPDATE users
-     SET avatar_storage_name = $1, avatar_mime = $2, avatar_iv = $3, avatar_auth_tag = $4,
-         avatar_updated_at = NOW(), updated_at = NOW()
-     WHERE id = $5`,
-    [storageName, compressed.mimeType, encrypted.iv, encrypted.authTag, request.user.id],
-  )
-  const previousName = previous.rows[0]?.avatar_storage_name
-  if (previousName && previousName !== storageName) {
-    try {
-      await rm(resolve(config.mediaDir, previousName), { force: true })
-    } catch {
-      // Ignore missing old avatar file.
+  try {
+    if (!request.file) {
+      response.status(400).json({ error: 'No file uploaded' })
+      return
     }
+    if (getMediaKind(request.file.mimetype) !== 'image') {
+      response.status(415).json({ error: 'Avatar must be a JPEG, PNG, WebP or AVIF image' })
+      return
+    }
+
+    const compressed = await compressAvatar(await readUploadedFile(request.file))
+    const encrypted = encryptBuffer(compressed.data)
+    const storageName = `avatar-${request.user.id}-${Date.now()}.bin`
+    await saveMediaObject(storageName, Buffer.from(encrypted.ciphertext, 'base64'))
+
+    const previous = await db.query('SELECT avatar_storage_name FROM users WHERE id = $1', [request.user.id])
+    await db.query(
+      `UPDATE users
+       SET avatar_storage_name = $1, avatar_mime = $2, avatar_iv = $3, avatar_auth_tag = $4,
+           avatar_updated_at = NOW(), updated_at = NOW()
+       WHERE id = $5`,
+      [storageName, compressed.mimeType, encrypted.iv, encrypted.authTag, request.user.id],
+    )
+    const previousName = previous.rows[0]?.avatar_storage_name
+    if (previousName && previousName !== storageName) {
+      try {
+        await deleteMediaObject(previousName)
+      } catch {
+        // Ignore missing old avatar file.
+      }
+    }
+    response.json({ ok: true, avatarUpdatedAt: new Date().toISOString() })
+  } finally {
+    await cleanupUploadedFile(request.file)
   }
-  response.json({ ok: true, avatarUpdatedAt: new Date().toISOString() })
 })
 
 app.delete('/api/users/me/avatar', requireAuth, async (request, response) => {
@@ -625,7 +2443,7 @@ app.delete('/api/users/me/avatar', requireAuth, async (request, response) => {
   const previousName = previous.rows[0]?.avatar_storage_name
   if (previousName) {
     try {
-      await rm(resolve(config.mediaDir, previousName), { force: true })
+      await deleteMediaObject(previousName)
     } catch {
       // Ignore.
     }
@@ -645,7 +2463,7 @@ app.get('/api/users/:userId/avatar', requireAuth, async (request, response) => {
   }
   let encryptedFile
   try {
-    encryptedFile = await readFile(resolve(config.mediaDir, row.avatar_storage_name))
+    encryptedFile = await getMediaObject(row.avatar_storage_name)
   } catch {
     response.status(404).json({ error: 'No avatar' })
     return
@@ -675,6 +2493,11 @@ app.post('/api/auth/change-password', requireAuth, async (request, response) => 
   }
   const password = await hashPassword(input.newPassword)
   const currentTokenHash = getSessionTokenHash(request)
+  const deletedSessions = await db.query(
+    `SELECT token_hash FROM sessions
+     WHERE user_id = $1 AND token_hash <> $2`,
+    [request.user.id, currentTokenHash],
+  )
   await db.transaction(async (tx) => {
     await tx.query(
       'UPDATE users SET password_salt = $1, password_hash = $2, updated_at = NOW() WHERE id = $3',
@@ -686,6 +2509,7 @@ app.post('/api/auth/change-password', requireAuth, async (request, response) => 
       currentTokenHash,
     ])
   })
+  await deleteCachedSessions(deletedSessions.rows.map((session) => session.token_hash))
   response.json({ ok: true })
 })
 
@@ -699,8 +2523,8 @@ app.delete('/api/users/me', requireAuth, async (request, response) => {
   })
   response.clearCookie(config.sessionCookieName, {
     httpOnly: true,
-    secure: config.isProduction,
-    sameSite: 'lax',
+    secure: config.sessionCookieSecure,
+    sameSite: config.sessionCookieSameSite,
     path: '/',
   })
   response.json({ ok: true })
@@ -708,8 +2532,10 @@ app.delete('/api/users/me', requireAuth, async (request, response) => {
 
 app.get('/api/chats', requireAuth, async (request, response) => {
   const result = await db.query(
-    `SELECT c.id, c.type, c.title, c.created_at, c.pinned_message_id, cm.role,
-            cus.pinned, cus.pinned_at, cus.muted_until, cus.archived, cus.archived_at
+    `SELECT c.id, c.type, c.title, c.created_at, c.pinned_message_id,
+            c.slow_mode_seconds, c.default_permissions, cm.role, cm.permissions,
+            cus.pinned, cus.pinned_at, cus.muted_until, cus.archived, cus.archived_at,
+            cus.push_mode
      FROM chats c
      JOIN chat_members cm ON cm.chat_id = c.id
      LEFT JOIN chat_user_settings cus
@@ -722,18 +2548,28 @@ app.get('/api/chats', requireAuth, async (request, response) => {
   const chats = await Promise.all(
     result.rows.map(async (chat) => {
       const members = await db.query(
-        `SELECT u.id, u.login, u.username, u.name, u.bio, u.avatar, u.last_seen_at,
-                u.encryption_public_key, cm.role
+        `SELECT u.id, u.login, u.username, u.name, u.bio, u.status, u.avatar, u.last_seen_at,
+                u.encryption_public_key, cm.role,
+                EXISTS (
+                  SELECT 1 FROM user_blocks ub
+                  WHERE ub.blocker_id = $2 AND ub.blocked_id = u.id
+                ) AS blocked_by_me,
+                EXISTS (
+                  SELECT 1 FROM user_blocks ub
+                  WHERE ub.blocker_id = u.id AND ub.blocked_id = $2
+                ) AS blocked_me
          FROM chat_members cm
          JOIN users u ON u.id = cm.user_id
          WHERE cm.chat_id = $1
          ORDER BY cm.joined_at`,
-        [chat.id],
+        [chat.id, request.user.id],
       )
       return {
         ...chat,
         settings: publicChatSettings(chat),
         pinnedMessageId: chat.pinned_message_id || null,
+        slowModeSeconds: Number(chat.slow_mode_seconds || 0),
+        permissions: publicChatPermissions(chat),
         members: members.rows.map((member) => ({
           ...publicUser(member),
           role: member.role,
@@ -754,6 +2590,11 @@ app.post('/api/chats', requireAuth, async (request, response) => {
   }
 
   if (input.type === 'private') {
+    const targetUserId = input.memberIds[0]
+    if (await hasBlockBetween(request.user.id, targetUserId)) {
+      response.status(403).json({ error: 'Private chat is blocked' })
+      return
+    }
     const existing = await db.query(
       `SELECT c.id
        FROM chats c
@@ -762,7 +2603,7 @@ app.post('/api/chats', requireAuth, async (request, response) => {
        WHERE c.type = 'private'
          AND (SELECT COUNT(*) FROM chat_members cm WHERE cm.chat_id = c.id) = 2
        LIMIT 1`,
-      [request.user.id, input.memberIds[0]],
+      [request.user.id, targetUserId],
     )
     if (existing.rows[0]) {
       const settings = await ensureChatSettings(existing.rows[0].id, request.user.id)
@@ -852,22 +2693,24 @@ app.patch('/api/chats/:chatId/settings', requireAuth, async (request, response) 
          muted_until = $3,
          archived = $4,
          archived_at = $5,
+         push_mode = $6,
          updated_at = NOW()
-     WHERE chat_id = $6 AND user_id = $7
-     RETURNING pinned, pinned_at, muted_until, archived, archived_at`,
+     WHERE chat_id = $7 AND user_id = $8
+     RETURNING pinned, pinned_at, muted_until, archived, archived_at, push_mode`,
     [
       pinned,
       pinnedAt,
       mutedUntil,
       archived,
       archivedAt,
+      input.pushMode || current.push_mode || 'default',
       request.params.chatId,
       request.user.id,
     ],
   )
 
   const settings = publicChatSettings(result.rows[0])
-  sendToUser(request.user.id, {
+  await sendToUser(request.user.id, {
     type: 'chat:settings',
     chatId: request.params.chatId,
     settings,
@@ -1128,7 +2971,7 @@ app.get('/api/link-preview', requireAuth, async (request, response) => {
     const timeoutId = setTimeout(() => controller.abort(), 5000)
     const fetchResponse = await fetch(url, {
       signal: controller.signal,
-      headers: { 'User-Agent': 'AstraChatBot/1.0 (+https://astrachat.app)' },
+      headers: { 'User-Agent': 'OndaBot/1.0' },
       redirect: 'follow',
     })
     clearTimeout(timeoutId)
@@ -1181,7 +3024,8 @@ app.get('/api/chats/:chatId/members', requireAuth, async (request, response) => 
   const row = await requireChatMemberRow(request.params.chatId, request.user.id)
   if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
   const result = await db.query(
-    `SELECT u.id, u.name, u.username, u.avatar, u.last_seen_at, cm.role, cm.joined_at
+    `SELECT u.id, u.name, u.username, u.status, u.avatar, u.last_seen_at,
+            cm.role, cm.permissions, cm.joined_at
      FROM chat_members cm
      JOIN users u ON u.id = cm.user_id
      WHERE cm.chat_id = $1
@@ -1192,9 +3036,11 @@ app.get('/api/chats/:chatId/members', requireAuth, async (request, response) => 
     id: r.id,
     name: r.name,
     username: r.username,
+    status: r.status || '',
     avatar: r.avatar,
     lastSeenAt: r.last_seen_at,
     role: r.role,
+    permissions: publicChatPermissions({ ...row, role: r.role, permissions: r.permissions }),
     joinedAt: r.joined_at,
   })) })
 })
@@ -1202,31 +3048,39 @@ app.get('/api/chats/:chatId/members', requireAuth, async (request, response) => 
 app.post('/api/chats/:chatId/members', requireAuth, async (request, response) => {
   const row = await requireChatMemberRow(request.params.chatId, request.user.id)
   if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
-  if (!['owner', 'admin'].includes(row.role)) {
-    response.status(403).json({ error: 'Only admins can add members' })
-    return
-  }
+  requirePermission(row, 'manage_members', 'Only admins can add members')
   const { userId } = request.body
   if (!userId || typeof userId !== 'string') {
     response.status(400).json({ error: 'userId is required' })
     return
   }
+  if (await isBannedFromChat(request.params.chatId, userId)) {
+    response.status(403).json({ error: 'User is banned in this chat' })
+    return
+  }
   // Verify user exists
   const userResult = await db.query('SELECT id, name, username FROM users WHERE id = $1', [userId])
   if (!userResult.rows.length) { response.status(404).json({ error: 'User not found' }); return }
-  await db.query(
-    `INSERT INTO chat_members (chat_id, user_id, role)
-     VALUES ($1, $2, 'member')
-     ON CONFLICT (chat_id, user_id) DO NOTHING`,
-    [request.params.chatId, userId],
-  )
-  // Insert default chat_user_settings if needed
-  await db.query(
-    `INSERT INTO chat_user_settings (chat_id, user_id)
-     VALUES ($1, $2)
-     ON CONFLICT (chat_id, user_id) DO NOTHING`,
-    [request.params.chatId, userId],
-  )
+  await db.transaction(async (tx) => {
+    await tx.query(
+      `INSERT INTO chat_members (chat_id, user_id, role)
+       VALUES ($1, $2, 'member')
+       ON CONFLICT (chat_id, user_id) DO NOTHING`,
+      [request.params.chatId, userId],
+    )
+    await tx.query(
+      `INSERT INTO chat_user_settings (chat_id, user_id)
+       VALUES ($1, $2)
+       ON CONFLICT (chat_id, user_id) DO NOTHING`,
+      [request.params.chatId, userId],
+    )
+    await appendAdminLog(tx, {
+      chatId: request.params.chatId,
+      actorUserId: request.user.id,
+      targetUserId: userId,
+      action: 'member.add',
+    })
+  })
   const payload = { type: 'chat:member-added', chatId: request.params.chatId, userId }
   await sendToChat(request.params.chatId, payload)
   response.json({ member: { id: userId, name: userResult.rows[0].name, username: userResult.rows[0].username } })
@@ -1236,32 +3090,631 @@ app.delete('/api/chats/:chatId/members/:userId', requireAuth, async (request, re
   const row = await requireChatMemberRow(request.params.chatId, request.user.id)
   if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
   const isSelf = request.params.userId === request.user.id
-  if (!isSelf && !['owner', 'admin'].includes(row.role)) {
-    response.status(403).json({ error: 'Only admins can remove members' })
+  if (!isSelf) requirePermission(row, 'manage_members', 'Only admins can remove members')
+  const target = await requireChatMemberRow(request.params.chatId, request.params.userId)
+  if (!target) {
+    response.status(404).json({ error: 'Member not found' })
     return
   }
-  await db.query(
-    'DELETE FROM chat_members WHERE chat_id = $1 AND user_id = $2',
-    [request.params.chatId, request.params.userId],
-  )
+  if (target.role === 'owner' && !isSelf) {
+    response.status(403).json({ error: 'Owner cannot be kicked' })
+    return
+  }
+  await db.transaction(async (tx) => {
+    await tx.query(
+      'DELETE FROM chat_members WHERE chat_id = $1 AND user_id = $2',
+      [request.params.chatId, request.params.userId],
+    )
+    await appendAdminLog(tx, {
+      chatId: request.params.chatId,
+      actorUserId: request.user.id,
+      targetUserId: request.params.userId,
+      action: isSelf ? 'member.leave' : 'member.kick',
+    })
+  })
   const payload = { type: 'chat:member-removed', chatId: request.params.chatId, userId: request.params.userId }
   await sendToChat(request.params.chatId, payload)
   response.json({ ok: true })
 })
 
+app.patch('/api/chats/:chatId/members/:userId/role', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+  requirePermission(row, 'manage_roles', 'Only owners can change roles')
+  const input = parseBody(memberRoleSchema, request.body)
+  const target = await requireChatMemberRow(request.params.chatId, request.params.userId)
+  if (!target) { response.status(404).json({ error: 'Member not found' }); return }
+  if (target.role === 'owner' && request.params.userId !== request.user.id) {
+    response.status(403).json({ error: 'Owner role cannot be changed by another user' })
+    return
+  }
+  await db.transaction(async (tx) => {
+    await tx.query(
+      `UPDATE chat_members
+       SET role = $1, permissions = $2
+       WHERE chat_id = $3 AND user_id = $4`,
+      [
+        input.role,
+        JSON.stringify(input.permissions || {}),
+        request.params.chatId,
+        request.params.userId,
+      ],
+    )
+    await appendAdminLog(tx, {
+      chatId: request.params.chatId,
+      actorUserId: request.user.id,
+      targetUserId: request.params.userId,
+      action: 'member.role',
+      metadata: { role: input.role, permissions: input.permissions || {} },
+    })
+  })
+  const payload = {
+    type: 'chat:member-role',
+    chatId: request.params.chatId,
+    userId: request.params.userId,
+    role: input.role,
+    permissions: input.permissions || {},
+  }
+  await sendToChat(request.params.chatId, payload)
+  response.json(payload)
+})
+
+app.patch('/api/chats/:chatId/members/:userId/permissions', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+  requirePermission(row, 'manage_roles', 'Only owners can change permissions')
+  const input = parseBody(memberPermissionsSchema, request.body)
+  await db.transaction(async (tx) => {
+    const result = await tx.query(
+      `UPDATE chat_members
+       SET permissions = $1
+       WHERE chat_id = $2 AND user_id = $3
+       RETURNING role, permissions`,
+      [JSON.stringify(input.permissions), request.params.chatId, request.params.userId],
+    )
+    if (!result.rows.length) {
+      const error = new Error('Member not found')
+      error.status = 404
+      throw error
+    }
+    await appendAdminLog(tx, {
+      chatId: request.params.chatId,
+      actorUserId: request.user.id,
+      targetUserId: request.params.userId,
+      action: 'member.permissions',
+      metadata: { permissions: input.permissions },
+    })
+  })
+  const payload = {
+    type: 'chat:member-permissions',
+    chatId: request.params.chatId,
+    userId: request.params.userId,
+    permissions: input.permissions,
+  }
+  await sendToChat(request.params.chatId, payload)
+  response.json(payload)
+})
+
+app.patch('/api/chats/:chatId/moderation', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+  requirePermission(row, 'manage_chat', 'Only admins can update moderation settings')
+  const input = parseBody(chatModerationSettingsSchema, request.body)
+  const nextSlowMode = input.slowModeSeconds ?? Number(row.slow_mode_seconds || 0)
+  const nextDefaults = input.defaultPermissions ?? parseJsonObject(row.default_permissions)
+  await db.transaction(async (tx) => {
+    await tx.query(
+      `UPDATE chats
+       SET slow_mode_seconds = $1, default_permissions = $2
+       WHERE id = $3`,
+      [nextSlowMode, JSON.stringify(nextDefaults), request.params.chatId],
+    )
+    await appendAdminLog(tx, {
+      chatId: request.params.chatId,
+      actorUserId: request.user.id,
+      action: 'chat.moderation',
+      metadata: { slowModeSeconds: nextSlowMode, defaultPermissions: nextDefaults },
+    })
+  })
+  const payload = {
+    type: 'chat:moderation',
+    chatId: request.params.chatId,
+    slowModeSeconds: nextSlowMode,
+    defaultPermissions: nextDefaults,
+  }
+  await sendToChat(request.params.chatId, payload)
+  response.json(payload)
+})
+
+app.get('/api/chats/:chatId/bans', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+  requirePermission(row, 'ban_users', 'Only moderators can view bans')
+  const result = await db.query(
+    `SELECT cb.user_id, cb.banned_by, cb.reason, cb.expires_at, cb.created_at,
+            u.name, u.username, u.avatar
+     FROM chat_bans cb
+     JOIN users u ON u.id = cb.user_id
+     WHERE cb.chat_id = $1
+       AND (cb.expires_at IS NULL OR cb.expires_at > NOW())
+     ORDER BY cb.created_at DESC`,
+    [request.params.chatId],
+  )
+  response.json({
+    bans: result.rows.map((ban) => ({
+      userId: ban.user_id,
+      bannedBy: ban.banned_by,
+      reason: ban.reason,
+      expiresAt: ban.expires_at || null,
+      createdAt: ban.created_at,
+      user: { id: ban.user_id, name: ban.name, username: ban.username, avatar: ban.avatar },
+    })),
+  })
+})
+
+app.post('/api/chats/:chatId/bans', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+  requirePermission(row, 'ban_users', 'Only moderators can ban users')
+  const input = parseBody(banMemberSchema, request.body)
+  const target = await requireChatMemberRow(request.params.chatId, input.userId)
+  if (target?.role === 'owner') {
+    response.status(403).json({ error: 'Owner cannot be banned' })
+    return
+  }
+  const expiresAt = input.durationSeconds
+    ? new Date(Date.now() + input.durationSeconds * 1000).toISOString()
+    : null
+  await db.transaction(async (tx) => {
+    await tx.query(
+      `INSERT INTO chat_bans (chat_id, user_id, banned_by, reason, expires_at)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (chat_id, user_id)
+       DO UPDATE SET banned_by = EXCLUDED.banned_by,
+                     reason = EXCLUDED.reason,
+                     expires_at = EXCLUDED.expires_at,
+                     created_at = NOW()`,
+      [request.params.chatId, input.userId, request.user.id, input.reason, expiresAt],
+    )
+    await tx.query('DELETE FROM chat_members WHERE chat_id = $1 AND user_id = $2', [
+      request.params.chatId,
+      input.userId,
+    ])
+    await appendAdminLog(tx, {
+      chatId: request.params.chatId,
+      actorUserId: request.user.id,
+      targetUserId: input.userId,
+      action: expiresAt ? 'member.temp_ban' : 'member.ban',
+      metadata: { reason: input.reason, expiresAt },
+    })
+  })
+  const payload = {
+    type: 'chat:member-banned',
+    chatId: request.params.chatId,
+    userId: input.userId,
+    expiresAt,
+  }
+  await sendToChat(request.params.chatId, payload)
+  await sendToUser(input.userId, payload)
+  response.status(201).json({ ban: { userId: input.userId, reason: input.reason, expiresAt } })
+})
+
+app.delete('/api/chats/:chatId/bans/:userId', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+  requirePermission(row, 'ban_users', 'Only moderators can unban users')
+  await db.transaction(async (tx) => {
+    await tx.query('DELETE FROM chat_bans WHERE chat_id = $1 AND user_id = $2', [
+      request.params.chatId,
+      request.params.userId,
+    ])
+    await appendAdminLog(tx, {
+      chatId: request.params.chatId,
+      actorUserId: request.user.id,
+      targetUserId: request.params.userId,
+      action: 'member.unban',
+    })
+  })
+  response.status(204).end()
+})
+
+app.get('/api/chats/:chatId/invites', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+  requirePermission(row, 'invite_users', 'Only admins can view invite links')
+  const result = await db.query(
+    `SELECT id, token, name, expires_at, usage_limit, uses, require_approval,
+            revoked_at, created_at
+     FROM chat_invite_links
+     WHERE chat_id = $1
+     ORDER BY created_at DESC`,
+    [request.params.chatId],
+  )
+  response.json({
+    invites: result.rows.map((invite) => ({
+      id: invite.id,
+      token: invite.token,
+      url: `/join/${invite.token}`,
+      name: invite.name,
+      expiresAt: invite.expires_at || null,
+      usageLimit: invite.usage_limit,
+      uses: Number(invite.uses || 0),
+      requireApproval: isDatabaseTrue(invite.require_approval),
+      revokedAt: invite.revoked_at || null,
+      createdAt: invite.created_at,
+    })),
+  })
+})
+
+app.post('/api/chats/:chatId/invites', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+  requirePermission(row, 'invite_users', 'Only admins can create invite links')
+  const input = parseBody(inviteLinkSchema, request.body)
+  const id = randomUUID()
+  const token = randomUUID().replaceAll('-', '')
+  await db.transaction(async (tx) => {
+    await tx.query(
+      `INSERT INTO chat_invite_links
+        (id, chat_id, token, created_by, name, expires_at, usage_limit, require_approval)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        id,
+        request.params.chatId,
+        token,
+        request.user.id,
+        input.name,
+        input.expiresAt || null,
+        input.usageLimit || null,
+        input.requireApproval,
+      ],
+    )
+    await appendAdminLog(tx, {
+      chatId: request.params.chatId,
+      actorUserId: request.user.id,
+      action: 'invite.create',
+      metadata: { inviteId: id, requireApproval: input.requireApproval },
+    })
+  })
+  response.status(201).json({
+    invite: {
+      id,
+      token,
+      url: `/join/${token}`,
+      name: input.name,
+      expiresAt: input.expiresAt || null,
+      usageLimit: input.usageLimit || null,
+      uses: 0,
+      requireApproval: input.requireApproval,
+    },
+  })
+})
+
+app.delete('/api/chats/:chatId/invites/:inviteId', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+  requirePermission(row, 'invite_users', 'Only admins can revoke invite links')
+  await db.transaction(async (tx) => {
+    await tx.query(
+      `UPDATE chat_invite_links
+       SET revoked_at = NOW()
+       WHERE id = $1 AND chat_id = $2`,
+      [request.params.inviteId, request.params.chatId],
+    )
+    await appendAdminLog(tx, {
+      chatId: request.params.chatId,
+      actorUserId: request.user.id,
+      action: 'invite.revoke',
+      metadata: { inviteId: request.params.inviteId },
+    })
+  })
+  response.status(204).end()
+})
+
+app.post('/api/invites/:token/join', requireAuth, async (request, response) => {
+  const input = parseBody(joinInviteSchema, request.body)
+  const inviteResult = await db.query(
+    `SELECT cil.id, cil.chat_id, cil.usage_limit, cil.uses, cil.require_approval,
+            c.type, c.title
+     FROM chat_invite_links cil
+     JOIN chats c ON c.id = cil.chat_id
+     WHERE cil.token = $1
+       AND cil.revoked_at IS NULL
+       AND (cil.expires_at IS NULL OR cil.expires_at > NOW())
+     LIMIT 1`,
+    [request.params.token],
+  )
+  const invite = inviteResult.rows[0]
+  if (!invite || (invite.usage_limit && Number(invite.uses) >= Number(invite.usage_limit))) {
+    response.status(404).json({ error: 'Invite link is not available' })
+    return
+  }
+  if (await isBannedFromChat(invite.chat_id, request.user.id)) {
+    response.status(403).json({ error: 'You are banned in this chat' })
+    return
+  }
+  if (await isChatMember(invite.chat_id, request.user.id)) {
+    response.json({ chatId: invite.chat_id, joined: true, existing: true })
+    return
+  }
+  if (isDatabaseTrue(invite.require_approval)) {
+    await db.query(
+      `INSERT INTO chat_join_requests (chat_id, user_id, invite_link_id, message, status)
+       VALUES ($1, $2, $3, $4, 'pending')
+       ON CONFLICT (chat_id, user_id)
+       DO UPDATE SET invite_link_id = EXCLUDED.invite_link_id,
+                     message = EXCLUDED.message,
+                     status = 'pending',
+                     reviewed_by = NULL,
+                     reviewed_at = NULL,
+                     created_at = NOW()`,
+      [invite.chat_id, request.user.id, invite.id, input.message],
+    )
+    response.status(202).json({ chatId: invite.chat_id, joinRequest: 'pending' })
+    return
+  }
+  await db.transaction(async (tx) => {
+    await tx.query(
+      `INSERT INTO chat_members (chat_id, user_id, role)
+       VALUES ($1, $2, 'member')`,
+      [invite.chat_id, request.user.id],
+    )
+    await tx.query(
+      `INSERT INTO chat_user_settings (chat_id, user_id)
+       VALUES ($1, $2)
+       ON CONFLICT (chat_id, user_id) DO NOTHING`,
+      [invite.chat_id, request.user.id],
+    )
+    await tx.query('UPDATE chat_invite_links SET uses = uses + 1 WHERE id = $1', [invite.id])
+    await appendAdminLog(tx, {
+      chatId: invite.chat_id,
+      actorUserId: request.user.id,
+      targetUserId: request.user.id,
+      action: 'member.join_invite',
+      metadata: { inviteId: invite.id },
+    })
+  })
+  await sendToChat(invite.chat_id, {
+    type: 'chat:member-added',
+    chatId: invite.chat_id,
+    userId: request.user.id,
+  })
+  response.status(201).json({ chatId: invite.chat_id, joined: true })
+})
+
+app.get('/api/chats/:chatId/join-requests', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+  requirePermission(row, 'approve_join_requests', 'Only admins can review join requests')
+  const result = await db.query(
+    `SELECT cjr.user_id, cjr.message, cjr.status, cjr.created_at,
+            u.name, u.username, u.avatar
+     FROM chat_join_requests cjr
+     JOIN users u ON u.id = cjr.user_id
+     WHERE cjr.chat_id = $1 AND cjr.status = 'pending'
+     ORDER BY cjr.created_at ASC`,
+    [request.params.chatId],
+  )
+  response.json({
+    requests: result.rows.map((joinRequest) => ({
+      userId: joinRequest.user_id,
+      message: joinRequest.message,
+      status: joinRequest.status,
+      createdAt: joinRequest.created_at,
+      user: {
+        id: joinRequest.user_id,
+        name: joinRequest.name,
+        username: joinRequest.username,
+        avatar: joinRequest.avatar,
+      },
+    })),
+  })
+})
+
+app.post('/api/chats/:chatId/join-requests/:userId', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+  requirePermission(row, 'approve_join_requests', 'Only admins can review join requests')
+  const input = parseBody(reviewJoinRequestSchema, request.body)
+  const requestResult = await db.query(
+    `SELECT chat_id, user_id, invite_link_id
+     FROM chat_join_requests
+     WHERE chat_id = $1 AND user_id = $2 AND status = 'pending'
+     LIMIT 1`,
+    [request.params.chatId, request.params.userId],
+  )
+  const joinRequest = requestResult.rows[0]
+  if (!joinRequest) { response.status(404).json({ error: 'Join request not found' }); return }
+  await db.transaction(async (tx) => {
+    await tx.query(
+      `UPDATE chat_join_requests
+       SET status = $1, reviewed_by = $2, reviewed_at = NOW()
+       WHERE chat_id = $3 AND user_id = $4`,
+      [input.approved ? 'approved' : 'declined', request.user.id, request.params.chatId, request.params.userId],
+    )
+    if (input.approved) {
+      await tx.query(
+        `INSERT INTO chat_members (chat_id, user_id, role)
+         VALUES ($1, $2, 'member')
+         ON CONFLICT (chat_id, user_id) DO NOTHING`,
+        [request.params.chatId, request.params.userId],
+      )
+      await tx.query(
+        `INSERT INTO chat_user_settings (chat_id, user_id)
+         VALUES ($1, $2)
+         ON CONFLICT (chat_id, user_id) DO NOTHING`,
+        [request.params.chatId, request.params.userId],
+      )
+      if (joinRequest.invite_link_id) {
+        await tx.query('UPDATE chat_invite_links SET uses = uses + 1 WHERE id = $1', [
+          joinRequest.invite_link_id,
+        ])
+      }
+    }
+    await appendAdminLog(tx, {
+      chatId: request.params.chatId,
+      actorUserId: request.user.id,
+      targetUserId: request.params.userId,
+      action: input.approved ? 'join_request.approve' : 'join_request.decline',
+    })
+  })
+  const payload = {
+    type: input.approved ? 'chat:member-added' : 'chat:join-request-declined',
+    chatId: request.params.chatId,
+    userId: request.params.userId,
+  }
+  if (input.approved) await sendToChat(request.params.chatId, payload)
+  await sendToUser(request.params.userId, payload)
+  response.json({ chatId: request.params.chatId, userId: request.params.userId, approved: input.approved })
+})
+
+app.get('/api/chats/:chatId/admin-log', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+  requirePermission(row, 'manage_chat', 'Only admins can view admin log')
+  const limit = Math.min(100, Math.max(1, parseInt(request.query.limit, 10) || 50))
+  const result = await db.query(
+    `SELECT id, actor_user_id, target_user_id, action, metadata, created_at
+     FROM chat_admin_log
+     WHERE chat_id = $1
+     ORDER BY created_at DESC
+     LIMIT $2`,
+    [request.params.chatId, limit],
+  )
+  response.json({
+    events: result.rows.map((event) => ({
+      id: event.id,
+      actorUserId: event.actor_user_id,
+      targetUserId: event.target_user_id,
+      action: event.action,
+      metadata: parseJsonObject(event.metadata),
+      createdAt: event.created_at,
+    })),
+  })
+})
+
 app.patch('/api/chats/:chatId/info', requireAuth, async (request, response) => {
   const row = await requireChatMemberRow(request.params.chatId, request.user.id)
   if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
-  if (!['owner', 'admin'].includes(row.role)) {
-    response.status(403).json({ error: 'Only admins can update group info' })
-    return
-  }
+  requirePermission(row, 'manage_chat', 'Only admins can update group info')
   const title = String(request.body.title || '').trim().slice(0, 64)
   if (!title) { response.status(400).json({ error: 'Title is required' }); return }
-  await db.query('UPDATE chats SET title = $1 WHERE id = $2', [title, request.params.chatId])
+  await db.transaction(async (tx) => {
+    await tx.query('UPDATE chats SET title = $1 WHERE id = $2', [title, request.params.chatId])
+    await appendAdminLog(tx, {
+      chatId: request.params.chatId,
+      actorUserId: request.user.id,
+      action: 'chat.info',
+      metadata: { title },
+    })
+  })
   const payload = { type: 'chat:info-updated', chatId: request.params.chatId, title }
   await sendToChat(request.params.chatId, payload)
   response.json({ chat: { id: request.params.chatId, title } })
+})
+
+app.get('/api/chats/:chatId/topics', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+  const result = await db.query(
+    `SELECT id, title, created_by, pinned, closed, message_count,
+            last_message_at, created_at, updated_at
+     FROM chat_topics
+     WHERE chat_id = $1
+     ORDER BY pinned DESC, COALESCE(last_message_at, updated_at) DESC`,
+    [request.params.chatId],
+  )
+  response.json({
+    topics: result.rows.map((topic) => ({
+      id: topic.id,
+      title: topic.title,
+      createdBy: topic.created_by,
+      pinned: isDatabaseTrue(topic.pinned),
+      closed: isDatabaseTrue(topic.closed),
+      messageCount: Number(topic.message_count || 0),
+      lastMessageAt: topic.last_message_at || null,
+      createdAt: topic.created_at,
+      updatedAt: topic.updated_at,
+    })),
+  })
+})
+
+app.post('/api/chats/:chatId/topics', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+  requirePermission(row, 'manage_topics', 'Only moderators can create topics')
+  if (row.type !== 'group') {
+    response.status(400).json({ error: 'Topics are available only in groups' })
+    return
+  }
+  const input = parseBody(topicSchema, request.body)
+  const topicId = randomUUID()
+  await db.transaction(async (tx) => {
+    await tx.query(
+      `INSERT INTO chat_topics (id, chat_id, title, created_by)
+       VALUES ($1, $2, $3, $4)`,
+      [topicId, request.params.chatId, input.title, request.user.id],
+    )
+    await appendAdminLog(tx, {
+      chatId: request.params.chatId,
+      actorUserId: request.user.id,
+      action: 'topic.create',
+      metadata: { topicId, title: input.title },
+    })
+  })
+  const topic = {
+    id: topicId,
+    chatId: request.params.chatId,
+    title: input.title,
+    createdBy: request.user.id,
+    pinned: false,
+    closed: false,
+    messageCount: 0,
+  }
+  await sendToChat(request.params.chatId, { type: 'chat:topic-created', topic })
+  response.status(201).json({ topic })
+})
+
+app.patch('/api/chats/:chatId/topics/:topicId', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+  requirePermission(row, 'manage_topics', 'Only moderators can update topics')
+  const input = parseBody(updateTopicSchema, request.body)
+  const existing = await db.query(
+    'SELECT id, title, pinned, closed FROM chat_topics WHERE id = $1 AND chat_id = $2 LIMIT 1',
+    [request.params.topicId, request.params.chatId],
+  )
+  if (!existing.rows.length) {
+    response.status(404).json({ error: 'Topic not found' })
+    return
+  }
+  const current = existing.rows[0]
+  const next = {
+    title: input.title ?? current.title,
+    pinned: input.pinned ?? isDatabaseTrue(current.pinned),
+    closed: input.closed ?? isDatabaseTrue(current.closed),
+  }
+  await db.transaction(async (tx) => {
+    await tx.query(
+      `UPDATE chat_topics
+       SET title = $1, pinned = $2, closed = $3, updated_at = NOW()
+       WHERE id = $4 AND chat_id = $5`,
+      [next.title, next.pinned, next.closed, request.params.topicId, request.params.chatId],
+    )
+    await appendAdminLog(tx, {
+      chatId: request.params.chatId,
+      actorUserId: request.user.id,
+      action: 'topic.update',
+      metadata: { topicId: request.params.topicId, ...next },
+    })
+  })
+  const payload = {
+    type: 'chat:topic-updated',
+    chatId: request.params.chatId,
+    topic: { id: request.params.topicId, ...next },
+  }
+  await sendToChat(request.params.chatId, payload)
+  response.json(payload)
 })
 
 app.get('/api/search', requireAuth, async (request, response) => {
@@ -1273,7 +3726,7 @@ app.get('/api/search', requireAuth, async (request, response) => {
 
   const [usersResult, chatsResult, messagesResult] = await Promise.all([
     db.query(
-      `SELECT id, login, username, name, bio, avatar, last_seen_at, encryption_public_key
+      `SELECT id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key
        FROM users
        WHERE id <> $1
          AND (username ILIKE '%' || $2 || '%' OR name ILIKE '%' || $2 || '%')
@@ -1396,24 +3849,13 @@ app.get('/api/chats/:chatId/messages', requireAuth, async (request, response) =>
   }
   params.push(limit + 1)
   const result = await db.query(
-    `SELECT m.id, m.chat_id, m.sender_id, m.media_id, m.reply_to_id, m.ciphertext, m.iv,
-            m.auth_tag, m.encryption_version, m.created_at, m.edited_at, m.deleted_at,
-            m.forwarded_from_message_id, m.forwarded_from_chat_id,
-            mf.kind AS media_kind, mf.original_name AS media_name,
-            mf.mime_type AS media_mime_type, mf.plain_size AS media_size,
-            mf.original_size AS media_original_size, mf.width AS media_width,
-            mf.height AS media_height, mf.client_encrypted AS media_client_encrypted,
-            mf.media_envelope AS media_envelope, mf.duration_ms AS media_duration
+    `SELECT ${MESSAGE_SELECT_COLUMNS}
      FROM messages m
      LEFT JOIN media_files mf ON mf.id = m.media_id
      LEFT JOIN chat_history_clears chc
        ON chc.chat_id = m.chat_id AND chc.user_id = $2
      WHERE m.chat_id = $1
-       AND (chc.cleared_at IS NULL OR m.created_at > chc.cleared_at)
-       AND NOT EXISTS (
-         SELECT 1 FROM message_user_deletions mud
-         WHERE mud.message_id = m.id AND mud.user_id = $2
-       )
+       ${visibleMessageFilter('$2')}
        ${beforeClause}
      ORDER BY m.created_at DESC
      LIMIT $${params.length}`,
@@ -1422,75 +3864,106 @@ app.get('/api/chats/:chatId/messages', requireAuth, async (request, response) =>
   const hasMore = result.rows.length > limit
   const pageRows = hasMore ? result.rows.slice(0, limit) : result.rows
   pageRows.reverse()
-  const reactionResult = await db.query(
-    `SELECT mr.message_id, mr.emoji, COUNT(*)::integer AS count
-     FROM message_reactions mr
-     JOIN messages m ON m.id = mr.message_id
-     WHERE m.chat_id = $1
-     GROUP BY mr.message_id, mr.emoji`,
-    [request.params.chatId],
-  )
-  const reactionsByMessage = new Map()
-  reactionResult.rows.forEach((reaction) => {
-    const reactions = reactionsByMessage.get(reaction.message_id) || {}
-    reactions[reaction.emoji] = reaction.count
-    reactionsByMessage.set(reaction.message_id, reactions)
-  })
-  const readResult = await db.query(
-    `SELECT mr.message_id
-     FROM message_reads mr
-     JOIN messages m ON m.id = mr.message_id
-     WHERE m.chat_id = $1 AND mr.user_id <> m.sender_id
-     GROUP BY mr.message_id`,
-    [request.params.chatId],
-  )
-  const readMessages = new Set(readResult.rows.map((read) => read.message_id))
-  const messages = pageRows.map((message) => ({
-    id: message.id,
-    chatId: message.chat_id,
-    senderId: message.sender_id,
-    text: message.deleted_at
-      ? ''
-      : decryptMessage({
-          ciphertext: message.ciphertext,
-          iv: message.iv,
-          authTag: message.auth_tag,
-        }),
-    createdAt: message.created_at,
-    editedAt: message.edited_at,
-    deletedAt: message.deleted_at,
-    replyToId: message.reply_to_id,
-    forwarded: Boolean(message.forwarded_from_message_id),
-    forwardedFromMessageId: message.forwarded_from_message_id,
-    forwardedFromChatId: message.forwarded_from_chat_id,
-    reactions: reactionsByMessage.get(message.id) || {},
-    status: readMessages.has(message.id) ? 'read' : 'sent',
-    media: message.media_id
-      ? {
-          id: message.media_id,
-          kind: message.media_kind,
-          name: message.media_name,
-          mimeType: message.media_mime_type,
-          size: Number(message.media_size),
-          originalSize: Number(message.media_original_size),
-          width: message.media_width,
-          height: message.media_height,
-          durationMs: message.media_duration ?? null,
-          url: `/api/media/${message.media_id}`,
-          encrypted: isDatabaseTrue(message.media_client_encrypted),
-          envelope: message.media_envelope || '',
-        }
-      : null,
-  }))
+  const messages = await publicMessagesFromRows(request.params.chatId, pageRows, request.user.id)
   response.json({ messages, hasMore })
 })
 
-app.post('/api/chats/:chatId/messages', requireAuth, async (request, response) => {
+app.get('/api/chats/:chatId/messages/:messageId/context', requireAuth, async (request, response) => {
   if (!(await isChatMember(request.params.chatId, request.user.id))) {
     response.status(404).json({ error: 'Chat not found' })
     return
   }
+  const limit = Math.min(100, Math.max(3, parseInt(request.query.limit, 10) || 50))
+  const beforeLimit = Math.floor((limit - 1) / 2)
+  const afterLimit = limit - 1 - beforeLimit
+  const targetResult = await db.query(
+    `SELECT ${MESSAGE_SELECT_COLUMNS}
+     FROM messages m
+     LEFT JOIN media_files mf ON mf.id = m.media_id
+     LEFT JOIN chat_history_clears chc
+       ON chc.chat_id = m.chat_id AND chc.user_id = $2
+     WHERE m.chat_id = $1
+       AND m.id = $3
+       AND m.deleted_at IS NULL
+       ${visibleMessageFilter('$2')}
+     LIMIT 1`,
+    [request.params.chatId, request.user.id, request.params.messageId],
+  )
+  const target = targetResult.rows[0]
+  if (!target) {
+    response.status(404).json({ error: 'Message not found' })
+    return
+  }
+
+  const beforeResult = await db.query(
+    `SELECT ${MESSAGE_SELECT_COLUMNS}
+     FROM messages m
+     LEFT JOIN media_files mf ON mf.id = m.media_id
+     LEFT JOIN chat_history_clears chc
+       ON chc.chat_id = m.chat_id AND chc.user_id = $2
+     WHERE m.chat_id = $1
+       AND m.created_at < $3
+       AND m.deleted_at IS NULL
+       ${visibleMessageFilter('$2')}
+     ORDER BY m.created_at DESC
+     LIMIT $4`,
+    [request.params.chatId, request.user.id, target.created_at, beforeLimit + 1],
+  )
+  const afterResult = await db.query(
+    `SELECT ${MESSAGE_SELECT_COLUMNS}
+     FROM messages m
+     LEFT JOIN media_files mf ON mf.id = m.media_id
+     LEFT JOIN chat_history_clears chc
+       ON chc.chat_id = m.chat_id AND chc.user_id = $2
+     WHERE m.chat_id = $1
+       AND m.created_at > $3
+       AND m.deleted_at IS NULL
+       ${visibleMessageFilter('$2')}
+     ORDER BY m.created_at ASC
+     LIMIT $4`,
+    [request.params.chatId, request.user.id, target.created_at, afterLimit + 1],
+  )
+  const hasMoreBefore = beforeResult.rows.length > beforeLimit
+  const hasMoreAfter = afterResult.rows.length > afterLimit
+  const contextRows = [
+    ...beforeResult.rows.slice(0, beforeLimit).reverse(),
+    target,
+    ...afterResult.rows.slice(0, afterLimit),
+  ]
+  const messages = await publicMessagesFromRows(request.params.chatId, contextRows, request.user.id)
+  response.json({
+    messageId: request.params.messageId,
+    messages,
+    hasMoreBefore,
+    hasMoreAfter,
+  })
+})
+
+app.post('/api/chats/:chatId/messages', requireAuth, async (request, response) => {
+  await requireUnblockedPrivateChat(request.params.chatId, request.user.id)
   const input = parseBody(messageSchema, request.body)
+  const member = await assertCanSendToChat(request.params.chatId, request.user.id, {
+    media: Boolean(input.mediaId),
+    poll: Boolean(input.poll),
+  })
+  if (input.topicId) {
+    const topicResult = await db.query(
+      `SELECT id, closed
+       FROM chat_topics
+       WHERE id = $1 AND chat_id = $2
+       LIMIT 1`,
+      [input.topicId, request.params.chatId],
+    )
+    const topic = topicResult.rows[0]
+    if (!topic) {
+      response.status(400).json({ error: 'Topic is not available in this chat' })
+      return
+    }
+    if (isDatabaseTrue(topic.closed) && !hasPermission(member, 'manage_topics')) {
+      response.status(403).json({ error: 'Topic is closed' })
+      return
+    }
+  }
   if (input.replyToId) {
     const replyResult = await db.query(
       `SELECT id FROM messages
@@ -1540,38 +4013,129 @@ app.post('/api/chats/:chatId/messages', requireAuth, async (request, response) =
     }
   }
 
+  const scheduledAt = input.scheduledAt || null
+  const scheduledTime = scheduledAt ? new Date(scheduledAt).getTime() : 0
+  if (scheduledAt && (!Number.isFinite(scheduledTime) || scheduledTime <= Date.now())) {
+    response.status(400).json({ error: 'scheduledAt must be a future timestamp' })
+    return
+  }
+  if (input.poll?.quiz && input.poll.correctOption !== null && input.poll.correctOption !== undefined) {
+    if (input.poll.correctOption >= input.poll.options.length) {
+      response.status(400).json({ error: 'Correct poll option is out of range' })
+      return
+    }
+  }
+
   const encrypted = encryptMessage(input.text)
   const messageId = randomUUID()
-  await db.query(
-    `INSERT INTO messages
-      (id, chat_id, sender_id, media_id, reply_to_id, forwarded_from_message_id,
-       forwarded_from_chat_id, ciphertext, iv, auth_tag, encryption_version, search_text)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-    [
-      messageId,
-      request.params.chatId,
-      request.user.id,
-      input.mediaId || null,
-      input.replyToId || null,
-      input.forwardedFromMessageId || null,
-      forwardedFromChatId,
-      encrypted.ciphertext,
-      encrypted.iv,
-      encrypted.authTag,
-      encrypted.version,
-      normalizeSearchText(input.searchText),
-    ],
-  )
+  const sentAt = scheduledAt ? null : new Date().toISOString()
+  const pollId = input.poll ? randomUUID() : null
+  const pollOptions = input.poll
+    ? input.poll.options.map((text, index) => ({ id: randomUUID(), text, index }))
+    : []
+  const correctOptionId =
+    input.poll?.quiz && input.poll.correctOption !== null && input.poll.correctOption !== undefined
+      ? pollOptions[input.poll.correctOption]?.id || null
+      : null
+  await db.transaction(async (tx) => {
+    await tx.query(
+      `INSERT INTO messages
+        (id, chat_id, sender_id, media_id, reply_to_id, forwarded_from_message_id,
+         forwarded_from_chat_id, topic_id, ciphertext, iv, auth_tag, encryption_version,
+         search_text, silent, scheduled_at, sent_at, link_preview)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+      [
+        messageId,
+        request.params.chatId,
+        request.user.id,
+        input.mediaId || null,
+        input.replyToId || null,
+        input.forwardedFromMessageId || null,
+        forwardedFromChatId,
+        input.topicId || null,
+        encrypted.ciphertext,
+        encrypted.iv,
+        encrypted.authTag,
+        encrypted.version,
+        normalizeSearchText(input.searchText),
+        input.silent,
+        scheduledAt,
+        sentAt,
+        input.linkPreview ? JSON.stringify(input.linkPreview) : null,
+      ],
+    )
+    if (input.poll) {
+      await tx.query(
+        `INSERT INTO polls
+          (id, message_id, question, multiple_choice, anonymous, quiz, correct_option_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          pollId,
+          messageId,
+          input.poll.question,
+          input.poll.multipleChoice,
+          input.poll.anonymous,
+          input.poll.quiz,
+          correctOptionId,
+        ],
+      )
+      for (const option of pollOptions) {
+        await tx.query(
+          `INSERT INTO poll_options (id, poll_id, text, sort_order)
+           VALUES ($1, $2, $3, $4)`,
+          [option.id, pollId, option.text, option.index],
+        )
+      }
+    }
+    if (!scheduledAt) {
+      await tx.query(
+        'UPDATE chat_members SET last_message_at = NOW() WHERE chat_id = $1 AND user_id = $2',
+        [request.params.chatId, request.user.id],
+      )
+      if (input.topicId) {
+        await tx.query(
+          `UPDATE chat_topics
+           SET message_count = message_count + 1,
+               last_message_at = NOW(),
+               updated_at = NOW()
+           WHERE id = $1 AND chat_id = $2`,
+          [input.topicId, request.params.chatId],
+        )
+      }
+      if (member.type === 'channel') {
+        await tx.query(
+          `INSERT INTO channel_post_stats (message_id)
+           VALUES ($1)
+           ON CONFLICT (message_id) DO NOTHING`,
+          [messageId],
+        )
+      }
+      if (input.forwardedFromMessageId) {
+        await tx.query(
+          `INSERT INTO channel_post_stats (message_id, reposts)
+           VALUES ($1, 1)
+           ON CONFLICT (message_id)
+           DO UPDATE SET reposts = channel_post_stats.reposts + 1,
+                         updated_at = NOW()`,
+          [input.forwardedFromMessageId],
+        )
+      }
+    }
+  })
   const publicMessage = {
     id: messageId,
     chatId: request.params.chatId,
     senderId: request.user.id,
     text: input.text,
     createdAt: new Date().toISOString(),
+    topicId: input.topicId || null,
     replyToId: input.replyToId || null,
     forwarded: Boolean(input.forwardedFromMessageId),
     forwardedFromMessageId: input.forwardedFromMessageId || null,
     forwardedFromChatId,
+    silent: input.silent,
+    scheduledAt,
+    sentAt,
     reactions: {},
     status: 'sent',
     media: media
@@ -1590,20 +4154,259 @@ app.post('/api/chats/:chatId/messages', requireAuth, async (request, response) =
           envelope: media.media_envelope || '',
         }
       : null,
+    poll: input.poll
+      ? {
+          id: pollId,
+          question: input.poll.question,
+          multipleChoice: input.poll.multipleChoice,
+          anonymous: input.poll.anonymous,
+          quiz: input.poll.quiz,
+          closedAt: null,
+          options: pollOptions.map((option) => ({
+            id: option.id,
+            text: option.text,
+            votes: 0,
+            votedByMe: false,
+          })),
+        }
+      : null,
+  }
+
+  if (scheduledAt) {
+    response.status(202).json({ message: publicMessage, scheduled: true })
+    return
   }
 
   const recipientDeliveries = await sendToChatExcept(request.params.chatId, request.user.id, {
     type: 'message:new',
     message: publicMessage,
   })
+  if (!input.silent) {
+    await sendOfflineMessagePushes({
+      chatId: request.params.chatId,
+      sender: request.user,
+      message: publicMessage,
+      searchText: input.searchText,
+    })
+  }
   if (recipientDeliveries > 0) publicMessage.status = 'delivered'
-  sendToUser(request.user.id, {
+  await sendToUser(request.user.id, {
     type: 'message:delivered',
     chatId: request.params.chatId,
     messageId,
     delivered: recipientDeliveries > 0,
   })
   response.status(201).json({ message: publicMessage })
+})
+
+app.get('/api/chats/:chatId/scheduled-messages', requireAuth, async (request, response) => {
+  const member = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!member) { response.status(404).json({ error: 'Chat not found' }); return }
+  if (member.type === 'channel') {
+    requirePermission(member, 'post_messages', 'Only channel admins can view scheduled posts')
+  }
+  const result = await db.query(
+    `SELECT ${MESSAGE_SELECT_COLUMNS}
+     FROM messages m
+     LEFT JOIN media_files mf ON mf.id = m.media_id
+     WHERE m.chat_id = $1
+       AND m.scheduled_at IS NOT NULL
+       AND m.sent_at IS NULL
+       AND (m.sender_id = $2 OR $3 = TRUE)
+     ORDER BY m.scheduled_at ASC`,
+    [request.params.chatId, request.user.id, hasPermission(member, 'post_messages')],
+  )
+  const messages = await publicMessagesFromRows(request.params.chatId, result.rows, request.user.id)
+  response.json({ messages })
+})
+
+app.post('/api/chats/:chatId/scheduled-messages/:messageId/send-now', requireAuth, async (request, response) => {
+  const member = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!member) { response.status(404).json({ error: 'Chat not found' }); return }
+  const scheduledResult = await db.query(
+    `SELECT sender_id
+     FROM messages
+     WHERE id = $1 AND chat_id = $2 AND scheduled_at IS NOT NULL AND sent_at IS NULL
+     LIMIT 1`,
+    [request.params.messageId, request.params.chatId],
+  )
+  const scheduled = scheduledResult.rows[0]
+  if (!scheduled) { response.status(404).json({ error: 'Scheduled message not found' }); return }
+  if (scheduled.sender_id !== request.user.id) {
+    requirePermission(member, 'post_messages', 'Only channel admins can publish scheduled posts')
+  }
+  await publishScheduledMessage(request.params.messageId)
+  response.json({ messageId: request.params.messageId, sent: true })
+})
+
+app.delete('/api/chats/:chatId/scheduled-messages/:messageId', requireAuth, async (request, response) => {
+  const member = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!member) { response.status(404).json({ error: 'Chat not found' }); return }
+  const result = await db.query(
+    `DELETE FROM messages
+     WHERE id = $1 AND chat_id = $2
+       AND scheduled_at IS NOT NULL
+       AND sent_at IS NULL
+       AND (sender_id = $3 OR $4 = TRUE)
+     RETURNING id`,
+    [
+      request.params.messageId,
+      request.params.chatId,
+      request.user.id,
+      hasPermission(member, 'post_messages'),
+    ],
+  )
+  if (!result.rows.length) {
+    response.status(404).json({ error: 'Scheduled message not found' })
+    return
+  }
+  response.status(204).end()
+})
+
+app.post('/api/chats/:chatId/messages/:messageId/poll-votes', requireAuth, async (request, response) => {
+  if (!(await isChatMember(request.params.chatId, request.user.id))) {
+    response.status(404).json({ error: 'Chat not found' })
+    return
+  }
+  const input = parseBody(pollVoteSchema, request.body)
+  const pollResult = await db.query(
+    `SELECT p.id, p.multiple_choice, p.closed_at
+     FROM polls p
+     JOIN messages m ON m.id = p.message_id
+     WHERE p.message_id = $1 AND m.chat_id = $2 AND m.deleted_at IS NULL
+     LIMIT 1`,
+    [request.params.messageId, request.params.chatId],
+  )
+  const poll = pollResult.rows[0]
+  if (!poll || poll.closed_at) {
+    response.status(404).json({ error: 'Open poll not found' })
+    return
+  }
+  if (!isDatabaseTrue(poll.multiple_choice) && input.optionIds.length > 1) {
+    response.status(400).json({ error: 'Poll accepts one option only' })
+    return
+  }
+  const optionResult = await db.query(
+    `SELECT id FROM poll_options
+     WHERE poll_id = $1 AND id = ANY($2::uuid[])`,
+    [poll.id, input.optionIds],
+  )
+  if (optionResult.rows.length !== input.optionIds.length) {
+    response.status(400).json({ error: 'One or more poll options are invalid' })
+    return
+  }
+  await db.transaction(async (tx) => {
+    await tx.query('DELETE FROM poll_votes WHERE poll_id = $1 AND user_id = $2', [
+      poll.id,
+      request.user.id,
+    ])
+    for (const optionId of input.optionIds) {
+      await tx.query(
+        `INSERT INTO poll_votes (poll_id, option_id, user_id)
+         VALUES ($1, $2, $3)`,
+        [poll.id, optionId, request.user.id],
+      )
+    }
+  })
+  const rows = await db.query(
+    `SELECT ${MESSAGE_SELECT_COLUMNS}
+     FROM messages m
+     LEFT JOIN media_files mf ON mf.id = m.media_id
+     WHERE m.id = $1 AND m.chat_id = $2`,
+    [request.params.messageId, request.params.chatId],
+  )
+  const [message] = await publicMessagesFromRows(request.params.chatId, rows.rows, request.user.id)
+  const payload = {
+    type: 'message:poll',
+    chatId: request.params.chatId,
+    messageId: request.params.messageId,
+    poll: message.poll,
+  }
+  await sendToChat(request.params.chatId, payload)
+  response.json(payload)
+})
+
+app.post('/api/chats/:chatId/messages/:messageId/view', requireAuth, async (request, response) => {
+  if (!(await isChatMember(request.params.chatId, request.user.id))) {
+    response.status(404).json({ error: 'Chat not found' })
+    return
+  }
+  const messageResult = await db.query(
+    `SELECT m.id
+     FROM messages m
+     JOIN chats c ON c.id = m.chat_id
+     WHERE m.id = $1 AND m.chat_id = $2 AND c.type = 'channel'
+       AND m.deleted_at IS NULL
+       AND (m.scheduled_at IS NULL OR m.scheduled_at <= NOW())
+       AND m.sent_at IS NOT NULL
+     LIMIT 1`,
+    [request.params.messageId, request.params.chatId],
+  )
+  if (!messageResult.rows.length) {
+    response.status(404).json({ error: 'Channel post not found' })
+    return
+  }
+  const inserted = await db.query(
+    `INSERT INTO message_views (message_id, user_id)
+     VALUES ($1, $2)
+     ON CONFLICT (message_id, user_id) DO NOTHING
+     RETURNING message_id`,
+    [request.params.messageId, request.user.id],
+  )
+  if (inserted.rows.length) {
+    await db.query(
+      `INSERT INTO channel_post_stats (message_id, views)
+       VALUES ($1, 1)
+       ON CONFLICT (message_id)
+       DO UPDATE SET views = channel_post_stats.views + 1,
+                     updated_at = NOW()`,
+      [request.params.messageId],
+    )
+  }
+  const stats = await db.query(
+    'SELECT views, reposts FROM channel_post_stats WHERE message_id = $1',
+    [request.params.messageId],
+  )
+  response.json({
+    messageId: request.params.messageId,
+    stats: {
+      views: Number(stats.rows[0]?.views || 0),
+      reposts: Number(stats.rows[0]?.reposts || 0),
+    },
+  })
+})
+
+app.get('/api/chats/:chatId/channel-stats', requireAuth, async (request, response) => {
+  const member = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!member) { response.status(404).json({ error: 'Chat not found' }); return }
+  if (member.type !== 'channel') {
+    response.status(400).json({ error: 'Stats are available only for channels' })
+    return
+  }
+  requirePermission(member, 'view_stats', 'Only channel admins can view stats')
+  const [subscriberResult, postResult] = await Promise.all([
+    db.query('SELECT COUNT(*)::integer AS count FROM chat_members WHERE chat_id = $1', [
+      request.params.chatId,
+    ]),
+    db.query(
+      `SELECT COUNT(m.id)::integer AS posts,
+              COALESCE(SUM(cps.views), 0)::integer AS views,
+              COALESCE(SUM(cps.reposts), 0)::integer AS reposts
+       FROM messages m
+       LEFT JOIN channel_post_stats cps ON cps.message_id = m.id
+       WHERE m.chat_id = $1
+         AND m.deleted_at IS NULL
+         AND (m.scheduled_at IS NULL OR m.scheduled_at <= NOW())
+         AND m.sent_at IS NOT NULL`,
+      [request.params.chatId],
+    ),
+  ])
+  response.json({
+    subscribers: Number(subscriberResult.rows[0]?.count || 0),
+    posts: Number(postResult.rows[0]?.posts || 0),
+    views: Number(postResult.rows[0]?.views || 0),
+    reposts: Number(postResult.rows[0]?.reposts || 0),
+  })
 })
 
 app.patch('/api/chats/:chatId/messages/:messageId', requireAuth, async (request, response) => {
@@ -1657,19 +4460,24 @@ app.patch('/api/chats/:chatId/messages/:messageId', requireAuth, async (request,
 })
 
 app.delete('/api/chats/:chatId/messages/:messageId', requireAuth, async (request, response) => {
-  if (!(await isChatMember(request.params.chatId, request.user.id))) {
+  const member = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!member) {
     response.status(404).json({ error: 'Chat not found' })
     return
   }
   const messageResult = await db.query(
-    `SELECT id FROM messages
-     WHERE id = $1 AND chat_id = $2 AND sender_id = $3 AND deleted_at IS NULL
+    `SELECT id, sender_id FROM messages
+     WHERE id = $1 AND chat_id = $2 AND deleted_at IS NULL
      LIMIT 1`,
-    [request.params.messageId, request.params.chatId, request.user.id],
+    [request.params.messageId, request.params.chatId],
   )
-  if (!messageResult.rows.length) {
+  const message = messageResult.rows[0]
+  if (!message) {
     response.status(404).json({ error: 'Deletable message not found' })
     return
+  }
+  if (message.sender_id !== request.user.id) {
+    requirePermission(member, 'delete_messages', 'Only moderators can delete others messages')
   }
 
   const deletedAt = new Date().toISOString()
@@ -1678,9 +4486,18 @@ app.delete('/api/chats/:chatId/messages/:messageId', requireAuth, async (request
     await tx.query(
       `UPDATE messages
        SET deleted_at = $1, media_id = NULL, reply_to_id = NULL
-       WHERE id = $2`,
+      WHERE id = $2`,
       [deletedAt, request.params.messageId],
     )
+    if (message.sender_id !== request.user.id) {
+      await appendAdminLog(tx, {
+        chatId: request.params.chatId,
+        actorUserId: request.user.id,
+        targetUserId: message.sender_id,
+        action: 'message.delete',
+        metadata: { messageId: request.params.messageId },
+      })
+    }
   })
 
   const payload = {
@@ -1748,6 +4565,7 @@ app.patch('/api/chats/:chatId/pinned-message', requireAuth, async (request, resp
     response.status(404).json({ error: 'Chat not found' })
     return
   }
+  requirePermission(chat, 'pin_messages', 'Only moderators can pin messages')
   const input = parseBody(pinMessageSchema, request.body)
 
   if (input.messageId) {
@@ -1761,10 +4579,18 @@ app.patch('/api/chats/:chatId/pinned-message', requireAuth, async (request, resp
     }
   }
 
-  await db.query('UPDATE chats SET pinned_message_id = $1 WHERE id = $2', [
-    input.messageId,
-    request.params.chatId,
-  ])
+  await db.transaction(async (tx) => {
+    await tx.query('UPDATE chats SET pinned_message_id = $1 WHERE id = $2', [
+      input.messageId,
+      request.params.chatId,
+    ])
+    await appendAdminLog(tx, {
+      chatId: request.params.chatId,
+      actorUserId: request.user.id,
+      action: input.messageId ? 'message.pin' : 'message.unpin',
+      metadata: { messageId: input.messageId },
+    })
+  })
 
   const payload = {
     type: 'chat:pinned-message',
@@ -1823,93 +4649,135 @@ app.post('/api/chats/:chatId/messages/:messageId/reactions', requireAuth, async 
 })
 
 app.post('/api/media', requireAuth, mediaUpload.single('file'), async (request, response) => {
-  if (!request.file) {
-    response.status(400).json({ error: 'No file uploaded' })
-    return
-  }
+  let storageName
+  try {
+    if (!request.file) {
+      response.status(400).json({ error: 'No file uploaded' })
+      return
+    }
 
-  const clientEncrypted = parseBooleanFormValue(request.body.clientEncrypted)
-  const clientMetadata = clientEncrypted ? validateClientMediaMetadata(request.body) : null
-  const kind = clientMetadata?.kind || getMediaKind(request.file.mimetype)
-  if (!kind) {
-    response.status(415).json({ error: 'Unsupported media type' })
-    return
-  }
+    const clientEncrypted = parseBooleanFormValue(request.body.clientEncrypted)
+    const clientMetadata = clientEncrypted ? validateClientMediaMetadata(request.body) : null
+    const kind = clientMetadata?.kind || getMediaKind(request.file.mimetype)
+    if (!kind) {
+      response.status(415).json({ error: 'Unsupported media type' })
+      return
+    }
 
-  const chatId = request.body.chatId || null
-  if (chatId && !(await isChatMember(chatId, request.user.id))) {
-    response.status(404).json({ error: 'Chat not found' })
-    return
-  }
+    const chatId = request.body.chatId || null
+    if (chatId) {
+      await assertCanSendToChat(chatId, request.user.id, { media: true })
+      await requireUnblockedPrivateChat(chatId, request.user.id)
+    }
 
-  const compressed = clientEncrypted
-    ? {
-        data: request.file.buffer,
-        mimeType: clientMetadata.mimeType,
-        width: clientMetadata.width,
-        height: clientMetadata.height,
-        originalSize: clientMetadata.originalSize || request.file.size,
-        plainSize: clientMetadata.plainSize || request.file.size,
+    const mediaId = randomUUID()
+    storageName = `${mediaId}.bin`
+    const streamsOriginalFile = clientEncrypted || kind === 'audio' || kind === 'voice'
+    let stored
+    let mediaInfo
+
+    if (streamsOriginalFile) {
+      stored = await encryptUploadedFileToStorage(request.file, storageName)
+      mediaInfo = {
+        mimeType: clientMetadata?.mimeType || request.file.mimetype,
+        width: clientMetadata?.width ?? null,
+        height: clientMetadata?.height ?? null,
+        plainSize: clientMetadata?.plainSize || request.file.size,
+        originalSize: clientMetadata?.originalSize || request.file.size,
+        durationMs: clientMetadata?.durationMs ?? null,
       }
-    : kind === 'image'
-      ? await compressImage(request.file.buffer)
-      : await compressVideo(request.file.buffer)
+    } else {
+      if (request.file.size > serverMediaTransformMaxBytes) {
+        response.status(413).json({
+          error: `Large image and video uploads must be encrypted by the client. Server transform limit is ${formatByteSize(serverMediaTransformMaxBytes)}.`,
+        })
+        return
+      }
 
-  const encrypted = encryptBuffer(compressed.data)
-  const mediaId = randomUUID()
-  const storageName = `${mediaId}.bin`
-  await writeFile(resolve(config.mediaDir, storageName), Buffer.from(encrypted.ciphertext, 'base64'), {
-    mode: 0o600,
-  })
+      const fileBuffer = await readUploadedFile(request.file)
+      const compressed = kind === 'image'
+        ? await compressImage(fileBuffer)
+        : kind === 'video'
+          ? await compressVideo(fileBuffer)
+          : {
+              data: fileBuffer,
+              mimeType: request.file.mimetype,
+              width: null,
+              height: null,
+            }
+      const encrypted = encryptBuffer(compressed.data)
+      await saveMediaObject(storageName, Buffer.from(encrypted.ciphertext, 'base64'))
+      stored = {
+        encryptedSize: Buffer.byteLength(encrypted.ciphertext, 'base64'),
+        iv: encrypted.iv,
+        authTag: encrypted.authTag,
+      }
+      mediaInfo = {
+        mimeType: compressed.mimeType,
+        width: compressed.width,
+        height: compressed.height,
+        plainSize: compressed.data.length,
+        originalSize: request.file.size,
+        durationMs: null,
+      }
+    }
 
-  await db.query(
-    `INSERT INTO media_files
-      (id, owner_id, chat_id, kind, original_name, mime_type, storage_name,
-       encrypted_size, plain_size, original_size, width, height, client_encrypted,
-       media_envelope, duration_ms, iv, auth_tag)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
-    [
-      mediaId,
-      request.user.id,
-      chatId,
-      kind,
-      clientMetadata?.originalName || request.file.originalname.slice(0, 255),
-      compressed.mimeType,
-      storageName,
-      Buffer.byteLength(encrypted.ciphertext, 'base64'),
-      compressed.plainSize || compressed.data.length,
-      compressed.originalSize || request.file.size,
-      compressed.width,
-      compressed.height,
-      clientEncrypted,
-      clientMetadata?.envelope || '',
-      clientMetadata?.durationMs ?? null,
-      encrypted.iv,
-      encrypted.authTag,
-    ],
-  )
+    try {
+      await db.query(
+        `INSERT INTO media_files
+          (id, owner_id, chat_id, kind, original_name, mime_type, storage_name,
+           encrypted_size, plain_size, original_size, width, height, client_encrypted,
+           media_envelope, duration_ms, iv, auth_tag)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+        [
+          mediaId,
+          request.user.id,
+          chatId,
+          kind,
+          clientMetadata?.originalName || request.file.originalname.slice(0, 255),
+          mediaInfo.mimeType,
+          storageName,
+          stored.encryptedSize,
+          mediaInfo.plainSize,
+          mediaInfo.originalSize,
+          mediaInfo.width,
+          mediaInfo.height,
+          clientEncrypted,
+          clientMetadata?.envelope || '',
+          mediaInfo.durationMs,
+          stored.iv,
+          stored.authTag,
+        ],
+      )
+    } catch (error) {
+      await deleteMediaObject(storageName).catch(() => {})
+      throw error
+    }
 
-  response.status(201).json({
-    media: {
-      id: mediaId,
-      kind,
-      name: clientMetadata?.originalName || request.file.originalname,
-      mimeType: compressed.mimeType,
-      durationMs: clientMetadata?.durationMs ?? null,
-      size: compressed.plainSize || compressed.data.length,
-      originalSize: compressed.originalSize || request.file.size,
-      width: compressed.width,
-      height: compressed.height,
-      url: `/api/media/${mediaId}`,
-      encrypted: clientEncrypted,
-      envelope: clientMetadata?.envelope || '',
-    },
-  })
+    response.status(201).json({
+      media: {
+        id: mediaId,
+        kind,
+        name: clientMetadata?.originalName || request.file.originalname,
+        mimeType: mediaInfo.mimeType,
+        durationMs: mediaInfo.durationMs,
+        size: mediaInfo.plainSize,
+        originalSize: mediaInfo.originalSize,
+        width: mediaInfo.width,
+        height: mediaInfo.height,
+        url: `/api/media/${mediaId}`,
+        encrypted: clientEncrypted,
+        envelope: clientMetadata?.envelope || '',
+      },
+    })
+  } finally {
+    await cleanupUploadedFile(request.file)
+  }
 })
 
 app.get('/api/media/:mediaId', requireAuth, async (request, response) => {
   const result = await db.query(
-    `SELECT id, owner_id, chat_id, mime_type, storage_name, plain_size, iv, auth_tag,
+    `SELECT id, owner_id, chat_id, mime_type, storage_name, encrypted_size, plain_size, iv, auth_tag,
             client_encrypted
      FROM media_files WHERE id = $1 LIMIT 1`,
     [request.params.mediaId],
@@ -1928,41 +4796,43 @@ app.get('/api/media/:mediaId', requireAuth, async (request, response) => {
     return
   }
 
-  const encryptedFile = await readFile(resolve(config.mediaDir, media.storage_name))
-  const data = decryptBuffer({
-    ciphertext: encryptedFile.toString('base64'),
-    iv: media.iv,
-    authTag: media.auth_tag,
-  })
-  const range = request.headers.range
-  response.setHeader(
-    'Content-Type',
-    isDatabaseTrue(media.client_encrypted) ? 'application/octet-stream' : media.mime_type,
+  await streamDecryptedMedia(response, media, request.headers.range)
+})
+
+app.get('/api/calls', requireAuth, async (request, response) => {
+  const chatId = typeof request.query.chatId === 'string' ? request.query.chatId : ''
+  const params = [request.user.id]
+  let chatFilter = ''
+  if (chatId) {
+    if (!(await isChatMember(chatId, request.user.id))) {
+      response.status(404).json({ error: 'Chat not found' })
+      return
+    }
+    params.push(chatId)
+    chatFilter = 'AND c.chat_id = $2'
+  }
+
+  const result = await db.query(
+    `SELECT c.id, c.chat_id, c.initiator_id, c.recipient_id, c.kind, c.status,
+            c.created_at, c.answered_at, c.ended_at, ch.type AS chat_type, ch.title AS chat_title
+     FROM calls c
+     JOIN call_participants mine ON mine.call_id = c.id AND mine.user_id = $1
+     LEFT JOIN chats ch ON ch.id = c.chat_id
+     WHERE 1 = 1 ${chatFilter}
+     ORDER BY c.created_at DESC
+     LIMIT 50`,
+    params,
   )
-  response.setHeader('Accept-Ranges', 'bytes')
-  response.setHeader('Content-Disposition', 'inline')
 
-  if (!range) {
-    response.setHeader('Content-Length', data.length)
-    response.send(data)
-    return
+  const calls = []
+  for (const row of result.rows) {
+    calls.push(publicCallRow(row, await getCallParticipants(row.id, request.user.id)))
   }
+  response.json({ calls })
+})
 
-  const match = /^bytes=(\d*)-(\d*)$/.exec(range)
-  if (!match) {
-    response.status(416).setHeader('Content-Range', `bytes */${data.length}`).end()
-    return
-  }
-  const start = match[1] ? Number(match[1]) : 0
-  const end = match[2] ? Math.min(Number(match[2]), data.length - 1) : data.length - 1
-  if (start > end || start >= data.length) {
-    response.status(416).setHeader('Content-Range', `bytes */${data.length}`).end()
-    return
-  }
-  response.status(206)
-  response.setHeader('Content-Range', `bytes ${start}-${end}/${data.length}`)
-  response.setHeader('Content-Length', end - start + 1)
-  response.send(data.subarray(start, end + 1))
+app.get('/api/calls/ice-servers', requireAuth, (_request, response) => {
+  response.json({ iceServers: config.webrtc.iceServers })
 })
 
 app.post('/api/calls', requireAuth, async (request, response) => {
@@ -1971,43 +4841,83 @@ app.post('/api/calls', requireAuth, async (request, response) => {
     response.status(400).json({ error: 'Cannot call yourself' })
     return
   }
-  const recipient = await db.query('SELECT id FROM users WHERE id = $1 LIMIT 1', [input.recipientId])
-  if (!recipient.rows.length) {
-    response.status(404).json({ error: 'Recipient not found' })
-    return
-  }
-
-  if (input.chatId) {
-    const chat = await db.query(
-      `SELECT c.id
-       FROM chats c
-       JOIN chat_members caller ON caller.chat_id = c.id AND caller.user_id = $2
-       JOIN chat_members recipient ON recipient.chat_id = c.id AND recipient.user_id = $3
-       WHERE c.id = $1 AND c.type = 'private'
-       LIMIT 1`,
-      [input.chatId, request.user.id, input.recipientId],
-    )
-    if (!chat.rows.length) {
-      response.status(400).json({ error: 'Calls require a shared private chat' })
-      return
-    }
-  }
 
   await db.query(
     `UPDATE calls
      SET status = 'missed', ended_at = NOW()
      WHERE status = 'ringing' AND created_at < NOW() - INTERVAL '90 seconds'`,
   )
+  await db.query(
+    `UPDATE call_participants
+     SET state = 'missed', left_at = NOW()
+     WHERE state IN ('invited', 'ringing')
+       AND call_id IN (SELECT id FROM calls WHERE status = 'missed')`,
+  )
+
+  let chat = null
+  let recipientIds = []
+  if (input.chatId) {
+    const chatResult = await db.query(
+      `SELECT c.id, c.type, c.title
+       FROM chats c
+       JOIN chat_members cm ON cm.chat_id = c.id AND cm.user_id = $2
+       WHERE c.id = $1
+       LIMIT 1`,
+      [input.chatId, request.user.id],
+    )
+    chat = chatResult.rows[0]
+    if (!chat) {
+      response.status(404).json({ error: 'Chat not found' })
+      return
+    }
+    if (chat.type === 'channel' || chat.type === 'saved') {
+      response.status(400).json({ error: 'Calls are available in private chats and groups' })
+      return
+    }
+    const members = await db.query(
+      'SELECT user_id FROM chat_members WHERE chat_id = $1 AND user_id <> $2',
+      [input.chatId, request.user.id],
+    )
+    recipientIds = members.rows.map((member) => member.user_id)
+    if (chat.type === 'private' && input.recipientId && !recipientIds.includes(input.recipientId)) {
+      response.status(400).json({ error: 'Calls require a shared private chat' })
+      return
+    }
+  } else {
+    const recipient = await db.query('SELECT id FROM users WHERE id = $1 LIMIT 1', [input.recipientId])
+    if (!recipient.rows.length) {
+      response.status(404).json({ error: 'Recipient not found' })
+      return
+    }
+    recipientIds = [input.recipientId]
+  }
+
+  if (input.recipientId && !recipientIds.includes(input.recipientId)) {
+    recipientIds = [input.recipientId]
+  }
+  recipientIds = [...new Set(recipientIds)].filter((userId) => userId !== request.user.id)
+  if (!recipientIds.length) {
+    response.status(400).json({ error: 'Call requires at least one other participant' })
+    return
+  }
+
+  for (const recipientId of recipientIds) {
+    if (await hasBlockBetween(request.user.id, recipientId)) {
+      response.status(403).json({ error: 'Call is blocked' })
+      return
+    }
+  }
+
+  const participantIds = [request.user.id, ...recipientIds]
   const busy = await db.query(
-    `SELECT id
-     FROM calls
-     WHERE status IN ('ringing', 'accepted')
-       AND (
-         initiator_id IN ($1, $2)
-         OR recipient_id IN ($1, $2)
-       )
+    `SELECT cp.call_id
+     FROM call_participants cp
+     JOIN calls c ON c.id = cp.call_id
+     WHERE cp.user_id = ANY($1::uuid[])
+       AND c.status IN ('ringing', 'accepted')
+       AND cp.state IN ('invited', 'ringing', 'connected', 'disconnected')
      LIMIT 1`,
-    [request.user.id, input.recipientId],
+    [participantIds],
   )
   if (busy.rows.length) {
     response.status(409).json({ error: 'One of the users is already in a call' })
@@ -2015,24 +4925,85 @@ app.post('/api/calls', requireAuth, async (request, response) => {
   }
 
   const callId = randomUUID()
-  await db.query(
-    `INSERT INTO calls (id, chat_id, initiator_id, recipient_id, kind, status)
-     VALUES ($1, $2, $3, $4, $5, 'ringing')`,
-    [callId, input.chatId || null, request.user.id, input.recipientId, input.kind],
-  )
-  const online = sendToUser(input.recipientId, {
-    type: 'call:incoming',
-    callId,
-    kind: input.kind,
-    chatId: input.chatId || null,
-    from: publicUser(request.user),
+  const primaryRecipientId = chat?.type === 'group' ? null : recipientIds[0]
+  await db.transaction(async (tx) => {
+    await tx.query(
+      `INSERT INTO calls (id, chat_id, initiator_id, recipient_id, kind, status)
+       VALUES ($1, $2, $3, $4, $5, 'ringing')`,
+      [callId, input.chatId || null, request.user.id, primaryRecipientId, input.kind],
+    )
+    await tx.query(
+      `INSERT INTO call_participants
+        (call_id, user_id, role, state, muted, camera_off, joined_at)
+       VALUES ($1, $2, 'initiator', 'connected', FALSE, $3, NOW())`,
+      [callId, request.user.id, input.kind !== 'video'],
+    )
+    for (const recipientId of recipientIds) {
+      await tx.query(
+        `INSERT INTO call_participants
+          (call_id, user_id, role, state, camera_off)
+         VALUES ($1, $2, 'member', 'ringing', $3)`,
+        [callId, recipientId, input.kind !== 'video'],
+      )
+    }
   })
-  response.status(201).json({ call: { id: callId, status: 'ringing', online } })
+
+  const participants = await getCallParticipants(callId, request.user.id)
+  const onlineParticipantIds = []
+  for (const recipientId of recipientIds) {
+    const delivered = await sendToUser(recipientId, {
+      type: 'call:incoming',
+      callId,
+      kind: input.kind,
+      chatId: input.chatId || null,
+      from: publicUser(request.user),
+      participants,
+      iceServers: config.webrtc.iceServers,
+    })
+    if (delivered) {
+      onlineParticipantIds.push(recipientId)
+    } else {
+      await db.query(
+        `UPDATE call_participants
+         SET state = 'missed', left_at = NOW(), last_seen_at = NOW()
+         WHERE call_id = $1 AND user_id = $2 AND state = 'ringing'`,
+        [callId, recipientId],
+      )
+    }
+  }
+
+  const row = {
+    id: callId,
+    chat_id: input.chatId || null,
+    initiator_id: request.user.id,
+    recipient_id: primaryRecipientId,
+    kind: input.kind,
+    status: 'ringing',
+    created_at: new Date().toISOString(),
+    answered_at: null,
+    ended_at: null,
+    chat_type: chat?.type || (primaryRecipientId ? 'private' : null),
+    chat_title: chat?.title || '',
+  }
+  response.status(201).json({
+    call: {
+      ...publicCallRow(row, await getCallParticipants(callId, request.user.id)),
+      online: onlineParticipantIds.length > 0,
+      onlineParticipantIds,
+      iceServers: config.webrtc.iceServers,
+    },
+  })
 })
 
 server.on('upgrade', async (request, socket, head) => {
   try {
     const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`)
+    const origin = request.headers.origin
+    if (config.allowedOrigins.length && origin && !config.allowedOrigins.includes(origin)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
+      socket.destroy()
+      return
+    }
     if (url.pathname !== '/ws') {
       socket.destroy()
       return
@@ -2064,17 +5035,19 @@ server.on('upgrade', async (request, socket, head) => {
   }
 })
 
-wss.on('connection', (socket, _request, user) => {
+wss.on('connection', async (socket, _request, user) => {
   socket.isAlive = true
-  const wasOnline = socketsByUserId.has(user.id)
-  addSocket(user.id, socket)
+  const wasOnline = socketsByUserId.has(user.id) || onlineUserIdCache.has(user.id)
+  const socketCount = addSocket(user.id, socket)
+  await addPresence(user.id, socketCount)
+  const onlineUserIds = new Set([...onlineUserIdCache, ...socketsByUserId.keys(), ...(await getOnlineUserIds())])
   socket.send(JSON.stringify({
     type: 'session:ready',
     userId: user.id,
-    onlineUserIds: [...socketsByUserId.keys()],
+    onlineUserIds: [...onlineUserIds],
   }))
   if (!wasOnline) {
-    broadcast({ type: 'presence:update', userId: user.id, online: true }, user.id)
+    await broadcast({ type: 'presence:update', userId: user.id, online: true }, user.id)
   }
 
   socket.on('pong', () => {
@@ -2143,26 +5116,44 @@ wss.on('connection', (socket, _request, user) => {
         return
       }
 
-      if (!['call:offer', 'call:answer', 'call:ice', 'call:hangup', 'call:decline'].includes(message.type)) {
+      if (![
+        'call:offer',
+        'call:answer',
+        'call:ice',
+        'call:join',
+        'call:participant-state',
+        'call:hangup',
+        'call:decline',
+      ].includes(message.type)) {
         return
       }
-      if (typeof message.targetUserId !== 'string' || typeof message.callId !== 'string') return
+      if (typeof message.callId !== 'string') return
 
       const call = await db.query(
-        `SELECT id, initiator_id, recipient_id, status
-         FROM calls
-         WHERE id = $1 AND (initiator_id = $2 OR recipient_id = $2)
+        `SELECT c.id, c.initiator_id, c.recipient_id, c.status, c.chat_id,
+                ch.type AS chat_type, cp.state AS participant_state
+         FROM calls c
+         JOIN call_participants cp ON cp.call_id = c.id AND cp.user_id = $2
+         LEFT JOIN chats ch ON ch.id = c.chat_id
+         WHERE c.id = $1
          LIMIT 1`,
         [message.callId, user.id],
       )
       const callRow = call.rows[0]
       if (!callRow) return
-      const counterpartId =
-        callRow.initiator_id === user.id ? callRow.recipient_id : callRow.initiator_id
-      if (counterpartId !== message.targetUserId) return
       if (['declined', 'ended', 'missed'].includes(callRow.status)) return
-      if (message.type === 'call:offer' && callRow.initiator_id !== user.id) return
-      if (message.type === 'call:answer' && callRow.recipient_id !== user.id) return
+
+      if (['call:offer', 'call:answer', 'call:ice'].includes(message.type)) {
+        if (typeof message.targetUserId !== 'string' || message.targetUserId === user.id) return
+        const target = await db.query(
+          `SELECT 1 FROM call_participants
+           WHERE call_id = $1 AND user_id = $2
+             AND state IN ('invited', 'ringing', 'connected', 'disconnected')
+           LIMIT 1`,
+          [message.callId, message.targetUserId],
+        )
+        if (!target.rows.length) return
+      }
       if (
         (message.type === 'call:offer' || message.type === 'call:answer') &&
         (!message.description || typeof message.description.type !== 'string')
@@ -2171,22 +5162,144 @@ wss.on('connection', (socket, _request, user) => {
       }
       if (message.type === 'call:ice' && !message.candidate) return
 
+      if (message.type === 'call:join') {
+        await db.query(
+          `UPDATE call_participants
+           SET state = 'connected', joined_at = COALESCE(joined_at, NOW()),
+               left_at = NULL, last_seen_at = NOW()
+           WHERE call_id = $1 AND user_id = $2`,
+          [message.callId, user.id],
+        )
+        await db.query(
+          `UPDATE calls SET status = 'accepted', answered_at = COALESCE(answered_at, NOW())
+           WHERE id = $1 AND status = 'ringing'`,
+          [message.callId],
+        )
+        const participants = await getCallParticipants(message.callId, user.id)
+        await sendToCall(message.callId, {
+          type: 'call:participant',
+          callId: message.callId,
+          userId: user.id,
+          state: 'connected',
+          participants,
+        }, user.id)
+        return
+      }
+
+      if (message.type === 'call:participant-state') {
+        await db.query(
+          `UPDATE call_participants
+           SET muted = COALESCE($3, muted),
+               camera_off = COALESCE($4, camera_off),
+               screen_sharing = COALESCE($5, screen_sharing),
+               last_seen_at = NOW()
+           WHERE call_id = $1 AND user_id = $2`,
+          [
+            message.callId,
+            user.id,
+            typeof message.muted === 'boolean' ? message.muted : null,
+            typeof message.cameraOff === 'boolean' ? message.cameraOff : null,
+            typeof message.sharingScreen === 'boolean' ? message.sharingScreen : null,
+          ],
+        )
+        await sendToCall(message.callId, {
+          type: 'call:participant-state',
+          callId: message.callId,
+          userId: user.id,
+          muted: typeof message.muted === 'boolean' ? message.muted : undefined,
+          cameraOff: typeof message.cameraOff === 'boolean' ? message.cameraOff : undefined,
+          sharingScreen: typeof message.sharingScreen === 'boolean' ? message.sharingScreen : undefined,
+        }, user.id)
+        return
+      }
+
       if (message.type === 'call:answer') {
         await db.query(
           `UPDATE calls SET status = 'accepted', answered_at = NOW()
            WHERE id = $1 AND status = 'ringing'`,
           [message.callId],
         )
-      }
-      if (message.type === 'call:hangup' || message.type === 'call:decline') {
         await db.query(
-          `UPDATE calls SET status = $2, ended_at = NOW()
-           WHERE id = $1`,
-          [message.callId, message.type === 'call:decline' ? 'declined' : 'ended'],
+          `UPDATE call_participants
+           SET state = 'connected', joined_at = COALESCE(joined_at, NOW()),
+               left_at = NULL, last_seen_at = NOW()
+           WHERE call_id = $1 AND user_id = $2`,
+          [message.callId, user.id],
         )
       }
 
-      sendToUser(message.targetUserId, {
+      if (message.type === 'call:decline') {
+        await db.query(
+          `UPDATE call_participants
+           SET state = 'declined', left_at = NOW(), last_seen_at = NOW()
+           WHERE call_id = $1 AND user_id = $2`,
+          [message.callId, user.id],
+        )
+        const active = await db.query(
+          `SELECT COUNT(*)::integer AS count
+           FROM call_participants
+           WHERE call_id = $1 AND state IN ('ringing', 'connected', 'disconnected')`,
+          [message.callId],
+        )
+        if (!Number(active.rows[0]?.count || 0)) {
+          await db.query(
+            `UPDATE calls SET status = 'declined', ended_at = NOW()
+             WHERE id = $1`,
+            [message.callId],
+          )
+        }
+        await sendToCall(message.callId, {
+          type: 'call:decline',
+          callId: message.callId,
+          fromUserId: user.id,
+        }, user.id)
+        return
+      }
+
+      if (message.type === 'call:hangup') {
+        const isPrivate = callRow.chat_type === 'private' || Boolean(callRow.recipient_id)
+        await db.query(
+          `UPDATE call_participants
+           SET state = 'left', left_at = NOW(), last_seen_at = NOW()
+           WHERE call_id = $1 AND user_id = $2`,
+          [message.callId, user.id],
+        )
+        const active = await db.query(
+          `SELECT COUNT(*)::integer AS count
+           FROM call_participants
+           WHERE call_id = $1 AND state IN ('ringing', 'connected', 'disconnected')`,
+          [message.callId],
+        )
+        if (isPrivate || Number(active.rows[0]?.count || 0) <= 1) {
+          await db.query(
+            `UPDATE calls SET status = 'ended', ended_at = NOW()
+             WHERE id = $1`,
+            [message.callId],
+          )
+          await db.query(
+            `UPDATE call_participants
+             SET state = CASE WHEN state IN ('ringing', 'invited') THEN 'missed' ELSE state END,
+                 left_at = COALESCE(left_at, NOW()), last_seen_at = NOW()
+             WHERE call_id = $1 AND state IN ('ringing', 'invited', 'connected', 'disconnected')`,
+            [message.callId],
+          )
+          await sendToCall(message.callId, {
+            type: 'call:hangup',
+            callId: message.callId,
+            fromUserId: user.id,
+          }, user.id)
+          return
+        }
+        await sendToCall(message.callId, {
+          type: 'call:participant',
+          callId: message.callId,
+          userId: user.id,
+          state: 'left',
+        }, user.id)
+        return
+      }
+
+      await sendToUser(message.targetUserId, {
         ...message,
         fromUserId: user.id,
       })
@@ -2196,42 +5309,58 @@ wss.on('connection', (socket, _request, user) => {
   })
 
   socket.on('close', () => {
-    removeSocket(user.id, socket)
+    const socketCount = removeSocket(user.id, socket)
+    void removePresence(user.id, socketCount)
     if (!socketsByUserId.has(user.id)) {
       const lastSeenAt = new Date().toISOString()
       void (async () => {
         try {
           await db.query('UPDATE users SET last_seen_at = $1 WHERE id = $2', [lastSeenAt, user.id])
           const activeCalls = await db.query(
-            `SELECT id, initiator_id, recipient_id, status
-             FROM calls
-             WHERE status IN ('ringing', 'accepted')
-               AND (initiator_id = $1 OR recipient_id = $1)`,
+            `SELECT c.id, c.initiator_id, c.recipient_id, c.status, ch.type AS chat_type
+             FROM calls c
+             JOIN call_participants cp ON cp.call_id = c.id AND cp.user_id = $1
+             LEFT JOIN chats ch ON ch.id = c.chat_id
+             WHERE c.status IN ('ringing', 'accepted')
+               AND cp.state IN ('ringing', 'connected', 'disconnected')`,
             [user.id],
           )
           for (const activeCall of activeCalls.rows) {
-            const status = activeCall.status === 'ringing' ? 'missed' : 'ended'
+            if (activeCall.status === 'ringing') {
+              await db.query(
+                `UPDATE call_participants
+                 SET state = 'missed', left_at = NOW(), last_seen_at = NOW()
+                 WHERE call_id = $1 AND user_id = $2 AND state = 'ringing'`,
+                [activeCall.id, user.id],
+              )
+              await sendToCall(activeCall.id, {
+                type: 'call:participant',
+                callId: activeCall.id,
+                userId: user.id,
+                state: 'missed',
+              }, user.id)
+              continue
+            }
+
             await db.query(
-              `UPDATE calls SET status = $2, ended_at = NOW()
-               WHERE id = $1 AND status IN ('ringing', 'accepted')`,
-              [activeCall.id, status],
+              `UPDATE call_participants
+               SET state = 'disconnected', last_seen_at = NOW()
+               WHERE call_id = $1 AND user_id = $2 AND state = 'connected'`,
+              [activeCall.id, user.id],
             )
-            const counterpartId =
-              activeCall.initiator_id === user.id
-                ? activeCall.recipient_id
-                : activeCall.initiator_id
-            sendToUser(counterpartId, {
-              type: 'call:hangup',
+            await sendToCall(activeCall.id, {
+              type: 'call:participant',
               callId: activeCall.id,
-              fromUserId: user.id,
+              userId: user.id,
+              state: 'disconnected',
               reason: 'disconnected',
-            })
+            }, user.id)
           }
         } catch (error) {
           console.error('[presence] disconnect cleanup failed', error.message)
         }
       })()
-      broadcast({
+      void broadcast({
         type: 'presence:update',
         userId: user.id,
         online: false,
@@ -2242,16 +5371,48 @@ wss.on('connection', (socket, _request, user) => {
   socket.on('error', (error) => console.error('[ws] connection error', error.message))
 })
 
-const heartbeat = setInterval(() => {
-  for (const socket of wss.clients) {
-    if (socket.isAlive === false) {
-      socket.terminate()
-      continue
+let heartbeat = null
+let presenceRefresh = null
+let scheduledPublisher = null
+
+function startBackgroundJobs() {
+  if (heartbeat) return
+
+  heartbeat = setInterval(() => {
+    for (const socket of wss.clients) {
+      if (socket.isAlive === false) {
+        socket.terminate()
+        continue
+      }
+      socket.isAlive = false
+      socket.ping()
     }
-    socket.isAlive = false
-    socket.ping()
-  }
-}, 30000)
+  }, 30000)
+
+  presenceRefresh = setInterval(() => {
+    void (async () => {
+      const localEntries = [...socketsByUserId.entries()].map(([userId, sockets]) => [userId, sockets.size])
+      await refreshPresence(localEntries)
+      onlineUserIdCache = new Set([
+        ...localEntries.map(([userId]) => userId),
+        ...(await getOnlineUserIds()),
+      ])
+    })()
+  }, 30000)
+
+  scheduledPublisher = setInterval(() => {
+    void publishDueScheduledMessages()
+  }, 15000)
+}
+
+function stopBackgroundJobs() {
+  if (heartbeat) clearInterval(heartbeat)
+  if (presenceRefresh) clearInterval(presenceRefresh)
+  if (scheduledPublisher) clearInterval(scheduledPublisher)
+  heartbeat = null
+  presenceRefresh = null
+  scheduledPublisher = null
+}
 
 if (config.isProduction && existsSync(resolve(config.rootDir, 'dist'))) {
   app.use(express.static(resolve(config.rootDir, 'dist')))
@@ -2267,7 +5428,7 @@ app.use((request, response) => {
 app.use((error, request, response, next) => {
   void next
   if (error?.code === 'LIMIT_FILE_SIZE') {
-    response.status(413).json({ error: 'File is too large. Maximum upload size is 100 MB.' })
+    response.status(413).json({ error: `File is too large. Maximum upload size is ${formatByteSize(mediaUploadMaxBytes)}.` })
     return
   }
   const status = error.status || 500
@@ -2279,31 +5440,49 @@ app.use((error, request, response, next) => {
 })
 
 async function start() {
+  onSocketMessage((message) => {
+    if (message.kind === 'user') {
+      deliverToLocalUser(message.userId, message.payload)
+      return
+    }
+    if (message.kind === 'broadcast') {
+      deliverLocalBroadcast(message.payload, message.excludedUserId || '')
+    }
+  })
+  await initRedis()
+  onlineUserIdCache = new Set(await getOnlineUserIds())
   await migrateDatabase()
   await cleanupExpiredSessions()
+  await publishDueScheduledMessages()
+  startBackgroundJobs()
   server.listen(config.port, config.host, () => {
     console.log(`[server] http://${config.host}:${config.port}`)
   })
 }
 
 async function shutdown() {
-  clearInterval(heartbeat)
+  stopBackgroundJobs()
   for (const socket of wss.clients) socket.close(1001, 'Server shutting down')
   await new Promise((resolveClose) => server.close(resolveClose))
   await db.close()
+  await closeRedis()
 }
 
-process.on('SIGINT', async () => {
-  await shutdown()
-  process.exit(0)
-})
+export { app, server, start, shutdown }
 
-process.on('SIGTERM', async () => {
-  await shutdown()
-  process.exit(0)
-})
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  process.on('SIGINT', async () => {
+    await shutdown()
+    process.exit(0)
+  })
 
-start().catch((error) => {
-  console.error('[server] startup failed', error)
-  process.exit(1)
-})
+  process.on('SIGTERM', async () => {
+    await shutdown()
+    process.exit(0)
+  })
+
+  start().catch((error) => {
+    console.error('[server] startup failed', error)
+    process.exit(1)
+  })
+}
