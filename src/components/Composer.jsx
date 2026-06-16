@@ -3,6 +3,8 @@ import { t } from '../i18n'
 import {
   BarChart3,
   Bold,
+  ChevronDown,
+  Clock,
   Code,
   Contact,
   ExternalLink,
@@ -57,6 +59,7 @@ export default function Composer({
   replyTo,
   editingMessage,
   onSend,
+  onScheduleSend,
   onCancelReply,
   onCancelEdit,
   onAttach,
@@ -88,6 +91,8 @@ export default function Composer({
   const [linkPreview, setLinkPreview] = useState(null)
   const [suppressPreview, setSuppressPreview] = useState(false)
   const [pollCreator, setPollCreator] = useState(null) // null | { question, options, multipleChoice }
+  const [schedulePickerOpen, setSchedulePickerOpen] = useState(false)
+  const [scheduleAt, setScheduleAt] = useState('')
   const inputRef = useRef(null)
   const fileInputRef = useRef(null)
   const emojiPopoverRef = useRef(null)
@@ -232,7 +237,7 @@ export default function Composer({
     })
   }
 
-  async function submit() {
+  async function submit(scheduledAt) {
     const text = value.trim()
     if ((!text && !attachments.length) || sending) return
     const controller = new AbortController()
@@ -246,8 +251,11 @@ export default function Composer({
         await sender(files, text, {
           signal: controller.signal,
           onUploadProgress: setSendProgress,
+          scheduledAt,
         })
         clearAttachment()
+      } else if (scheduledAt && onScheduleSend) {
+        await onScheduleSend(text, linkPreview || undefined, scheduledAt)
       } else {
         await onSend(text, linkPreview || undefined)
       }
@@ -257,6 +265,8 @@ export default function Composer({
       setEmojiOpen(false)
       setLinkPreview(null)
       setSuppressPreview(false)
+      setScheduleAt('')
+      setSchedulePickerOpen(false)
       if (inputRef.current) inputRef.current.style.height = 'auto'
     } catch (error) {
       if (error.name !== 'AbortError') throw error
@@ -265,6 +275,13 @@ export default function Composer({
       setSendProgress(null)
       sendAbortRef.current = null
     }
+  }
+
+  function confirmSchedule() {
+    if (!scheduleAt) return
+    const at = new Date(scheduleAt)
+    if (Number.isNaN(at.getTime()) || at <= new Date()) return
+    submit(at.toISOString())
   }
 
   function sendRichAsset(rich) {
@@ -704,21 +721,57 @@ export default function Composer({
             rows={1}
           />
           {canSend ? (
-            <button className="send-button" onClick={submit} aria-label="Send message" disabled={sending}>
-              {sending ? (
-                <LoaderCircle className="send-spinner" size={20} />
-              ) : attachments.length ? (
-                attachments.length > 1 || attachments[0].file.type.startsWith('image/') ? (
-                  <Image size={20} />
-                ) : attachments[0].file.type.startsWith('video/') ? (
-                  <FileVideo2 size={20} />
+            <div className="send-btn-group">
+              <button className="send-button" onClick={() => submit()} aria-label="Send message" disabled={sending}>
+                {sending ? (
+                  <LoaderCircle className="send-spinner" size={20} />
+                ) : attachments.length ? (
+                  attachments.length > 1 || attachments[0].file.type.startsWith('image/') ? (
+                    <Image size={20} />
+                  ) : attachments[0].file.type.startsWith('video/') ? (
+                    <FileVideo2 size={20} />
+                  ) : (
+                    <Send size={20} />
+                  )
                 ) : (
                   <Send size={20} />
-                )
-              ) : (
-                <Send size={20} />
+                )}
+              </button>
+              {onScheduleSend && !editingMessage && (
+                <div className="schedule-send-wrap">
+                  <button
+                    className="schedule-chevron"
+                    aria-label="Schedule message"
+                    title="Schedule send"
+                    onClick={() => setSchedulePickerOpen((open) => !open)}
+                    disabled={sending}
+                  >
+                    <ChevronDown size={13} />
+                  </button>
+                  {schedulePickerOpen && (
+                    <div className="schedule-picker">
+                      <label>
+                        <Clock size={13} /> Send at
+                        <input
+                          type="datetime-local"
+                          value={scheduleAt}
+                          min={new Date(Date.now() + 60000).toISOString().slice(0, 16)}
+                          onChange={(e) => setScheduleAt(e.target.value)}
+                        />
+                      </label>
+                      <button
+                        className="primary-button"
+                        disabled={!scheduleAt}
+                        onClick={confirmSchedule}
+                      >
+                        Schedule
+                      </button>
+                      <button onClick={() => setSchedulePickerOpen(false)}>Cancel</button>
+                    </div>
+                  )}
+                </div>
               )}
-            </button>
+            </div>
           ) : (
             <IconButton label="Record voice message" onClick={startRecording}>
               <Mic size={21} />

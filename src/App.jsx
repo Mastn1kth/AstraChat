@@ -2261,6 +2261,22 @@ export default function App() {
     }
   }
 
+  async function scheduleSendMessage(text, linkPreview, scheduledAt) {
+    if (!selectedChat?.backend) return
+    try {
+      const payloadText = await encryptTextForChat(text, selectedChat)
+      await sendChatMessage(selectedChat.id, {
+        text: payloadText,
+        searchText: text,
+        linkPreview: linkPreview || undefined,
+        scheduledAt,
+      })
+      showToast(`Message scheduled for ${new Date(scheduledAt).toLocaleString()}`)
+    } catch (error) {
+      showToast(error.message || 'Could not schedule message.')
+    }
+  }
+
   async function retryMessage(messageId) {
     if (!selectedChat) return
     const message = (state.messages[selectedChat.id] || []).find((m) => m.id === messageId)
@@ -3132,6 +3148,7 @@ export default function App() {
       onPinMessage={pinMessage}
       onRetryMessage={retryMessage}
       onVotePoll={votePollOption}
+      onScheduleSend={scheduleSendMessage}
       onLoadGroupMembers={loadGroupMembers}
       onLoadCallHistory={loadCallHistory}
       onAddGroupMember={addGroupMember}

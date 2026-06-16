@@ -6599,3 +6599,223 @@ textarea::placeholder {
   font-size: 12px;
   color: var(--faint);
 }
+
+/* ================================================================
+   SCHEDULED MESSAGES PANEL
+   ================================================================ */
+.scheduled-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+.scheduled-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 700;
+  gap: 8px;
+}
+.scheduled-panel header > div {
+  display: flex;
+  gap: 4px;
+}
+.scheduled-panel header button {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+}
+.scheduled-panel header button:hover { background: var(--surface-2); color: var(--text); }
+.scheduled-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+.scheduled-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.scheduled-item:last-child { border-bottom: 0; }
+.scheduled-item-body { flex: 1; min-width: 0; }
+.scheduled-item-time {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--accent);
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+.scheduled-item-text {
+  font-size: 13.5px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin: 0;
+}
+.scheduled-item-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.scheduled-send-now {
+  background: var(--accent-soft);
+  border: 0;
+  color: var(--accent);
+  border-radius: 6px;
+  padding: 5px 7px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+}
+.scheduled-send-now:hover { background: var(--accent); color: #fff; }
+
+/* header badge */
+.scheduled-header-btn-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.scheduled-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 99px;
+  font-size: 9px;
+  font-weight: 700;
+  min-width: 14px;
+  height: 14px;
+  line-height: 14px;
+  text-align: center;
+  padding: 0 2px;
+  pointer-events: none;
+}
+
+/* ================================================================
+   SCHEDULE SEND (composer dropdown)
+   ================================================================ */
+.send-btn-group {
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+.schedule-send-wrap {
+  position: relative;
+}
+.schedule-chevron {
+  background: var(--accent-soft);
+  border: 0;
+  color: var(--accent);
+  border-radius: 0 8px 8px 0;
+  padding: 3px 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  height: 36px;
+  margin-left: 1px;
+  transition: background 0.15s;
+}
+.schedule-chevron:hover { background: var(--accent); color: #fff; }
+.schedule-picker {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  box-shadow: var(--shadow);
+  z-index: 100;
+  min-width: 230px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.schedule-picker label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.schedule-picker input[type="datetime-local"] {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface-2);
+}
+.schedule-picker .primary-button {
+  padding: 8px 14px;
+  font-size: 13px;
+}
+.schedule-picker button:not(.primary-button) {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+
+/* ================================================================
+   JOIN REQUESTS (profile panel)
+   ================================================================ */
+.join-requests-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.join-request-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.join-request-row:last-child { border-bottom: 0; }
+.join-request-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.join-request-info strong { font-size: 13.5px; }
+.join-request-info small {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.join-request-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.join-approve-btn {
+  background: rgba(95, 143, 107, 0.15);
+  border: 0;
+  color: var(--success);
+  border-radius: 6px;
+  padding: 5px 7px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+}
+.join-approve-btn:hover { background: var(--success); color: #fff; }

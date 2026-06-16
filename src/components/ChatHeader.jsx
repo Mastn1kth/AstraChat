@@ -5,6 +5,7 @@ import {
   Bell,
   BellOff,
   BellRing,
+  Clock,
   MoreVertical,
   Phone,
   Pin,
@@ -37,6 +38,7 @@ function getMutedUntil(ms) {
 export default function ChatHeader({
   contact,
   chat,
+  scheduledCount,
   onBack,
   onOpenProfile,
   onToggleSearch,
@@ -45,6 +47,7 @@ export default function ChatHeader({
   onSetPushMode,
   onArchive,
   onOpenCall,
+  onOpenScheduled,
 }) {
   const [muteMenuOpen, setMuteMenuOpen] = useState(false)
   const [pushMenuOpen, setPushMenuOpen] = useState(false)
@@ -88,6 +91,16 @@ export default function ChatHeader({
         <IconButton label={t('chat.searchMessages')} onClick={onToggleSearch}>
           <Search size={19} />
         </IconButton>
+        {onOpenScheduled && (
+          <div className="scheduled-header-btn-wrap">
+            <IconButton label="Scheduled messages" onClick={onOpenScheduled}>
+              <Clock size={19} />
+            </IconButton>
+            {scheduledCount > 0 && (
+              <span className="scheduled-badge">{scheduledCount}</span>
+            )}
+          </div>
+        )}
         <IconButton label={t('chat.audioCall')} onClick={() => onOpenCall('audio')}>
           <Phone size={19} />
         </IconButton>

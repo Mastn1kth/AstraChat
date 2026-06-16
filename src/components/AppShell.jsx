@@ -16,6 +16,7 @@ import MediaViewer from './MediaViewer'
 import ForwardModal from './ForwardModal'
 import DownloadManager from './DownloadManager'
 import CatchUpBanner from './CatchUpBanner'
+import ScheduledPanel from './ScheduledPanel'
 import { t } from '../i18n'
 
 export default function AppShell({
@@ -129,12 +130,15 @@ export default function AppShell({
   onBackToList,
   onGlobalSearchSelectChat,
   onGlobalSearchJumpMessage,
+  onScheduleSend,
+  scheduledCounts,
 }) {
   const hasChat = selectedChat && selectedContact
   const liveWallEnabled = Boolean(settings.liveWall?.enabled)
   const wordStreamEnabled =
     (settings.wordStream.enabled && wordStreamWords.length > 0) || liveWallEnabled
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false)
+  const [scheduledPanelOpen, setScheduledPanelOpen] = useState(false)
   const [openMedia, setOpenMedia] = useState(null)
   const [forwardMessage, setForwardMessage] = useState(null)
   const [forwardingSelected, setForwardingSelected] = useState(false)
@@ -372,6 +376,7 @@ export default function AppShell({
             <ChatHeader
               contact={selectedContact}
               chat={selectedChat}
+              scheduledCount={scheduledCounts?.[selectedChat.id] || 0}
               onBack={onBackToList}
               onOpenProfile={onOpenProfile}
               onToggleSearch={onToggleSearch}
@@ -381,6 +386,7 @@ export default function AppShell({
               onSetPushMode={(pushMode) => onSetChatPushMode(selectedChat.id, pushMode)}
               onArchive={() => onArchiveChat(selectedChat.id)}
               onOpenCall={onOpenCall}
+              onOpenScheduled={selectedChat.backend ? () => setScheduledPanelOpen((open) => !open) : undefined}
             />
             {pinnedMessageId && (
               <div className="pinned-message-bar" onClick={() => {
@@ -467,6 +473,7 @@ export default function AppShell({
                 replyTo={replyTo}
                 editingMessage={editingMessage}
                 onSend={onSendMessage}
+                onScheduleSend={selectedChat.backend ? onScheduleSend : undefined}
                 onSendAttachment={onSendAttachment}
                 onSendAttachments={onSendAttachments}
                 onSendRichMessage={onSendRichMessage}
@@ -535,6 +542,13 @@ export default function AppShell({
           onBlockUser={onBlockUser}
           onUnblockUser={onUnblockUser}
           onReportUser={(userId) => onReportUser(userId, { chatId: selectedChat.id })}
+        />
+      )}
+
+      {scheduledPanelOpen && selectedChat?.backend && (
+        <ScheduledPanel
+          chatId={selectedChat.id}
+          onClose={() => setScheduledPanelOpen(false)}
         />
       )}
 

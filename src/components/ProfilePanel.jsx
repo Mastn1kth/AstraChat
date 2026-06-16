@@ -26,7 +26,7 @@ import Avatar from './Avatar'
 import FocusSchedule from './FocusSchedule'
 import { formatMessageTime } from '../utils/formatters'
 import { t } from '../i18n'
-import { getChannelStats, getChatAdminLog, getChatBans, unbanChatMember, getChatInvites, createChatInvite, revokeChatInvite } from '../api/client'
+import { getChannelStats, getChatAdminLog, getChatBans, unbanChatMember, getChatInvites, createChatInvite, revokeChatInvite, getChatJoinRequests, reviewChatJoinRequest } from '../api/client'
 
 const linkPattern = /\bhttps?:\/\/[^\s<>"']+/gi
 const roleOptions = ['owner', 'admin', 'moderator', 'member']
@@ -101,6 +101,8 @@ export default function ProfilePanel({
   const [invites, setInvites] = useState(null)
   const [invitesLoading, setInvitesLoading] = useState(false)
   const [copiedInviteId, setCopiedInviteId] = useState('')
+  const [joinRequests, setJoinRequests] = useState(null)
+  const [joinRequestsLoading, setJoinRequestsLoading] = useState(false)
   const { confirm, dialog } = useConfirm()
 
   const isBackendGroup = chat.backend && (contact.type === 'group' || contact.type === 'channel')
@@ -221,6 +223,28 @@ export default function ProfilePanel({
     try {
       await revokeChatInvite(chat.id, inviteId)
       setInvites((current) => (current || []).filter((item) => item.id !== inviteId))
+    } catch {
+      // toast shown by App.jsx
+    }
+  }
+
+  async function loadJoinRequests() {
+    if (!isBackendGroup || joinRequestsLoading) return
+    setJoinRequestsLoading(true)
+    try {
+      const data = await getChatJoinRequests(chat.id)
+      setJoinRequests(data.requests || [])
+    } catch {
+      setJoinRequests([])
+    } finally {
+      setJoinRequestsLoading(false)
+    }
+  }
+
+  async function handleJoinRequest(userId, approved) {
+    try {
+      await reviewChatJoinRequest(chat.id, userId, approved)
+      setJoinRequests((current) => (current || []).filter((r) => r.userId !== userId))
     } catch {
       // toast shown by App.jsx
     }
@@ -774,6 +798,61 @@ export default function ProfilePanel({
                   </li>
                 )
               })}
+            </ul>
+          )}
+        </section>
+      )}
+
+      {isBackendGroup && isOwnerOrAdmin && (
+        <section className="invite-links-section">
+          <div className="group-members-header">
+            <strong><Users size={15} /> Join Requests</strong>
+            <button
+              className="add-member-btn"
+              title="Refresh"
+              onClick={loadJoinRequests}
+              disabled={joinRequestsLoading}
+            >
+              <Loader2 size={15} className={joinRequestsLoading ? 'spin' : ''} />
+            </button>
+          </div>
+          {joinRequests === null && !joinRequestsLoading && (
+            <button className="load-invites-btn" onClick={loadJoinRequests}>
+              Show join requests
+            </button>
+          )}
+          {joinRequestsLoading && (
+            <div className="members-loading"><Loader2 size={16} className="spin" /></div>
+          )}
+          {joinRequests !== null && (
+            <ul className="join-requests-list">
+              {joinRequests.length === 0 && (
+                <li className="shared-empty">No pending join requests</li>
+              )}
+              {joinRequests.map((req) => (
+                <li key={req.userId} className="join-request-row">
+                  <div className="join-request-info">
+                    <strong>{req.user?.name || req.userId}</strong>
+                    {req.message && <small>{req.message}</small>}
+                  </div>
+                  <div className="join-request-actions">
+                    <button
+                      className="join-approve-btn"
+                      title="Approve"
+                      onClick={() => handleJoinRequest(req.userId, true)}
+                    >
+                      <Check size={14} />
+                    </button>
+                    <button
+                      className="remove-member-btn"
+                      title="Decline"
+                      onClick={() => handleJoinRequest(req.userId, false)}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                </li>
+              ))}
             </ul>
           )}
         </section>
