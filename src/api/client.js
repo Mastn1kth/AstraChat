@@ -106,6 +106,18 @@ export function getBlockedUsers() {
   return request('/api/users/blocks')
 }
 
+export function getContacts() {
+  return request('/api/contacts')
+}
+
+export function addContact(userId) {
+  return request(`/api/contacts/${encodeURIComponent(userId)}`, { method: 'POST' })
+}
+
+export function removeContact(userId) {
+  return request(`/api/contacts/${encodeURIComponent(userId)}`, { method: 'DELETE' })
+}
+
 export function blockUser(userId) {
   return request(`/api/users/${encodeURIComponent(userId)}/block`, { method: 'POST' })
 }

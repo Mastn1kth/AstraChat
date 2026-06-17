@@ -17,6 +17,7 @@ import ForwardModal from './ForwardModal'
 import DownloadManager from './DownloadManager'
 import CatchUpBanner from './CatchUpBanner'
 import ScheduledPanel from './ScheduledPanel'
+import TopicsPanel from './TopicsPanel'
 import MiniAudioPlayer from './MiniAudioPlayer'
 import { t } from '../i18n'
 
@@ -102,6 +103,8 @@ export default function AppShell({
   onMarkSecurityAlertRead,
   onMarkAllSecurityAlertsRead,
   onLoadBlockedContacts,
+  onAddContact,
+  onRemoveContact,
   onBlockUser,
   onUnblockUser,
   onReportUser,
@@ -140,6 +143,8 @@ export default function AppShell({
     (settings.wordStream.enabled && wordStreamWords.length > 0) || liveWallEnabled
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false)
   const [scheduledPanelOpen, setScheduledPanelOpen] = useState(false)
+  const [topicsPanelOpen, setTopicsPanelOpen] = useState(false)
+  const [activeTopic, setActiveTopic] = useState(null)
   const [openMedia, setOpenMedia] = useState(null)
   const [forwardMessage, setForwardMessage] = useState(null)
   const [forwardingSelected, setForwardingSelected] = useState(false)
@@ -166,6 +171,15 @@ export default function AppShell({
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
+
+  // Reset active topic when switching chats
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setActiveTopic(null)
+      setTopicsPanelOpen(false)
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [selectedChat?.id])
 
   const pinnedMessageId = selectedChat?.pinnedMessageId || null
   const pinnedMessage = pinnedMessageId
@@ -368,6 +382,8 @@ export default function AppShell({
         onMarkSecurityAlertRead={onMarkSecurityAlertRead}
         onMarkAllSecurityAlertsRead={onMarkAllSecurityAlertsRead}
         onLoadBlockedContacts={onLoadBlockedContacts}
+        onAddContact={onAddContact}
+        onRemoveContact={onRemoveContact}
         onUnblockUser={onUnblockUser}
       />
 
@@ -378,6 +394,7 @@ export default function AppShell({
               contact={selectedContact}
               chat={selectedChat}
               scheduledCount={scheduledCounts?.[selectedChat.id] || 0}
+              activeTopic={activeTopic}
               onBack={onBackToList}
               onOpenProfile={onOpenProfile}
               onToggleSearch={onToggleSearch}
@@ -388,6 +405,7 @@ export default function AppShell({
               onArchive={() => onArchiveChat(selectedChat.id)}
               onOpenCall={onOpenCall}
               onOpenScheduled={selectedChat.backend ? () => setScheduledPanelOpen((open) => !open) : undefined}
+              onOpenTopics={selectedChat.backend && selectedContact?.type === 'group' ? () => setTopicsPanelOpen((open) => !open) : undefined}
             />
             {pinnedMessageId && (
               <div className="pinned-message-bar" onClick={() => {
@@ -410,7 +428,7 @@ export default function AppShell({
               </div>
             )}
             <MessageList
-              messages={messages}
+              messages={activeTopic ? messages.filter((m) => m.topicId === activeTopic.id) : messages}
               contact={selectedContact}
               currentUser={user}
               search={messageSearch}
@@ -473,6 +491,7 @@ export default function AppShell({
                 chatId={selectedChat.id}
                 replyTo={replyTo}
                 editingMessage={editingMessage}
+                activeTopic={activeTopic}
                 onSend={onSendMessage}
                 onScheduleSend={selectedChat.backend ? onScheduleSend : undefined}
                 onSendAttachment={onSendAttachment}
@@ -553,11 +572,26 @@ export default function AppShell({
         />
       )}
 
+      {topicsPanelOpen && selectedChat?.backend && selectedContact?.type === 'group' && (
+        <TopicsPanel
+          chatId={selectedChat.id}
+          activeTopic={activeTopic}
+          currentMemberRole={selectedChat.members?.find((m) => m.id === user.id)?.role || selectedContact?.role}
+          onSelectTopic={(topic) => {
+            setActiveTopic(topic)
+            setTopicsPanelOpen(false)
+          }}
+          onClose={() => setTopicsPanelOpen(false)}
+        />
+      )}
+
       {ui.contactsOpen && (
         <ContactModal
           contacts={contacts}
           chats={chatSummaries}
           onCreateChat={onCreateChat}
+          onAddContact={onAddContact}
+          onRemoveContact={onRemoveContact}
           onClose={onCloseContacts}
         />
       )}

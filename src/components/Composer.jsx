@@ -10,6 +10,7 @@ import {
   ExternalLink,
   FileText,
   FileVideo2,
+  Hash,
   Image,
   Italic,
   LoaderCircle,
@@ -58,6 +59,7 @@ export default function Composer({
   chatId,
   replyTo,
   editingMessage,
+  activeTopic,
   onSend,
   onScheduleSend,
   onCancelReply,
@@ -255,9 +257,9 @@ export default function Composer({
         })
         clearAttachment()
       } else if (scheduledAt && onScheduleSend) {
-        await onScheduleSend(text, linkPreview || undefined, scheduledAt)
+        await onScheduleSend(text, linkPreview || undefined, scheduledAt, activeTopic?.id)
       } else {
-        await onSend(text, linkPreview || undefined)
+        await onSend(text, linkPreview || undefined, activeTopic?.id)
       }
       setValue('')
       clearDraft()
@@ -437,6 +439,13 @@ export default function Composer({
 
   return (
     <footer className="composer">
+      {activeTopic && (
+        <div className="composer-topic-bar">
+          <Hash size={13} />
+          <span>{activeTopic.title}</span>
+          {activeTopic.closed && <span className="composer-topic-closed">closed</span>}
+        </div>
+      )}
       {preview && (
         <div className={`composer-preview ${editingMessage ? 'edit-preview' : ''}`}>
           <div>

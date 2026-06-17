@@ -27,8 +27,11 @@ import {
   getChatMessages,
   getChatMembers,
   addChatMember,
+  addContact,
   removeChatMember,
+  removeContact,
   updateChatInfo,
+  getContacts,
   getChats,
   pinChatMessage,
   getBlockedUsers,
@@ -1029,13 +1032,18 @@ function AppInner() {
 
   async function loadServerWorkspace(currentUserId, currentUserPublicKey = state.user.encryptionPublicKey) {
     try {
-      const [{ users }, { chats }, folderPayload] = await Promise.all([
+      const [{ contacts: savedContacts }, { users }, { chats }, folderPayload] = await Promise.all([
+        getContacts(),
         searchUsers(),
         getChats(),
         getChatFolders(),
       ])
-      const serverContacts = users
-        .filter((user) => user.id !== currentUserId)
+      const savedContactIds = new Set((savedContacts || []).map((contact) => contact.id))
+      const userById = new Map()
+      ;[...(users || []), ...(savedContacts || [])].forEach((user) => {
+        if (user.id !== currentUserId) userById.set(user.id, user)
+      })
+      const serverContacts = Array.from(userById.values())
         .map((user) => ({
           id: user.id,
           type: 'private',
@@ -1051,6 +1059,8 @@ function AppInner() {
           encryptionPublicKey: user.encryptionPublicKey,
           blockedByMe: Boolean(user.blockedByMe),
           blockedMe: Boolean(user.blockedMe),
+          isContact: Boolean(user.isContact || savedContactIds.has(user.id)),
+          contactSince: user.contactSince || null,
           phone: '',
           bio: user.bio || 'Onda user',
         }))
@@ -1632,7 +1642,7 @@ function AppInner() {
     [selectedChat?.backend, selectedChat?.id, sendSocketEvent],
   )
 
-  async function sendMessage(text, linkPreview) {
+  async function sendMessage(text, linkPreview, topicId) {
     if (!selectedChat) return
 
     if (editingMessage) {
@@ -1703,6 +1713,7 @@ function AppInner() {
           searchText: text,
           replyToId: replyTo?.id,
           linkPreview: linkPreview || undefined,
+          topicId: topicId || undefined,
         })
         const normalizedMessage = await normalizeServerMessage(message, state.user.id)
         if (pendingReadIdsRef.current.has(normalizedMessage.id)) {
@@ -2262,7 +2273,7 @@ function AppInner() {
     }
   }
 
-  async function scheduleSendMessage(text, linkPreview, scheduledAt) {
+  async function scheduleSendMessage(text, linkPreview, scheduledAt, topicId) {
     if (!selectedChat?.backend) return
     try {
       const payloadText = await encryptTextForChat(text, selectedChat)
@@ -2271,6 +2282,7 @@ function AppInner() {
         searchText: text,
         linkPreview: linkPreview || undefined,
         scheduledAt,
+        topicId: topicId || undefined,
       })
       showToast(`Message scheduled for ${new Date(scheduledAt).toLocaleString()}`)
     } catch (error) {
@@ -2986,6 +2998,76 @@ function AppInner() {
     }))
   }
 
+  async function saveContact(userId) {
+    if (!userId || userId === state.user.id) return
+    const previous = state.contacts
+    setState((current) => ({
+      ...current,
+      contacts: current.contacts.map((contact) =>
+        contact.id === userId
+          ? { ...contact, isContact: true, contactSince: contact.contactSince || new Date().toISOString() }
+          : contact,
+      ),
+    }))
+    try {
+      const { contact } = await addContact(userId)
+      setState((current) => ({
+        ...current,
+        contacts: current.contacts.some((item) => item.id === contact.id)
+          ? current.contacts.map((item) =>
+              item.id === contact.id
+                ? { ...item, isContact: true, contactSince: contact.contactSince || item.contactSince }
+                : item,
+            )
+          : [
+              ...current.contacts,
+              {
+                id: contact.id,
+                type: 'private',
+                backend: true,
+                name: contact.name,
+                username: `@${contact.username}`,
+                customStatus: contact.status || '',
+                avatar: contact.avatar,
+                color: '#3390ec',
+                status: contact.online ? 'online' : 'offline',
+                lastSeen: contact.online ? t('status.online') : formatLastSeen(contact.lastSeenAt),
+                lastSeenAt: contact.lastSeenAt,
+                encryptionPublicKey: contact.encryptionPublicKey,
+                blockedByMe: Boolean(contact.blockedByMe),
+                blockedMe: Boolean(contact.blockedMe),
+                isContact: true,
+                contactSince: contact.contactSince || new Date().toISOString(),
+                phone: '',
+                bio: contact.bio || 'Onda user',
+              },
+            ],
+      }))
+      showToast('Contact added.')
+    } catch (error) {
+      setState((current) => ({ ...current, contacts: previous }))
+      showToast(error.message || 'Contact was not added.')
+    }
+  }
+
+  async function forgetContact(userId) {
+    if (!userId || userId === state.user.id) return
+    const previous = state.contacts
+    setState((current) => ({
+      ...current,
+      contacts: current.contacts.map((contact) =>
+        contact.id === userId ? { ...contact, isContact: false, contactSince: null } : contact,
+      ),
+    }))
+    try {
+      await removeContact(userId)
+      showToast('Contact removed.')
+    } catch (error) {
+      setState((current) => ({ ...current, contacts: previous }))
+      showToast(error.message || 'Contact was not removed.')
+    }
+  }
+
   async function blockContact(userId) {
     if (!userId) return
     const sure = await confirm('Block this user? They will not be able to direct-message or call you.')
@@ -3185,6 +3267,8 @@ function AppInner() {
       onMarkSecurityAlertRead={markSecurityAlertRead}
       onMarkAllSecurityAlertsRead={markAllSecurityAlertsRead}
       onLoadBlockedContacts={loadBlockedContacts}
+      onAddContact={saveContact}
+      onRemoveContact={forgetContact}
       onBlockUser={blockContact}
       onUnblockUser={unblockContact}
       onReportUser={reportUser}

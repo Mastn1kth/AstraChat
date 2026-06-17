@@ -46,7 +46,8 @@ Goal: replace remaining mock surfaces with real server-backed behavior.
 - [ ] Phone-number login flow or explicit decision to keep username/password auth.
 - [ ] QR login.
 - [ ] Two-factor password.
-- [ ] Contact list and contact import mock boundary.
+- [x] Saved contact list: backend model, API and UI add/remove flow.
+- [ ] Contact import mock boundary.
 - [x] Chat folders: All, Unread, Personal, Groups, Channels, Archived. Backend + UI implemented with custom folder support.
 - [x] Archive chats.
 - [x] Pinned chats. Pinned messages (backend + WS broadcast + UI bar with jump/unpin).

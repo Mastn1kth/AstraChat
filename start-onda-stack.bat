@@ -4,6 +4,15 @@ setlocal
 
 cd /d "%~dp0"
 
+if not exist "node_modules" (
+  echo [0/4] Installing dependencies...
+  call npm ci
+  if errorlevel 1 (
+    echo [X] Dependency install failed.
+    exit /b 1
+  )
+)
+
 if not exist "logs" mkdir "logs"
 
 set HOST=127.0.0.1

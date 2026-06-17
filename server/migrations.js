@@ -536,6 +536,24 @@ export const migrations = [
         DROP COLUMN IF EXISTS link_preview;
     `,
   },
+  {
+    id: '20260617_user_contacts',
+    sql: `
+      CREATE TABLE IF NOT EXISTS user_contacts (
+        owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        contact_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (owner_id, contact_user_id),
+        CHECK (owner_id <> contact_user_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS user_contacts_contact_idx
+        ON user_contacts(contact_user_id, created_at DESC);
+    `,
+    downSql: `
+      DROP TABLE IF EXISTS user_contacts;
+    `,
+  },
 ]
 
 async function getAppliedMigrationIds(database) {

@@ -4,6 +4,15 @@ setlocal
 
 cd /d "%~dp0"
 
+if not exist "node_modules" (
+  echo [0/4] Installing dependencies...
+  call npm ci
+  if errorlevel 1 (
+    echo [X] Dependency install failed.
+    exit /b 1
+  )
+)
+
 REM Load a persistent mobile API URL. An explicitly set variable wins.
 if "%VITE_API_BASE%"=="" if exist ".env.mobile" (
   for /f "usebackq tokens=1,* delims==" %%A in (".env.mobile") do (

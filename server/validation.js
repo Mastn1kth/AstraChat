@@ -35,14 +35,27 @@ const linkPreviewSchema = z.object({
   site: z.string().max(128).optional(),
 }).optional()
 
+const pollSchema = z.object({
+  question: z.string().trim().min(1).max(255),
+  options: z.array(z.string().trim().min(1).max(100)).min(2).max(10),
+  multipleChoice: z.boolean().default(false),
+  anonymous: z.boolean().default(true),
+  quiz: z.boolean().default(false),
+  correctOption: z.number().int().min(0).nullable().optional(),
+}).optional()
+
 export const messageSchema = z.object({
   text: z.string().max(64000).default(''),
   searchText: z.string().trim().max(64000).default(''),
   mediaId: z.string().uuid().optional(),
   replyToId: z.string().uuid().optional(),
   forwardedFromMessageId: z.string().uuid().optional(),
+  topicId: z.string().uuid().optional(),
+  silent: z.boolean().default(false),
+  scheduledAt: z.string().datetime({ offset: true }).optional(),
   linkPreview: linkPreviewSchema,
-}).refine((message) => message.text.trim().length > 0 || message.mediaId, {
+  poll: pollSchema,
+}).refine((message) => message.text.trim().length > 0 || message.mediaId || message.poll, {
   message: 'Message text or media is required',
 })
 

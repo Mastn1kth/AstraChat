@@ -213,6 +213,8 @@ function publicUser(user) {
     online: socketsByUserId.has(user.id) || onlineUserIdCache.has(user.id),
     blockedByMe: isDatabaseTrue(user.blocked_by_me),
     blockedMe: isDatabaseTrue(user.blocked_me),
+    isContact: isDatabaseTrue(user.is_contact),
+    contactSince: user.contact_since || null,
   }
 }
 
@@ -1837,6 +1839,74 @@ app.get('/api/users/blocks', requireAuth, async (request, response) => {
   })
 })
 
+app.get('/api/contacts', requireAuth, async (request, response) => {
+  const result = await db.query(
+    `SELECT u.id, u.login, u.username, u.name, u.bio, u.status, u.avatar,
+            u.last_seen_at, u.encryption_public_key,
+            TRUE AS is_contact,
+            uc.created_at AS contact_since,
+            EXISTS (
+              SELECT 1 FROM user_blocks ub
+              WHERE ub.blocker_id = $1 AND ub.blocked_id = u.id
+            ) AS blocked_by_me,
+            EXISTS (
+              SELECT 1 FROM user_blocks ub
+              WHERE ub.blocker_id = u.id AND ub.blocked_id = $1
+            ) AS blocked_me
+     FROM user_contacts uc
+     JOIN users u ON u.id = uc.contact_user_id
+     WHERE uc.owner_id = $1
+     ORDER BY u.name, u.username`,
+    [request.user.id],
+  )
+  response.json({ contacts: result.rows.map(publicUser) })
+})
+
+app.post('/api/contacts/:userId', requireAuth, async (request, response) => {
+  if (request.params.userId === request.user.id) {
+    response.status(400).json({ error: 'Cannot add yourself as a contact' })
+    return
+  }
+  const target = await db.query(
+    `SELECT id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key
+     FROM users
+     WHERE id = $1
+     LIMIT 1`,
+    [request.params.userId],
+  )
+  if (!target.rows.length) {
+    response.status(404).json({ error: 'User not found' })
+    return
+  }
+  if (await hasBlockBetween(request.user.id, request.params.userId)) {
+    response.status(403).json({ error: 'Cannot add a blocked user as a contact' })
+    return
+  }
+  await db.query(
+    `INSERT INTO user_contacts (owner_id, contact_user_id)
+     VALUES ($1, $2)
+     ON CONFLICT (owner_id, contact_user_id) DO NOTHING`,
+    [request.user.id, request.params.userId],
+  )
+  response.status(201).json({
+    contact: publicUser({
+      ...target.rows[0],
+      is_contact: true,
+      contact_since: new Date().toISOString(),
+      blocked_by_me: false,
+      blocked_me: false,
+    }),
+  })
+})
+
+app.delete('/api/contacts/:userId', requireAuth, async (request, response) => {
+  await db.query(
+    'DELETE FROM user_contacts WHERE owner_id = $1 AND contact_user_id = $2',
+    [request.user.id, request.params.userId],
+  )
+  response.status(204).end()
+})
+
 app.post('/api/users/:userId/block', requireAuth, async (request, response) => {
   if (request.params.userId === request.user.id) {
     response.status(400).json({ error: 'Cannot block yourself' })
@@ -2306,6 +2376,15 @@ app.get('/api/users', requireAuth, async (request, response) => {
   const search = String(request.query.search || '').trim()
   const result = await db.query(
     `SELECT id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
+            EXISTS (
+              SELECT 1 FROM user_contacts uc
+              WHERE uc.owner_id = $1 AND uc.contact_user_id = users.id
+            ) AS is_contact,
+            (
+              SELECT uc.created_at FROM user_contacts uc
+              WHERE uc.owner_id = $1 AND uc.contact_user_id = users.id
+              LIMIT 1
+            ) AS contact_since,
             EXISTS (
               SELECT 1 FROM user_blocks ub
               WHERE ub.blocker_id = $1 AND ub.blocked_id = users.id

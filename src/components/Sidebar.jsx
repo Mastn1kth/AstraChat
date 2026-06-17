@@ -34,6 +34,8 @@ import {
   Upload,
   UploadCloud,
   UserCircle,
+  UserMinus,
+  UserPlus,
   Users,
   X,
   XCircle,
@@ -124,6 +126,8 @@ export default function Sidebar({
   onMarkSecurityAlertRead,
   onMarkAllSecurityAlertsRead,
   onLoadBlockedContacts,
+  onAddContact,
+  onRemoveContact,
   onUnblockUser,
 }) {
   const [menuView, setMenuView] = useState('main')
@@ -225,10 +229,12 @@ export default function Sidebar({
     (contact) => contact.type === 'private' && contact.status !== 'saved',
   )
   const archivedChats = chats.filter((chat) => chat.archived)
+  const normalizedContactSearch = contactSearch.trim().toLowerCase()
   const filteredContacts = privateContacts.filter((contact) => {
-    const normalized = contactSearch.trim().toLowerCase()
-    if (!normalized) return true
-    return [contact.name, contact.username, contact.phone].filter(Boolean).some((value) => value.toLowerCase().includes(normalized))
+    if (!normalizedContactSearch) return Boolean(contact.isContact)
+    return [contact.name, contact.username, contact.phone]
+      .filter(Boolean)
+      .some((value) => value.toLowerCase().includes(normalizedContactSearch))
   })
   const systemFolders = chatFolders?.systemFolders || []
   const customFolders = chatFolders?.folders || []
@@ -755,15 +761,42 @@ export default function Sidebar({
         </label>
         <div className="drawer-list">
           {filteredContacts.map((contact) => (
-            <button key={contact.id} className="drawer-contact" onClick={() => createPrivateChat(contact.id)}>
-              <Avatar contact={contact} />
-              <span>
-                <strong>{contact.name}</strong>
-                <small>{contact.lastSeen}</small>
-              </span>
-            </button>
+            <div key={contact.id} className="drawer-contact-row">
+              <button className="drawer-contact" onClick={() => createPrivateChat(contact.id)}>
+                <Avatar contact={contact} />
+                <span>
+                  <strong>{contact.name}</strong>
+                  <small>{contact.isContact ? contact.lastSeen : 'Found user'}</small>
+                </span>
+              </button>
+              {contact.isContact ? (
+                <button
+                  type="button"
+                  className="drawer-contact-action"
+                  title="Remove contact"
+                  aria-label={`Remove ${contact.name} from contacts`}
+                  onClick={() => onRemoveContact?.(contact.id)}
+                >
+                  <UserMinus size={16} />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="drawer-contact-action"
+                  title="Add contact"
+                  aria-label={`Add ${contact.name} to contacts`}
+                  onClick={() => onAddContact?.(contact.id)}
+                >
+                  <UserPlus size={16} />
+                </button>
+              )}
+            </div>
           ))}
-          {!filteredContacts.length && <p className="drawer-empty">{t('menu.noContacts')}</p>}
+          {!filteredContacts.length && (
+            <p className="drawer-empty">
+              {normalizedContactSearch ? 'No users found.' : 'No saved contacts yet. Search people to add them.'}
+            </p>
+          )}
         </div>
       </>
     )

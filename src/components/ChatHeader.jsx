@@ -6,6 +6,7 @@ import {
   BellOff,
   BellRing,
   Clock,
+  Hash,
   MoreVertical,
   Phone,
   Pin,
@@ -39,6 +40,7 @@ export default function ChatHeader({
   contact,
   chat,
   scheduledCount,
+  activeTopic,
   onBack,
   onOpenProfile,
   onToggleSearch,
@@ -48,6 +50,7 @@ export default function ChatHeader({
   onArchive,
   onOpenCall,
   onOpenScheduled,
+  onOpenTopics,
 }) {
   const [muteMenuOpen, setMuteMenuOpen] = useState(false)
   const [pushMenuOpen, setPushMenuOpen] = useState(false)
@@ -79,10 +82,14 @@ export default function ChatHeader({
         <Avatar contact={contact} />
         <span>
           <strong>{contact.name}</strong>
-          <small className={contact.status === 'online' && !contact.customStatus ? 'online-text' : ''}>
-            {contact.customStatus || contact.lastSeen}
-          </small>
-          {contact.customStatus && (
+          {activeTopic ? (
+            <small className="active-topic-label"><Hash size={11} /> {activeTopic.title}</small>
+          ) : (
+            <small className={contact.status === 'online' && !contact.customStatus ? 'online-text' : ''}>
+              {contact.customStatus || contact.lastSeen}
+            </small>
+          )}
+          {contact.customStatus && !activeTopic && (
             <small className={contact.status === 'online' ? 'online-text' : ''}>{contact.lastSeen}</small>
           )}
         </span>
@@ -91,6 +98,15 @@ export default function ChatHeader({
         <IconButton label={t('chat.searchMessages')} onClick={onToggleSearch}>
           <Search size={19} />
         </IconButton>
+        {onOpenTopics && (
+          <IconButton
+            label="Topics"
+            className={activeTopic ? 'is-active' : ''}
+            onClick={onOpenTopics}
+          >
+            <Hash size={19} />
+          </IconButton>
+        )}
         {onOpenScheduled && (
           <div className="scheduled-header-btn-wrap">
             <IconButton label="Scheduled messages" onClick={onOpenScheduled}>
