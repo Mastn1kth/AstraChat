@@ -729,6 +729,22 @@ export const migrations = [
       DROP TABLE IF EXISTS stories;
     `,
   },
+  {
+    id: '20260617_qr_login',
+    sql: `
+      CREATE TABLE IF NOT EXISTS qr_tokens (
+        token TEXT PRIMARY KEY,
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '3 minutes',
+        confirmed BOOLEAN NOT NULL DEFAULT FALSE
+      );
+
+      CREATE INDEX IF NOT EXISTS qr_tokens_expires_idx
+        ON qr_tokens(expires_at);
+    `,
+    downSql: `DROP TABLE IF EXISTS qr_tokens;`,
+  },
 ]
 
 async function getAppliedMigrationIds(database) {

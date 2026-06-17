@@ -645,6 +645,32 @@
 .astra-qr-row:disabled { opacity: 0.5; cursor: not-allowed; }
 .astra-qr-icon { color: #8B4035; flex-shrink: 0; }
 
+.qr-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 208px;
+  height: 208px;
+  border-radius: 16px;
+  background: #fff;
+  padding: 4px;
+  margin: 8px auto;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.10);
+}
+.qr-image {
+  width: 200px;
+  height: 200px;
+  border-radius: 10px;
+  display: block;
+}
+.qr-placeholder {
+  font-size: 13px;
+  color: #888;
+  text-align: center;
+}
+.qr-error { color: #c0392b; }
+.qr-ok { color: #27ae60; font-size: 24px; }
+
 .astra-preview {
   display: flex;
   flex-direction: column;

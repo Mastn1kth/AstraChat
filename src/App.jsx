@@ -91,6 +91,7 @@ import { DEFAULT_LIVE_WALL_SETTINGS, extractAllChatWords } from './utils/liveWal
 import { GlobalAudioContext, useGlobalAudioProvider } from './hooks/useGlobalAudio'
 import {
   API_BASE,
+  confirmQrLogin,
   getCloudKeyBackup,
   getWallMessages,
   putCloudKeyBackup,
@@ -1498,6 +1499,20 @@ function AppInner() {
     window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}`)
     selectChatRef.current?.(chatId)
   }, [auth.status, state.chats])
+
+  useEffect(() => {
+    if (auth.status !== 'authenticated') return
+    const params = new URLSearchParams(window.location.search)
+    const qrToken = params.get('token')
+    if (!qrToken || window.location.pathname !== '/qr-login') return
+    window.history.replaceState({}, '', '/')
+    confirm('Allow login from another device?', { confirmLabel: 'Allow', cancelLabel: 'Deny' }).then((ok) => {
+      if (!ok) return
+      confirmQrLogin(qrToken)
+        .then(() => showToast('Login confirmed.'))
+        .catch(() => showToast('QR token expired or invalid.'))
+    })
+  }, [auth.status, confirm, showToast])
 
   const chatSummaries = useMemo(() => {
     return state.chats
@@ -3427,6 +3442,7 @@ function AppInner() {
         onPhoneStart={handlePhoneStart}
         onPhoneVerify={handlePhoneVerify}
         onTestLogin={handleTestLogin}
+        onQrSuccess={completeAuthentication}
         prefillLogin={prefillLogin}
       />
     )

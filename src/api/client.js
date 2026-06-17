@@ -730,3 +730,15 @@ export function deleteStory(storyId) {
 export function viewStory(storyId) {
   return request(`/api/stories/${encodeURIComponent(storyId)}/view`, { method: 'POST' })
 }
+
+export function startQrLogin() {
+  return request('/api/auth/qr/start', { method: 'POST' })
+}
+
+export function pollQrStatus(token) {
+  return request(`/api/auth/qr/status?token=${encodeURIComponent(token)}`)
+}
+
+export function confirmQrLogin(token) {
+  return request('/api/auth/qr/confirm', { method: 'POST', body: JSON.stringify({ token }) })
+}

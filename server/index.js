@@ -1801,6 +1801,85 @@ app.post('/api/auth/test-login', authLimiter, async (request, response) => {
   response.json({ user: publicUser(result.rows[0]) })
 })
 
+// QR login — three-step flow:
+//   1. POST /api/auth/qr/start  → { token, expiresAt }   (new device, no auth)
+//   2. GET  /api/auth/qr/status → { status }              (new device polls; on 'confirmed' sets session)
+//   3. POST /api/auth/qr/confirm → { ok }                 (existing logged-in device scans and confirms)
+
+app.post('/api/auth/qr/start', authLimiter, async (request, response) => {
+  await db.query('DELETE FROM qr_tokens WHERE expires_at < NOW()')
+  const token = randomBytes(24).toString('hex')
+  await db.query(
+    `INSERT INTO qr_tokens (token, expires_at) VALUES ($1, NOW() + INTERVAL '3 minutes')`,
+    [token],
+  )
+  const row = await db.query('SELECT expires_at FROM qr_tokens WHERE token = $1', [token])
+  response.json({ token, expiresAt: row.rows[0].expires_at })
+})
+
+app.get('/api/auth/qr/status', async (request, response) => {
+  const { token } = request.query
+  if (!token) {
+    response.status(400).json({ error: 'token required' })
+    return
+  }
+  const row = await db.query(
+    'SELECT user_id, confirmed, expires_at FROM qr_tokens WHERE token = $1',
+    [token],
+  )
+  if (!row.rows[0]) {
+    response.json({ status: 'expired' })
+    return
+  }
+  const { user_id, confirmed, expires_at } = row.rows[0]
+  if (new Date(expires_at) < new Date()) {
+    response.json({ status: 'expired' })
+    return
+  }
+  if (!confirmed) {
+    response.json({ status: 'pending' })
+    return
+  }
+  const userResult = await db.query(
+    `SELECT id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
+            totp_secret, totp_enabled_at
+     FROM users WHERE id = $1`,
+    [user_id],
+  )
+  if (!userResult.rows[0]) {
+    response.json({ status: 'expired' })
+    return
+  }
+  await db.query('DELETE FROM qr_tokens WHERE token = $1', [token])
+  await createSession(response, user_id, request)
+  response.json({ status: 'confirmed', user: publicUser(userResult.rows[0]) })
+})
+
+app.post('/api/auth/qr/confirm', requireAuth, async (request, response) => {
+  const { token } = request.body
+  if (!token) {
+    response.status(400).json({ error: 'token required' })
+    return
+  }
+  const row = await db.query(
+    'SELECT confirmed, expires_at FROM qr_tokens WHERE token = $1',
+    [token],
+  )
+  if (!row.rows[0] || new Date(row.rows[0].expires_at) < new Date()) {
+    response.status(404).json({ error: 'QR token expired or invalid' })
+    return
+  }
+  if (row.rows[0].confirmed) {
+    response.status(409).json({ error: 'Already confirmed' })
+    return
+  }
+  await db.query(
+    'UPDATE qr_tokens SET user_id = $1, confirmed = TRUE WHERE token = $2',
+    [request.user.id, token],
+  )
+  response.json({ ok: true })
+})
+
 app.post('/api/auth/login', authLimiter, async (request, response) => {
   const input = parseBody(loginSchema, request.body)
   const result = await db.query(

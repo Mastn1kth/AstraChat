@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
@@ -7,12 +7,107 @@ import {
   Hash,
   LockKeyhole,
   QrCode,
+  RefreshCw,
   ShieldCheck,
   Smartphone,
   UserCircle2,
   Waves,
 } from 'lucide-react'
+import QRCodeLib from 'qrcode'
 import { useT, useLang, setLang, LANGUAGES } from '../i18n'
+import { startQrLogin, pollQrStatus } from '../api/client'
+
+function QrLoginPanel({ onBack, onSuccess }) {
+  const [qrDataUrl, setQrDataUrl] = useState('')
+  const [token, setToken] = useState('')
+  const [status, setStatus] = useState('loading')
+  const [retryKey, setRetryKey] = useState(0)
+  const pollRef = useRef(null)
+
+  function handleRetry() {
+    setStatus('loading')
+    setQrDataUrl('')
+    setToken('')
+    setRetryKey((k) => k + 1)
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const { token: t } = await startQrLogin()
+        if (cancelled) return
+        const url = `${window.location.origin}/qr-login?token=${encodeURIComponent(t)}`
+        const dataUrl = await QRCodeLib.toDataURL(url, { width: 200, margin: 2, color: { dark: '#1a1a2e', light: '#ffffff' } })
+        if (cancelled) return
+        setToken(t)
+        setQrDataUrl(dataUrl)
+        setStatus('pending')
+      } catch {
+        if (!cancelled) setStatus('error')
+      }
+    })()
+    return () => {
+      cancelled = true
+      clearInterval(pollRef.current)
+    }
+  }, [retryKey])
+
+  useEffect(() => {
+    if (status !== 'pending' || !token) return
+    clearInterval(pollRef.current)
+    pollRef.current = setInterval(async () => {
+      try {
+        const data = await pollQrStatus(token)
+        if (data.status === 'confirmed') {
+          clearInterval(pollRef.current)
+          setStatus('confirmed')
+          onSuccess?.(data.user)
+        } else if (data.status === 'expired') {
+          clearInterval(pollRef.current)
+          setStatus('expired')
+        }
+      } catch {
+        // keep polling on transient errors
+      }
+    }, 2000)
+    return () => clearInterval(pollRef.current)
+  }, [status, token, onSuccess])
+
+  return (
+    <main className="astra-auth">
+      <div className="astra-left">
+        <div className="astra-logo"><div className="astra-logo-icon"><Waves size={18} /></div><span>Onda</span></div>
+        <div className="astra-form">
+          <button type="button" className="astra-link" onClick={onBack} style={{ alignSelf: 'flex-start' }}>
+            <ArrowLeft size={14} /> Back
+          </button>
+          <div className="astra-form-title"><QrCode size={20} /> Scan QR code</div>
+          <p className="astra-hint">Open Onda on another device, go to Settings → Devices and scan this code.</p>
+
+          <div className="qr-box">
+            {status === 'loading' && <div className="qr-placeholder">Generating…</div>}
+            {status === 'error' && <div className="qr-placeholder qr-error">Failed to generate QR</div>}
+            {status === 'expired' && <div className="qr-placeholder qr-error">QR expired</div>}
+            {status === 'confirmed' && <div className="qr-placeholder qr-ok">✓ Confirmed</div>}
+            {status === 'pending' && qrDataUrl && (
+              <img src={qrDataUrl} alt="QR code" className="qr-image" />
+            )}
+          </div>
+
+          {(status === 'expired' || status === 'error') && (
+            <button type="button" className="astra-link" onClick={handleRetry}>
+              <RefreshCw size={14} /> Refresh QR
+            </button>
+          )}
+          {status === 'pending' && (
+            <p className="astra-hint" style={{ textAlign: 'center' }}>Waiting for scan…</p>
+          )}
+        </div>
+      </div>
+    </main>
+  )
+}
 
 const COUNTRIES = [
   { code: '+7', label: 'Russia / Kazakhstan' },
@@ -51,6 +146,7 @@ export default function AuthScreen({
   onPhoneStart,
   onPhoneVerify,
   onTestLogin,
+  onQrSuccess,
   prefillLogin,
 }) {
   const t = useT()
@@ -93,6 +189,10 @@ export default function AuthScreen({
     setDevCode('')
     setName('')
     setUsername('')
+  }
+
+  if (step === 'qr') {
+    return <QrLoginPanel onBack={() => setStep('phone')} onSuccess={onQrSuccess} />
   }
 
   if (cloudPasswordRequired) {
@@ -310,12 +410,16 @@ export default function AuthScreen({
 
           <div className="astra-divider"><span>{t('auth.or')}</span></div>
 
+          <button type="button" className="astra-qr-row" onClick={() => setStep('qr')} disabled={pending}>
+            <QrCode size={20} className="astra-qr-icon" />
+            <span>Login via QR code</span>
+          </button>
           <button type="button" className="astra-qr-row" onClick={() => onTestLogin(1)} disabled={pending}>
             <FlaskConical size={20} className="astra-qr-icon" />
             <span>{t('auth.testLogin')}</span>
           </button>
           <button type="button" className="astra-qr-row" onClick={() => onTestLogin(2)} disabled={pending}>
-            <QrCode size={20} className="astra-qr-icon" />
+            <FlaskConical size={20} className="astra-qr-icon" />
             <span>{t('auth.testLogin2')}</span>
           </button>
         </form>
