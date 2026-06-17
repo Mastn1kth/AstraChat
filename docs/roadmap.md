@@ -138,7 +138,7 @@ Goal: stop treating local MVP infrastructure as production.
 - [ ] Queue-backed fanout for high-volume push delivery.
 - [ ] Native iOS/Android push service.
 - [ ] Backups and restore procedure.
-- [ ] Observability: structured logs, metrics, health checks and alerts.
+- [x] Observability: structured logs (pino), metrics (prom-client), enhanced health check with DB ping/uptime/memory, /metrics gated by admin token.
 - [x] PWA manifest + service worker (offline caching, installable, push handling).
 - [x] VAPID push notification service (server-side push to offline users).
 - [x] Docker/deploy setup.

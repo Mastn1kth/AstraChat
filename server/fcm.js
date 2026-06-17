@@ -4,6 +4,7 @@
 // and only Web Push (VAPID) is used.
 import { createSign } from 'node:crypto'
 import { readFileSync } from 'node:fs'
+import logger from './logger.js'
 
 function loadServiceAccount() {
   try {
@@ -14,7 +15,7 @@ function loadServiceAccount() {
       return JSON.parse(readFileSync(process.env.FCM_SERVICE_ACCOUNT_FILE, 'utf8'))
     }
   } catch (error) {
-    console.warn('[fcm] invalid service account config:', error.message)
+    logger.warn({ err: error.message }, '[fcm] invalid service account config')
   }
   return null
 }

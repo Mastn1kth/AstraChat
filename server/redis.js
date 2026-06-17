@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import Redis from 'ioredis'
 import { config } from './config.js'
+import logger from './logger.js'
 
 export const instanceId = randomUUID()
 const redisOptions = {
@@ -32,7 +33,7 @@ async function safeRedis(operation, fallback = null) {
   try {
     return await operation(redis)
   } catch (error) {
-    console.error('[redis] operation failed', error.message)
+    logger.error({ err: error.message }, '[redis] operation failed')
     return fallback
   }
 }
@@ -48,7 +49,7 @@ export async function initRedis() {
       if (message.origin === instanceId) return
       socketMessageHandler(message)
     } catch (error) {
-      console.error('[redis] pubsub message failed', error.message)
+      logger.error({ err: error.message }, '[redis] pubsub message failed')
     }
   })
 }

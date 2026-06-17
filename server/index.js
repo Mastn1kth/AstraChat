@@ -44,6 +44,7 @@ import {
   metricsText,
   websocketConnections,
 } from './metrics.js'
+import logger from './logger.js'
 import {
   createSession,
   destroySession,
@@ -163,13 +164,14 @@ app.use((request, response, next) => {
   next()
 })
 app.use((request, response, next) => {
+  const start = Date.now()
   const end = httpRequestDuration.startTimer()
   response.on('finish', () => {
-    end({
-      method: request.method,
-      route: request.route?.path || request.path,
-      status: String(response.statusCode),
-    })
+    const ms = Date.now() - start
+    end({ method: request.method, route: request.route?.path || request.path, status: String(response.statusCode) })
+    if (!request.path.startsWith('/metrics')) {
+      logger.info({ method: request.method, path: request.path, status: response.statusCode, ms }, 'request')
+    }
   })
   next()
 })
@@ -310,7 +312,7 @@ function hashPhoneCode(phone, code) {
 
 function publicPhoneCodePayload(phone, code) {
   if (config.isProduction) return {}
-  console.log(`[phone-auth] ${phone} code: ${code}`)
+  logger.debug({ phone }, '[phone-auth] dev code: %s', code)
   return { devCode: code }
 }
 
@@ -1281,7 +1283,7 @@ async function sendPushToSubscription(row, payload) {
       }
       return result.ok
     } catch (error) {
-      console.warn('[push] fcm send failed', error.message)
+      logger.warn({ err: error.message }, '[push] fcm send failed')
       return false
     }
   }
@@ -1310,7 +1312,7 @@ async function sendPushToSubscription(row, payload) {
        WHERE id = $2`,
       [String(error.message || 'Push failed').slice(0, 500), row.id],
     )
-    console.warn('[push] send failed', error.statusCode || '', error.message)
+    logger.warn({ err: error.message, statusCode: error.statusCode }, '[push] send failed')
     return false
   }
 }
@@ -1484,7 +1486,7 @@ async function publishDueScheduledMessages() {
     try {
       await publishScheduledMessage(message.id)
     } catch (error) {
-      console.error('[scheduled] publish failed', message.id, error.message)
+      logger.error({ msgId: message.id, err: error.message }, '[scheduled] publish failed')
     }
   }
 }
@@ -1494,19 +1496,23 @@ app.get('/api/live', (_request, response) => {
 })
 
 app.get('/api/health', async (_request, response) => {
+  const dbStart = Date.now()
   await db.query('SELECT 1')
-  const storage = await checkStorage()
-  const redisStatus = await checkRedis()
+  const dbMs = Date.now() - dbStart
+  const [storage, redisStatus] = await Promise.all([checkStorage(), checkRedis()])
+  const mem = process.memoryUsage()
   response.json({
     ok: true,
-    database: config.databaseUrl ? 'postgres' : 'pglite',
+    uptime: Math.floor(process.uptime()),
+    database: { backend: config.databaseUrl ? 'postgres' : 'pglite', pingMs: dbMs },
     storage,
     redis: redisStatus,
-    websocket: 'ready',
+    websocket: { connections: socketsByUserId.size },
+    memory: { rss: mem.rss, heapUsed: mem.heapUsed, heapTotal: mem.heapTotal },
   })
 })
 
-app.get('/metrics', async (_request, response) => {
+app.get('/metrics', requireAdmin, async (_request, response) => {
   response.setHeader('Content-Type', metricsContentType())
   response.send(await metricsText())
 })
@@ -6085,7 +6091,7 @@ server.on('upgrade', async (request, socket, head) => {
       wss.emit('connection', websocket, request, user)
     })
   } catch (error) {
-    console.error('[ws] upgrade failed', error.message)
+    logger.error({ err: error.message }, '[ws] upgrade failed')
     socket.destroy()
   }
 })
@@ -6361,7 +6367,7 @@ wss.on('connection', async (socket, _request, user) => {
         fromUserId: user.id,
       })
     } catch (error) {
-      console.error('[ws] message failed', error.message)
+      logger.error({ err: error.message }, '[ws] message failed')
     }
   })
 
@@ -6414,7 +6420,7 @@ wss.on('connection', async (socket, _request, user) => {
             }, user.id)
           }
         } catch (error) {
-          console.error('[presence] disconnect cleanup failed', error.message)
+          logger.error({ err: error.message }, '[presence] disconnect cleanup failed')
         }
       })()
       void broadcast({
@@ -6425,7 +6431,7 @@ wss.on('connection', async (socket, _request, user) => {
       }, user.id)
     }
   })
-  socket.on('error', (error) => console.error('[ws] connection error', error.message))
+  socket.on('error', (error) => logger.error({ err: error.message }, '[ws] connection error'))
 })
 
 let heartbeat = null
@@ -6489,7 +6495,7 @@ app.use((error, request, response, next) => {
     return
   }
   const status = error.status || 500
-  console.error(`[api] ${request.method} ${request.path}:`, error.message)
+  logger.error({ method: request.method, path: request.path, err: error.message }, '[api] handler error')
   response.status(status).json({
     error: status >= 500 ? 'Internal server error' : error.message,
     details: error.details,
@@ -6513,7 +6519,7 @@ async function start() {
   await publishDueScheduledMessages()
   startBackgroundJobs()
   server.listen(config.port, config.host, () => {
-    console.log(`[server] http://${config.host}:${config.port}`)
+    logger.info({ url: `http://${config.host}:${config.port}` }, '[server] listening')
   })
 }
 
@@ -6539,7 +6545,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
   })
 
   start().catch((error) => {
-    console.error('[server] startup failed', error)
+    logger.error({ err: error.message }, '[server] startup failed')
     process.exit(1)
   })
 }
