@@ -117,6 +117,7 @@ export default function MessageBubble({
   highlighted,
   multiSelectMode,
   multiSelected,
+  chatName,
   onJumpToReply,
   onSelect,
   onStartReply,
@@ -186,7 +187,7 @@ export default function MessageBubble({
         )}
         {message.media && !message.deleted && !message.media.decryptFailed && (
           message.media.kind === 'voice' || message.media.kind === 'audio' ? (
-            <AudioMessagePlayer media={message.media} compact={message.media.kind === 'voice'} />
+            <AudioMessagePlayer media={message.media} compact={message.media.kind === 'voice'} chatName={chatName} />
           ) : message.media.kind === 'file' ? (
             <button
               className="message-file"

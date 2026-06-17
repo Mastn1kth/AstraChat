@@ -87,6 +87,7 @@ function MessageListRow({
         highlighted={message.id === highlightId}
         multiSelectMode={multiSelectMode}
         multiSelected={selectedMessageIds?.has(message.id)}
+        chatName={contact?.name}
         onJumpToReply={onJumpToMessage}
         replyMessage={
           replyMessage

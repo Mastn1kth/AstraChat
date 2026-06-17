@@ -78,6 +78,7 @@ import {
   extractPrivateWordStream,
 } from './utils/wordStream'
 import { DEFAULT_LIVE_WALL_SETTINGS, extractAllChatWords } from './utils/liveWall'
+import { GlobalAudioContext, useGlobalAudioProvider } from './hooks/useGlobalAudio'
 import {
   API_BASE,
   getCloudKeyBackup,
@@ -491,7 +492,7 @@ async function prepareClientMediaFile(file) {
   }
 }
 
-export default function App() {
+function AppInner() {
   const [state, setState] = useState(() => loadMessengerState(fallbackState))
   const [auth, setAuth] = useState({
     status: 'loading',
@@ -3228,5 +3229,14 @@ export default function App() {
     />
     {confirmDialog}
     </>
+  )
+}
+
+export default function App() {
+  const globalAudio = useGlobalAudioProvider()
+  return (
+    <GlobalAudioContext.Provider value={globalAudio}>
+      <AppInner />
+    </GlobalAudioContext.Provider>
   )
 }

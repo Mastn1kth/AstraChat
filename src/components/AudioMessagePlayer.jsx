@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Pause, Play } from 'lucide-react'
+import { useGlobalAudio } from '../hooks/useGlobalAudio'
 
 const SPEEDS = [1, 1.5, 2]
 const waveformCache = new Map()
@@ -19,12 +20,17 @@ function formatTime(seconds) {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
 }
 
-export default function AudioMessagePlayer({ media, compact = false }) {
+export default function AudioMessagePlayer({ media, compact = false, chatName }) {
+  const globalAudio = useGlobalAudio()
   const audioRef = useRef(null)
   const [playing, setPlaying] = useState(false)
   const [duration, setDuration] = useState((media.durationMs || 0) / 1000)
   const [currentTime, setCurrentTime] = useState(0)
   const [speedIndex, setSpeedIndex] = useState(0)
+
+  // Sync with global audio when this track is taken over by the mini-player
+  const isGlobalTrack = globalAudio?.isTrackActive(media.url)
+  const globalPlaying = globalAudio?.isTrackPlaying(media.url)
   const waveformKey = `${media.id || ''}:${media.name || ''}:${media.url || ''}`
   const fallbackWaveform = useMemo(
     () => fallbackBars(media.id || media.name || media.url),
@@ -93,20 +99,35 @@ export default function AudioMessagePlayer({ media, compact = false }) {
     audio.playbackRate = SPEEDS[speedIndex]
   }, [speedIndex])
 
-  const progress = duration ? Math.min(1, currentTime / duration) : 0
+  const displayPlaying = isGlobalTrack ? (globalPlaying ?? false) : playing
+  const displayTime = isGlobalTrack ? (globalAudio?.currentTime ?? 0) : currentTime
+  const displayDuration = isGlobalTrack ? (globalAudio?.duration || duration) : duration
+  const progress = displayDuration ? Math.min(1, displayTime / displayDuration) : 0
   const activeBars = useMemo(() => Math.round(progress * waveform.length), [progress, waveform.length])
 
   function toggle() {
+    if (globalAudio) {
+      globalAudio.playTrack({
+        url: media.url,
+        name: media.name || (media.kind === 'voice' ? 'Voice message' : 'Audio'),
+        chatName,
+        messageId: media.id,
+        durationMs: media.durationMs,
+      })
+      return
+    }
     const audio = audioRef.current
     if (!audio) return
-    if (audio.paused) {
-      audio.play().catch(() => {})
-    } else {
-      audio.pause()
-    }
+    if (audio.paused) audio.play().catch(() => {})
+    else audio.pause()
   }
 
   function seek(event) {
+    if (isGlobalTrack && globalAudio) {
+      const rect = event.currentTarget.getBoundingClientRect()
+      globalAudio.seek((event.clientX - rect.left) / rect.width)
+      return
+    }
     const audio = audioRef.current
     if (!audio || !duration) return
     const rect = event.currentTarget.getBoundingClientRect()
@@ -114,9 +135,9 @@ export default function AudioMessagePlayer({ media, compact = false }) {
   }
 
   return (
-    <div className={`audio-player ${compact ? 'compact' : ''}`} onClick={(event) => event.stopPropagation()}>
-      <button className="audio-play" onClick={toggle} aria-label={playing ? 'Pause audio' : 'Play audio'}>
-        {playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
+    <div className={`audio-player ${compact ? 'compact' : ''} ${isGlobalTrack ? 'global-active' : ''}`} onClick={(event) => event.stopPropagation()}>
+      <button className="audio-play" onClick={toggle} aria-label={displayPlaying ? 'Pause audio' : 'Play audio'}>
+        {displayPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
       </button>
       <button
         className={`audio-waveform ${waveformLoading ? 'loading' : ''}`}
@@ -137,12 +158,12 @@ export default function AudioMessagePlayer({ media, compact = false }) {
           </b>
         )}
       </button>
-      <span className="audio-time">{formatTime(duration ? duration - currentTime : 0)}</span>
+      <span className="audio-time">{formatTime(displayDuration ? displayDuration - displayTime : 0)}</span>
       <button
         className="audio-speed"
-        onClick={() => setSpeedIndex((current) => (current + 1) % SPEEDS.length)}
+        onClick={isGlobalTrack && globalAudio ? globalAudio.cycleSpeed : () => setSpeedIndex((current) => (current + 1) % SPEEDS.length)}
       >
-        {SPEEDS[speedIndex]}x
+        {isGlobalTrack && globalAudio ? globalAudio.speed : SPEEDS[speedIndex]}x
       </button>
       <audio
         ref={audioRef}

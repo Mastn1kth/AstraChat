@@ -17,6 +17,7 @@ import ForwardModal from './ForwardModal'
 import DownloadManager from './DownloadManager'
 import CatchUpBanner from './CatchUpBanner'
 import ScheduledPanel from './ScheduledPanel'
+import MiniAudioPlayer from './MiniAudioPlayer'
 import { t } from '../i18n'
 
 export default function AppShell({
@@ -582,6 +583,7 @@ export default function AppShell({
         />
       )}
 
+      <MiniAudioPlayer />
       {toast && <div className="toast">{toast}</div>}
       <MediaViewer
         key={openMedia?.media?.id || openMedia?.media?.url || 'media-viewer'}
