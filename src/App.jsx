@@ -1156,6 +1156,7 @@ function AppInner() {
           archivedAt: chatSettings.archivedAt || null,
           pushMode: chatSettings.pushMode || 'default',
           pinnedMessageId: chat.pinnedMessageId || null,
+          linkedGroupId: chat.linkedGroupId || null,
           unread: 0,
           createdAt: chat.created_at,
         }

@@ -7,6 +7,7 @@ import {
   BellRing,
   Clock,
   Hash,
+  MessageSquare,
   MoreVertical,
   Phone,
   Pin,
@@ -51,6 +52,7 @@ export default function ChatHeader({
   onOpenCall,
   onOpenScheduled,
   onOpenTopics,
+  onOpenDiscussion,
 }) {
   const [muteMenuOpen, setMuteMenuOpen] = useState(false)
   const [pushMenuOpen, setPushMenuOpen] = useState(false)
@@ -98,6 +100,11 @@ export default function ChatHeader({
         <IconButton label={t('chat.searchMessages')} onClick={onToggleSearch}>
           <Search size={19} />
         </IconButton>
+        {onOpenDiscussion && (
+          <IconButton label="Discussion" onClick={onOpenDiscussion}>
+            <MessageSquare size={19} />
+          </IconButton>
+        )}
         {onOpenTopics && (
           <IconButton
             label="Topics"
