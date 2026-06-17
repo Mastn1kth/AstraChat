@@ -1626,7 +1626,8 @@ app.post('/api/auth/login', authLimiter, async (request, response) => {
   const input = parseBody(loginSchema, request.body)
   const result = await db.query(
     `SELECT id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
-            password_salt, password_hash, totp_secret, totp_enabled_at
+            password_salt, password_hash, totp_secret, totp_enabled_at,
+            cloud_password_hash, cloud_password_salt, cloud_password_hint
      FROM users WHERE login = $1 OR username = $1 LIMIT 1`,
     [input.login.toLowerCase()],
   )
@@ -1648,6 +1649,19 @@ app.post('/api/auth/login', authLimiter, async (request, response) => {
   if (user.totp_secret && !verifyTotpCode(openTotpSecret(user.totp_secret), input.totpCode)) {
     response.status(401).json({ error: 'Invalid authentication code' })
     return
+  }
+
+  // Cloud password (two-step verification)
+  if (user.cloud_password_hash && !input.cloudPassword) {
+    response.json({ cloudPasswordRequired: true, hint: user.cloud_password_hint || null })
+    return
+  }
+  if (user.cloud_password_hash && input.cloudPassword) {
+    const cpValid = await verifyPassword(input.cloudPassword, user.cloud_password_salt, user.cloud_password_hash)
+    if (!cpValid) {
+      response.status(401).json({ error: 'Incorrect cloud password' })
+      return
+    }
   }
 
   await createSession(response, user.id, request)
@@ -1765,6 +1779,102 @@ app.delete('/api/auth/totp', authLimiter, requireAuth, async (request, response)
     body: 'Authenticator app codes are no longer required when signing in.',
   })
   response.json({ user: publicUser(result.rows[0]) })
+})
+
+// ── Cloud password (two-step verification) ───────────────────────────────────
+app.get('/api/auth/cloud-password/status', requireAuth, async (request, response) => {
+  const result = await db.query(
+    `SELECT cloud_password_hash IS NOT NULL AS enabled,
+            cloud_password_hint, cloud_password_set_at
+     FROM users WHERE id = $1`,
+    [request.user.id],
+  )
+  const row = result.rows[0]
+  response.json({
+    enabled: Boolean(row?.enabled),
+    hint: row?.cloud_password_hint || null,
+    setAt: row?.cloud_password_set_at || null,
+  })
+})
+
+app.post('/api/auth/cloud-password', authLimiter, requireAuth, async (request, response) => {
+  const { password, hint, currentPassword } = request.body
+  if (!password || typeof password !== 'string' || password.length < 6) {
+    response.status(400).json({ error: 'Password must be at least 6 characters' })
+    return
+  }
+  // Verify the account password first as extra confirmation
+  const userRow = await db.query(
+    'SELECT password_salt, password_hash, cloud_password_hash, cloud_password_salt FROM users WHERE id = $1',
+    [request.user.id],
+  )
+  if (!userRow.rows.length) { response.status(401).json({ error: 'Not found' }); return }
+  const row = userRow.rows[0]
+  if (row.cloud_password_hash) {
+    // Changing: require current cloud password
+    if (!currentPassword) { response.status(400).json({ error: 'Current cloud password required' }); return }
+    const valid = await verifyPassword(currentPassword, row.cloud_password_salt, row.cloud_password_hash)
+    if (!valid) { response.status(403).json({ error: 'Current cloud password is incorrect' }); return }
+  }
+  const hashed = await hashPassword(password)
+  await db.query(
+    `UPDATE users SET cloud_password_hash=$1, cloud_password_salt=$2,
+     cloud_password_hint=$3, cloud_password_set_at=NOW() WHERE id=$4`,
+    [hashed.hash, hashed.salt, hint?.slice(0, 255) || null, request.user.id],
+  )
+  await createSecurityEvent({
+    userId: request.user.id,
+    actorUserId: request.user.id,
+    type: 'cloud_password_set',
+    severity: 'high',
+    title: 'Two-step verification password set',
+    body: 'A cloud password was configured for your account.',
+  })
+  response.json({ ok: true })
+})
+
+app.delete('/api/auth/cloud-password', authLimiter, requireAuth, async (request, response) => {
+  const { password } = request.body
+  const userRow = await db.query(
+    'SELECT cloud_password_hash, cloud_password_salt FROM users WHERE id = $1',
+    [request.user.id],
+  )
+  const row = userRow.rows[0]
+  if (!row?.cloud_password_hash) {
+    response.status(400).json({ error: 'Cloud password is not set' }); return
+  }
+  if (!password) { response.status(400).json({ error: 'Password required' }); return }
+  const valid = await verifyPassword(password, row.cloud_password_salt, row.cloud_password_hash)
+  if (!valid) { response.status(403).json({ error: 'Incorrect cloud password' }); return }
+  await db.query(
+    `UPDATE users SET cloud_password_hash=NULL, cloud_password_salt=NULL,
+     cloud_password_hint=NULL, cloud_password_set_at=NULL WHERE id=$1`,
+    [request.user.id],
+  )
+  await createSecurityEvent({
+    userId: request.user.id,
+    actorUserId: request.user.id,
+    type: 'cloud_password_removed',
+    severity: 'high',
+    title: 'Two-step verification disabled',
+    body: 'The cloud password was removed from your account.',
+  })
+  response.json({ ok: true })
+})
+
+// Verify cloud password during login (called by client after session established)
+app.post('/api/auth/cloud-password/verify', authLimiter, requireAuth, async (request, response) => {
+  const { password } = request.body
+  const userRow = await db.query(
+    'SELECT cloud_password_hash, cloud_password_salt FROM users WHERE id = $1',
+    [request.user.id],
+  )
+  const row = userRow.rows[0]
+  if (!row?.cloud_password_hash) { response.json({ required: false }); return }
+  if (!password) { response.status(400).json({ required: true, error: 'Cloud password required' }); return }
+  const valid = await verifyPassword(password, row.cloud_password_salt, row.cloud_password_hash)
+  if (!valid) { response.status(403).json({ error: 'Incorrect cloud password' }); return }
+  response.json({ ok: true })
 })
 
 app.get('/api/sessions', requireAuth, async (request, response) => {

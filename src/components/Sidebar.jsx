@@ -120,6 +120,9 @@ export default function Sidebar({
   onStartTotpSetup,
   onVerifyTotpSetup,
   onDisableTotp,
+  onLoadCloudPasswordStatus,
+  onSetCloudPassword,
+  onRemoveCloudPassword,
   onTerminateOtherSessions,
   onTerminateSession,
   onLoadSecurityAlerts,
@@ -154,6 +157,8 @@ export default function Sidebar({
     busy: false,
     error: '',
   })
+  const [cloudPwState, setCloudPwState] = useState({ enabled: false, hint: null, busy: false, error: '' })
+  const [cloudPwForm, setCloudPwForm] = useState({ password: '', hint: '', currentPassword: '', confirm: '' })
   const [inviteCopied, setInviteCopied] = useState(false)
   const [folderMode, setFolderMode] = useState('list')
   const [folderDraft, setFolderDraft] = useState({ id: '', title: '', chatIds: [] })
@@ -442,6 +447,47 @@ export default function Sidebar({
   async function openTwoFactor() {
     setMenuView('twoFactor')
     await refreshTotpStatus()
+    if (onLoadCloudPasswordStatus) {
+      try {
+        const status = await onLoadCloudPasswordStatus()
+        setCloudPwState((current) => ({ ...current, enabled: status.enabled, hint: status.hint || null }))
+      } catch { /* silent */ }
+    }
+  }
+
+  async function submitCloudPassword(e) {
+    e.preventDefault()
+    if (cloudPwForm.password !== cloudPwForm.confirm) {
+      setCloudPwState((current) => ({ ...current, error: 'Passwords do not match' }))
+      return
+    }
+    setCloudPwState((current) => ({ ...current, busy: true, error: '' }))
+    try {
+      await onSetCloudPassword({
+        password: cloudPwForm.password,
+        hint: cloudPwForm.hint || undefined,
+        currentPassword: cloudPwState.enabled ? cloudPwForm.currentPassword : undefined,
+      })
+      setCloudPwState({ enabled: true, hint: cloudPwForm.hint || null, busy: false, error: '' })
+      setCloudPwForm({ password: '', hint: '', currentPassword: '', confirm: '' })
+    } catch (error) {
+      setCloudPwState((current) => ({ ...current, busy: false, error: error.message }))
+    }
+  }
+
+  async function handleRemoveCloudPassword() {
+    if (!cloudPwForm.currentPassword) {
+      setCloudPwState((current) => ({ ...current, error: 'Enter your current cloud password first' }))
+      return
+    }
+    setCloudPwState((current) => ({ ...current, busy: true, error: '' }))
+    try {
+      await onRemoveCloudPassword(cloudPwForm.currentPassword)
+      setCloudPwState({ enabled: false, hint: null, busy: false, error: '' })
+      setCloudPwForm({ password: '', hint: '', currentPassword: '', confirm: '' })
+    } catch (error) {
+      setCloudPwState((current) => ({ ...current, busy: false, error: error.message }))
+    }
   }
 
   async function startTwoFactorSetup() {
@@ -1192,6 +1238,76 @@ export default function Sidebar({
         </section>
         <p className="appearance-privacy-note">
           Sign-in will require both your password and a current code from your authenticator app.
+        </p>
+
+        <div className="drawer-section-title">Two-step verification (cloud password)</div>
+        <section className="drawer-fields totp-panel">
+          <div className={`totp-status ${cloudPwState.enabled ? 'enabled' : ''}`}>
+            <LockKeyhole size={18} />
+            <span>{cloudPwState.enabled ? `Enabled${cloudPwState.hint ? ` · Hint: ${cloudPwState.hint}` : ''}` : 'Not enabled'}</span>
+          </div>
+          <form className="totp-setup-form" onSubmit={submitCloudPassword}>
+            {cloudPwState.enabled && (
+              <label>
+                <span>Current cloud password</span>
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  value={cloudPwForm.currentPassword}
+                  onChange={(e) => setCloudPwForm((current) => ({ ...current, currentPassword: e.target.value }))}
+                />
+              </label>
+            )}
+            <label>
+              <span>{cloudPwState.enabled ? 'New password' : 'Password'} (min 6 chars)</span>
+              <input
+                type="password"
+                autoComplete="new-password"
+                minLength={6}
+                value={cloudPwForm.password}
+                onChange={(e) => setCloudPwForm((current) => ({ ...current, password: e.target.value }))}
+              />
+            </label>
+            <label>
+              <span>Confirm password</span>
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={cloudPwForm.confirm}
+                onChange={(e) => setCloudPwForm((current) => ({ ...current, confirm: e.target.value }))}
+              />
+            </label>
+            <label>
+              <span>Hint (optional)</span>
+              <input
+                type="text"
+                maxLength={255}
+                value={cloudPwForm.hint}
+                onChange={(e) => setCloudPwForm((current) => ({ ...current, hint: e.target.value }))}
+              />
+            </label>
+            <button
+              className="primary-button drawer-password-submit"
+              type="submit"
+              disabled={cloudPwState.busy || cloudPwForm.password.length < 6 || cloudPwForm.password !== cloudPwForm.confirm}
+            >
+              {cloudPwState.busy ? 'Saving...' : cloudPwState.enabled ? 'Change cloud password' : 'Set cloud password'}
+            </button>
+          </form>
+          {cloudPwState.enabled && (
+            <button
+              className="primary-button danger drawer-password-submit"
+              type="button"
+              disabled={cloudPwState.busy || !cloudPwForm.currentPassword}
+              onClick={handleRemoveCloudPassword}
+            >
+              Remove cloud password
+            </button>
+          )}
+          {cloudPwState.error && <p className="drawer-empty session-error">{cloudPwState.error}</p>}
+        </section>
+        <p className="appearance-privacy-note">
+          When enabled, signing in from a new device requires both your password and this cloud password.
         </p>
       </>
     )

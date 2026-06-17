@@ -579,6 +579,23 @@ export const migrations = [
         DROP COLUMN IF EXISTS reviewed_by;
     `,
   },
+  {
+    id: '20260617_cloud_password',
+    sql: `
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS cloud_password_hash TEXT,
+        ADD COLUMN IF NOT EXISTS cloud_password_salt TEXT,
+        ADD COLUMN IF NOT EXISTS cloud_password_hint TEXT,
+        ADD COLUMN IF NOT EXISTS cloud_password_set_at TIMESTAMPTZ;
+    `,
+    downSql: `
+      ALTER TABLE users
+        DROP COLUMN IF EXISTS cloud_password_hash,
+        DROP COLUMN IF EXISTS cloud_password_salt,
+        DROP COLUMN IF EXISTS cloud_password_hint,
+        DROP COLUMN IF EXISTS cloud_password_set_at;
+    `,
+  },
 ]
 
 async function getAppliedMigrationIds(database) {

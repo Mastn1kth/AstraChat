@@ -37,6 +37,7 @@ import {
   getBlockedUsers,
   getCurrentSession,
   getSecurityEvents,
+  getCloudPasswordStatus,
   getTotpStatus,
   loginAccount,
   logoutAccount,
@@ -63,6 +64,8 @@ import {
   uploadAvatar,
   uploadMedia,
   verifyTotpSetup,
+  setCloudPassword,
+  removeCloudPassword,
 } from './api/client'
 import {
   decryptBlobForUser,
@@ -1226,13 +1229,22 @@ function AppInner() {
   async function handleLogin(input) {
     setAuth((current) => ({ ...current, status: 'pending', error: '' }))
     try {
-      const { user, totpRequired } = await loginAccount(input)
+      const { user, totpRequired, cloudPasswordRequired, hint } = await loginAccount(input)
       if (totpRequired) {
         setAuth({
           status: 'totp',
           user: null,
           error: '',
           totpChallenge: { login: input.login, password: input.password },
+        })
+        return
+      }
+      if (cloudPasswordRequired) {
+        setAuth({
+          status: 'cloudPassword',
+          user: null,
+          error: '',
+          cloudChallenge: { login: input.login, password: input.password, hint: hint || null },
         })
         return
       }
@@ -1250,7 +1262,16 @@ function AppInner() {
     }
     setAuth((current) => ({ ...current, status: 'pending', error: '' }))
     try {
-      const { user } = await loginAccount({ ...challenge, totpCode: code })
+      const { user, cloudPasswordRequired, hint } = await loginAccount({ ...challenge, totpCode: code })
+      if (cloudPasswordRequired) {
+        setAuth({
+          status: 'cloudPassword',
+          user: null,
+          error: '',
+          cloudChallenge: { ...challenge, totpCode: code, hint: hint || null },
+        })
+        return
+      }
       await completeAuthentication(user)
     } catch (error) {
       setAuth((current) => ({
@@ -1259,6 +1280,27 @@ function AppInner() {
         user: null,
         error: error.message,
         totpChallenge: challenge,
+      }))
+    }
+  }
+
+  async function handleCloudPasswordLogin({ cloudPassword }) {
+    const challenge = auth.cloudChallenge
+    if (!challenge) {
+      setAuth({ status: 'anonymous', user: null, error: 'Login session expired. Try again.' })
+      return
+    }
+    setAuth((current) => ({ ...current, status: 'pending', error: '' }))
+    try {
+      const { user } = await loginAccount({ ...challenge, cloudPassword })
+      await completeAuthentication(user)
+    } catch (error) {
+      setAuth((current) => ({
+        ...current,
+        status: 'cloudPassword',
+        user: null,
+        error: error.message,
+        cloudChallenge: challenge,
       }))
     }
   }
@@ -3208,8 +3250,11 @@ function AppInner() {
         pending={auth.status === 'pending'}
         error={auth.error}
         totpRequired={auth.status === 'totp'}
+        cloudPasswordRequired={auth.status === 'cloudPassword'}
+        cloudPasswordHint={auth.cloudChallenge?.hint}
         onLogin={handleLogin}
         onTotpLogin={handleTotpLogin}
+        onCloudPasswordLogin={handleCloudPasswordLogin}
         onCancelTotp={cancelTotpLogin}
         onRegister={handleRegister}
         onTestLogin={handleTestLogin}
@@ -3314,6 +3359,9 @@ function AppInner() {
       onStartTotpSetup={beginTotpSetup}
       onVerifyTotpSetup={confirmTotpSetup}
       onDisableTotp={turnOffTotp}
+      onLoadCloudPasswordStatus={getCloudPasswordStatus}
+      onSetCloudPassword={setCloudPassword}
+      onRemoveCloudPassword={removeCloudPassword}
       onTerminateOtherSessions={endOtherSessions}
       onTerminateSession={endSession}
       onLoadSecurityAlerts={loadSecurityAlerts}

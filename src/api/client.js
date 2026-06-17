@@ -208,6 +208,24 @@ export function disableTotp(code) {
   })
 }
 
+export function getCloudPasswordStatus() {
+  return request('/api/auth/cloud-password/status')
+}
+
+export function setCloudPassword({ password, hint, currentPassword }) {
+  return request('/api/auth/cloud-password', {
+    method: 'POST',
+    body: JSON.stringify({ password, hint, currentPassword }),
+  })
+}
+
+export function removeCloudPassword(password) {
+  return request('/api/auth/cloud-password', {
+    method: 'DELETE',
+    body: JSON.stringify({ password }),
+  })
+}
+
 export function deleteAccount() {
   return request('/api/users/me', { method: 'DELETE' })
 }

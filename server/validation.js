@@ -19,6 +19,8 @@ export const registerSchema = z.object({
 export const loginSchema = z.object({
   login: z.string().trim().min(3).max(64),
   password: z.string().min(1).max(128),
+  totpCode: z.string().optional(),
+  cloudPassword: z.string().optional(),
 })
 
 export const createChatSchema = z.object({

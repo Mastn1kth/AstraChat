@@ -33,7 +33,7 @@ Goal: make the existing messenger core reliable locally.
 - [x] WebSocket realtime events.
 - [x] 1:1 audio/video call signaling.
 - [x] Backend pagination for long message history (cursor-based, `before` + `limit`, `hasMore` flag).
-- [ ] Robust optimistic UI retry queue.
+- [x] Robust optimistic UI retry queue (exponential backoff 5→15→45s, 3 auto-retries; triggered on network online event).
 - [x] Persist pinned/muted/archived chat state on backend.
 - [x] Integration tests for message visibility (delete-for-me, clear-history, delete-for-everyone, pagination).
 - [ ] Integration tests for auth, media and WebSocket flows.
@@ -96,7 +96,7 @@ Goal: close the gap around expressive messaging.
 - [ ] Custom emoji model.
 - [x] Voice player with waveform visualization and playback speed control.
 - [x] Audio player and persistent mini-player (survives chat switching).
-- [ ] Media album sending.
+- [x] Media album sending (grouped upload with shared albumId, grid display in bubbles).
 - [x] Upload progress indicator and cancel upload (XHR-based, AbortController).
 - [x] Download manager (combined upload+download panel with progress).
 - [x] File drag-and-drop to chat area (overlay indicator, 100 MB limit, multi-file).
@@ -124,7 +124,7 @@ Goal: stop treating local MVP infrastructure as production.
 - [ ] Device verification.
 - [ ] Key rotation and key backup/recovery. Basic key-change warnings exist.
 - [x] Suspicious-login alerts.
-- [ ] Rate limits beyond auth.
+- [x] Rate limits beyond auth (message 60/min, upload 30/10min, search/pagination 200/min, all per user).
 - [x] Backend-enforced block user flow.
 - [x] Report spam/user/message flows.
 - [x] Admin/moderator report review queue (PATCH endpoint + review UI in admin-panel.html with status filter).

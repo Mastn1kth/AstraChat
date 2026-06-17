@@ -23,8 +23,11 @@ export default function AuthScreen({
   pending,
   error,
   totpRequired,
+  cloudPasswordRequired,
+  cloudPasswordHint,
   onLogin,
   onTotpLogin,
+  onCloudPasswordLogin,
   onCancelTotp,
   onRegister,
   onTestLogin,
@@ -37,6 +40,8 @@ export default function AuthScreen({
   const [name, setName] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [totpCode, setTotpCode] = useState('')
+  const [cloudPassword, setCloudPassword] = useState('')
+  const [showCloudPassword, setShowCloudPassword] = useState(false)
   const [showRegister, setShowRegister] = useState(false)
 
   function handleModeSwitch(m) {
@@ -46,6 +51,7 @@ export default function AuthScreen({
     setPassword('')
     setName('')
     setTotpCode('')
+    setCloudPassword('')
   }
 
   function handleSubmit(e) {
@@ -60,6 +66,11 @@ export default function AuthScreen({
   function handleTotpSubmit(e) {
     e.preventDefault()
     onTotpLogin({ code: totpCode })
+  }
+
+  function handleCloudPasswordSubmit(e) {
+    e.preventDefault()
+    onCloudPasswordLogin({ cloudPassword })
   }
 
   return (
@@ -84,7 +95,45 @@ export default function AuthScreen({
         </h1>
         <p className="astra-sub">{t('auth.sub')}</p>
 
-        {totpRequired ? (
+        {cloudPasswordRequired ? (
+          /* ── Cloud password form ── */
+          <form className="astra-form" onSubmit={handleCloudPasswordSubmit}>
+            <div className="astra-form-title">
+              <LockKeyhole size={20} /> Two-step verification
+            </div>
+            {cloudPasswordHint && (
+              <p className="astra-hint">Hint: <em>{cloudPasswordHint}</em></p>
+            )}
+            <div className="astra-field">
+              <LockKeyhole size={18} className="astra-field-icon" />
+              <input
+                value={cloudPassword}
+                onChange={(e) => setCloudPassword(e.target.value)}
+                type={showCloudPassword ? 'text' : 'password'}
+                autoComplete="current-password"
+                required
+                autoFocus
+                placeholder="Cloud password"
+              />
+              <button
+                type="button"
+                className="astra-eye"
+                onClick={() => setShowCloudPassword((v) => !v)}
+                tabIndex={-1}
+              >
+                {showCloudPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+            {error && <p className="astra-error">{error}</p>}
+            <button className="astra-cta" type="submit" disabled={pending || !cloudPassword}>
+              <span>{pending ? t('auth.checking') : t('auth.verify')}</span>
+              <ArrowRight size={18} />
+            </button>
+            <button type="button" className="astra-link" onClick={() => { setCloudPassword(''); onCancelTotp() }}>
+              ← {t('auth.back')}
+            </button>
+          </form>
+        ) : totpRequired ? (
           /* ── TOTP form ── */
           <form className="astra-form" onSubmit={handleTotpSubmit}>
             <div className="astra-form-title">
