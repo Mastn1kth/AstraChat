@@ -8,6 +8,7 @@ import {
   Camera,
   Check,
   Copy,
+  Database,
   Download,
   DownloadCloud,
   Folder,
@@ -45,8 +46,169 @@ import Avatar from './Avatar'
 import ChatList from './ChatList'
 import IconButton from './IconButton'
 import { formatChatTime } from '../utils/formatters'
+import {
+  getLocalStorageInfo,
+  clearLocalStorageItem,
+  getCacheStorageInfo,
+  clearCache,
+  clearAllCaches,
+  formatBytes,
+} from '../utils/storage'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function StorageMenu({ onBack, onResetState }) {
+  const [localInfo, setLocalInfo] = useState(() =>
+    typeof window === 'undefined' ? { keys: [], total: 0 } : getLocalStorageInfo(),
+  )
+  const [cacheInfo, setCacheInfo] = useState(null)
+  const [clearing, setClearing] = useState(null)
+  const [clearedMsg, setClearedMsg] = useState(null)
+
+  useEffect(() => {
+    getCacheStorageInfo().then(setCacheInfo)
+  }, [])
+
+  useEffect(() => {
+    if (!clearedMsg) return undefined
+    const id = setTimeout(() => setClearedMsg(null), 2000)
+    return () => clearTimeout(id)
+  }, [clearedMsg])
+
+  async function handleClearLocal(key) {
+    clearLocalStorageItem(key)
+    setLocalInfo(getLocalStorageInfo())
+    setClearedMsg(t('storage.localCleared'))
+  }
+
+  async function handleClearAllLocal() {
+    const confirmed = window.confirm(`${t('menu.resetLocal')}?`)
+    if (!confirmed) return
+    onResetState()
+    setLocalInfo(getLocalStorageInfo())
+    setClearedMsg(t('storage.localCleared'))
+  }
+
+  async function handleClearCache(cacheKey) {
+    setClearing(cacheKey)
+    await clearCache(cacheKey)
+    setClearing(null)
+    setCacheInfo(await getCacheStorageInfo())
+    setClearedMsg(t('storage.cacheCleared'))
+  }
+
+  async function handleClearAllCaches() {
+    setClearing('all')
+    await clearAllCaches()
+    setClearing(null)
+    setCacheInfo(await getCacheStorageInfo())
+    setClearedMsg(t('storage.cacheCleared'))
+  }
+
+  const fmt = (bytes) => {
+    const { n, unit } = formatBytes(bytes)
+    return `${n} ${unit}`
+  }
+
+  return (
+    <>
+      <div className="drawer-menu-header">
+        <button type="button" onClick={onBack}>
+          <ArrowLeft size={18} />
+        </button>
+        <strong>{t('storage.title')}</strong>
+      </div>
+      <div className="drawer-fields drawer-storage">
+        {localInfo && (
+          <section className="storage-section">
+            <h4 className="storage-section-title">
+              <Database size={16} /> {t('storage.localStorage')}
+              <span className="storage-total">{fmt(localInfo.total)}</span>
+            </h4>
+            <div className="storage-items">
+              {localInfo.keys.length === 0 && (
+                <p className="drawer-empty">{t('storage.noData')}</p>
+              )}
+              {localInfo.keys.slice(0, 15).map((item) => (
+                <div key={item.key} className="storage-item">
+                  <span className="storage-item-key" title={item.key}>{item.key}</span>
+                  <span className="storage-item-size">{fmt(item.size)}</span>
+                  <button
+                    className="storage-clear-btn"
+                    onClick={() => handleClearLocal(item.key)}
+                    disabled={clearing === item.key}
+                    title={t('storage.clear')}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button
+              className="storage-clear-all"
+              onClick={handleClearAllLocal}
+              disabled={clearing === 'local'}
+            >
+              <Trash2 size={14} /> {t('storage.clearAll')}
+            </button>
+          </section>
+        )}
+
+        {cacheInfo && (
+          <section className="storage-section">
+            <h4 className="storage-section-title">
+              <Database size={16} /> {t('storage.cacheStorage')}
+              <span className="storage-total">
+                {fmt(cacheInfo.total)} ({cacheInfo.totalItems} {t('storage.items')})
+              </span>
+            </h4>
+            <div className="storage-items">
+              {cacheInfo.entries.filter((entry) => entry.items > 0).length === 0 && (
+                <p className="drawer-empty">{t('storage.noData')}</p>
+              )}
+              {cacheInfo.entries.filter((entry) => entry.items > 0).map((entry) => (
+                <div key={entry.cacheKey} className="storage-item">
+                  <span className="storage-item-key">
+                    {entry.cacheKey === 'astrachat-stickers-v1'
+                      ? t('storage.cacheStickers')
+                      : entry.cacheKey === 'astrachat-gifs-v1'
+                        ? t('storage.cacheGifs')
+                        : entry.cacheKey === 'astrachat-gif-categories-v1'
+                          ? 'GIF categories'
+                          : 'App cache'}
+                  </span>
+                  <span className="storage-item-size">{fmt(entry.size)} ({entry.items})</span>
+                  <button
+                    className="storage-clear-btn"
+                    onClick={() => handleClearCache(entry.cacheKey)}
+                    disabled={clearing === entry.cacheKey}
+                    title={t('storage.clear')}
+                  >
+                    {clearing === entry.cacheKey ? <LoaderCircle size={14} className="spin" /> : <X size={14} />}
+                  </button>
+                </div>
+              ))}
+            </div>
+            {cacheInfo.entries.some((entry) => entry.items > 0) && (
+              <button
+                className="storage-clear-all"
+                onClick={handleClearAllCaches}
+                disabled={clearing === 'all'}
+              >
+                <Trash2 size={14} /> {t('storage.clearAll')}
+              </button>
+            )}
+          </section>
+        )}
+
+        {!localInfo && !cacheInfo && (
+          <p className="drawer-empty">{t('storage.calculating')}</p>
+        )}
+      </div>
+      {clearedMsg && <div className="toast storage-toast">{clearedMsg}</div>}
+    </>
+  )
+}
 
 function WallComposer({ onSend }) {
   const [text, setText] = useState('')
@@ -1037,6 +1199,9 @@ export default function Sidebar({
           <button onClick={() => setMenuView('folders')}>
             <Folder size={18} /> {t('menu.folders')}
           </button>
+          <button onClick={() => setMenuView('storage')}>
+            <RotateCcw size={18} /> {t('storage.title')}
+          </button>
           <button className="danger-menu-action" onClick={onResetState}>
             <RotateCcw size={18} /> {t('menu.resetLocal')}
           </button>
@@ -1713,6 +1878,9 @@ export default function Sidebar({
             {menuView === 'security' && renderSecurityMenu()}
             {menuView === 'blocked' && renderBlockedMenu()}
             {menuView === 'appearance' && renderAppearanceMenu()}
+            {menuView === 'storage' && (
+              <StorageMenu onBack={() => setMenuView('settings')} onResetState={onResetState} />
+            )}
           </nav>
           <button className="menu-scrim" onClick={closeMenu} aria-label="Close menu" />
         </div>

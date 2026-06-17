@@ -23,6 +23,20 @@ export const loginSchema = z.object({
   cloudPassword: z.string().optional(),
 })
 
+export const phoneAuthStartSchema = z.object({
+  countryCode: z.string().trim().regex(/^\+[1-9]\d{0,3}$/),
+  phone: z.string().trim().min(4).max(24),
+})
+
+export const phoneAuthVerifySchema = z.object({
+  countryCode: z.string().trim().regex(/^\+[1-9]\d{0,3}$/),
+  phone: z.string().trim().min(4).max(24),
+  code: z.string().trim().regex(/^\d{6}$/),
+  username: z.string().trim().min(3).max(32).regex(usernamePattern).optional(),
+  name: z.string().trim().min(1).max(64).optional(),
+  encryptionPublicKey: publicKeySchema.optional(),
+})
+
 export const createChatSchema = z.object({
   type: z.enum(['private', 'group', 'channel']).default('private'),
   title: z.string().trim().max(100).default(''),

@@ -67,6 +67,20 @@ export function loginAccount(input) {
   })
 }
 
+export function startPhoneAuth(input) {
+  return request('/api/auth/phone/start', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function verifyPhoneAuth(input) {
+  return request('/api/auth/phone/verify', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
 export function testLogin(slot) {
   return request('/api/auth/test-login', {
     method: 'POST',
@@ -677,4 +691,10 @@ export function putCloudKeyBackup(payload) {
 
 export function deleteCloudKeyBackup() {
   return request('/api/keys/backup', { method: 'DELETE' })
+}
+
+export function getMessageReadBy(chatId, messageId) {
+  return request(
+    `/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/read-by`,
+  )
 }

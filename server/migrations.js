@@ -596,6 +596,35 @@ export const migrations = [
         DROP COLUMN IF EXISTS cloud_password_set_at;
     `,
   },
+  {
+    id: '20260617_phone_auth',
+    sql: `
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS phone TEXT;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS users_phone_unique_idx
+        ON users(phone)
+        WHERE phone IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS phone_login_codes (
+        phone TEXT PRIMARY KEY,
+        code_hash TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS phone_login_codes_expires_idx
+        ON phone_login_codes(expires_at);
+    `,
+    downSql: `
+      DROP TABLE IF EXISTS phone_login_codes;
+      DROP INDEX IF EXISTS users_phone_unique_idx;
+
+      ALTER TABLE users
+        DROP COLUMN IF EXISTS phone;
+    `,
+  },
 ]
 
 async function getAppliedMigrationIds(database) {

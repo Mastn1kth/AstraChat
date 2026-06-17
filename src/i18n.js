@@ -214,6 +214,7 @@ const DICT = {
     'composer.editing': 'Редактирование',
     'composer.replying': 'Ответ на сообщение',
     'composer.recording': 'Запись…',
+    'composer.forwarding': 'Пересылка',
 
     // --- Statuses ---
     'status.online': 'в сети',
@@ -329,6 +330,27 @@ const DICT = {
     'toast.groupCreated': 'Группа создана.',
     'toast.channelCreated': 'Канал создан.',
     'toast.spaceFailed': 'Не получилось создать пространство.',
+
+    // --- Storage management ---
+    'storage.title': 'Управление хранилищем',
+    'storage.localStorage': 'Локальные данные',
+    'storage.cacheStorage': 'Кэш медиа',
+    'storage.cacheStickers': 'Кэш стикеров',
+    'storage.cacheGifs': 'Кэш гифок',
+    'storage.size': 'Размер',
+    'storage.items': 'Записей',
+    'storage.clear': 'Очистить',
+    'storage.clearAll': 'Очистить все',
+    'storage.clearing': 'Очистка…',
+    'storage.cacheCleared': 'Кэш очищен',
+    'storage.localCleared': 'Локальные данные очищены',
+    'storage.calculating': 'Расчёт…',
+    'storage.noData': 'Нет данных',
+    'storage.estimated': '~{size}',
+    'storage.bytes': '{n} Б',
+    'storage.kb': '{n} КБ',
+    'storage.mb': '{n} МБ',
+    'storage.gb': '{n} ГБ',
   },
   en: {
     // --- Auth screen ---
@@ -466,6 +488,7 @@ const DICT = {
     'composer.editing': 'Editing message',
     'composer.replying': 'Replying to message',
     'composer.recording': 'Recording…',
+    'composer.forwarding': 'Forwarding',
 
     // --- Statuses ---
     'status.online': 'online',
@@ -581,6 +604,27 @@ const DICT = {
     'toast.groupCreated': 'Group created.',
     'toast.channelCreated': 'Channel created.',
     'toast.spaceFailed': 'Could not create the space.',
+
+    // --- Storage management ---
+    'storage.title': 'Storage usage',
+    'storage.localStorage': 'Local data',
+    'storage.cacheStorage': 'Media cache',
+    'storage.cacheStickers': 'Sticker cache',
+    'storage.cacheGifs': 'GIF cache',
+    'storage.size': 'Size',
+    'storage.items': 'Items',
+    'storage.clear': 'Clear',
+    'storage.clearAll': 'Clear all',
+    'storage.clearing': 'Clearing…',
+    'storage.cacheCleared': 'Cache cleared',
+    'storage.localCleared': 'Local data cleared',
+    'storage.calculating': 'Calculating…',
+    'storage.noData': 'No data',
+    'storage.estimated': '~{size}',
+    'storage.bytes': '{n} B',
+    'storage.kb': '{n} KB',
+    'storage.mb': '{n} MB',
+    'storage.gb': '{n} GB',
   },
 }
 

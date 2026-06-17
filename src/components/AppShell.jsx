@@ -71,8 +71,10 @@ export default function AppShell({
   onCancelEdit,
   onDeleteMessage,
   onCopyMessage,
+  forwardSource,
+  onClearForwardCompose,
+  onForwardCompose,
   onReact,
-  onForwardMessage,
   onSelectMessage,
   onJumpToMessage,
   onTogglePin,
@@ -542,6 +544,8 @@ export default function AppShell({
                 onSendAttachment={sendAttachmentWithProgress}
                 onSendAttachments={onSendAttachments}
                 onSendRichMessage={onSendRichMessage}
+                forwardSource={forwardSource}
+                onCancelForward={onClearForwardCompose}
                 onTyping={onTyping}
                 onCancelReply={onCancelReply}
                 onCancelEdit={onCancelEdit}
@@ -700,7 +704,7 @@ export default function AppShell({
           if (forwardingSelected) {
             onForwardSelectedMessages(chatId)
           } else {
-            onForwardMessage(forwardMessage, chatId)
+            onForwardCompose(forwardMessage, chatId)
           }
           setForwardMessage(null)
           setForwardingSelected(false)

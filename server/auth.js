@@ -27,7 +27,7 @@ export async function getSessionUser(request) {
   const cachedUserId = await getCachedSessionUserId(tokenHash)
   const params = cachedUserId ? [tokenHash, cachedUserId] : [tokenHash]
   const result = await db.query(
-    `SELECT u.id, u.login, u.username, u.name, u.bio, u.status, u.avatar,
+    `SELECT u.id, u.login, u.username, u.phone, u.name, u.bio, u.status, u.avatar,
             u.last_seen_at, u.encryption_public_key, u.totp_secret, u.totp_enabled_at
      FROM sessions s
      JOIN users u ON u.id = s.user_id

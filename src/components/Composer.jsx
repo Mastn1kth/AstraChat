@@ -28,7 +28,7 @@ import {
 import IconButton from './IconButton'
 import EmojiPicker from './EmojiPicker'
 import GifPicker from './GifPicker'
-import { stickerPacks } from '../utils/richMessages'
+import { getMessagePlainText, stickerPacks } from '../utils/richMessages'
 import { extractFirstUrl, fetchLinkPreview } from '../utils/linkPreview'
 
 const DRAFT_PREFIX = 'astrachat.draft.'
@@ -59,6 +59,8 @@ export default function Composer({
   chatId,
   replyTo,
   editingMessage,
+  forwardSource,
+  onCancelForward,
   activeTopic,
   chatMembers,
   onSend,
@@ -244,7 +246,8 @@ export default function Composer({
 
   async function submit(scheduledAt) {
     const text = value.trim()
-    if ((!text && !attachments.length) || sending) return
+    const hasForwardText = Boolean(forwardSource && getMessagePlainText(forwardSource).trim())
+    if ((!text && !attachments.length && !hasForwardText) || sending) return
     const controller = new AbortController()
     sendAbortRef.current = controller
     setSending(true)
@@ -500,9 +503,10 @@ export default function Composer({
     resetRecordingState()
   }
 
-  const mode = editingMessage ? t('composer.editing') : replyTo ? t('composer.replying') : ''
-  const preview = editingMessage || replyTo
-  const canSend = Boolean(value.trim() || attachments.length)
+  const mode = editingMessage ? t('composer.editing') : replyTo ? t('composer.replying') : forwardSource ? t('composer.forwarding') : ''
+  const preview = editingMessage || replyTo || forwardSource
+  const previewText = forwardSource ? getMessagePlainText(forwardSource) : preview?.text
+  const canSend = Boolean(value.trim() || attachments.length || previewText?.trim())
 
   return (
     <footer className="composer">
@@ -517,9 +521,9 @@ export default function Composer({
         <div className={`composer-preview ${editingMessage ? 'edit-preview' : ''}`}>
           <div>
             <strong>{mode}</strong>
-            <span>{preview.text}</span>
+            <span>{previewText}</span>
           </div>
-          <button onClick={editingMessage ? onCancelEdit : onCancelReply} aria-label="Cancel mode">
+          <button onClick={editingMessage ? onCancelEdit : forwardSource ? onCancelForward : onCancelReply} aria-label="Cancel mode">
             <X size={18} />
           </button>
         </div>

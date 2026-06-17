@@ -4,7 +4,7 @@ import helmet from 'helmet'
 import { ipKeyGenerator, rateLimit } from 'express-rate-limit'
 import { RedisStore } from 'rate-limit-redis'
 import { createServer } from 'node:http'
-import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto'
 import { cpSync, createReadStream, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { Transform } from 'node:stream'
@@ -93,6 +93,8 @@ import {
   loginSchema,
   messageSchema,
   parseBody,
+  phoneAuthStartSchema,
+  phoneAuthVerifySchema,
   pollVoteSchema,
   profileSchema,
   pushSubscriptionSchema,
@@ -248,6 +250,7 @@ function publicUser(user) {
     id: user.id,
     login: user.login,
     username: user.username,
+    phone: user.phone || '',
     name: user.name,
     bio: user.bio,
     status: user.status || '',
@@ -282,6 +285,35 @@ function stringifyPublicKey(publicKey) {
   return value
 }
 
+function normalizePhone(countryCode, phone) {
+  const country = String(countryCode || '').trim()
+  const digits = String(phone || '').replace(/\D/g, '')
+  if (!/^\+[1-9]\d{0,3}$/.test(country) || digits.length < 4 || digits.length > 15) {
+    const error = new Error('Invalid phone number')
+    error.status = 400
+    throw error
+  }
+  const normalized = `${country}${digits}`
+  if (!/^\+[1-9]\d{7,15}$/.test(normalized)) {
+    const error = new Error('Invalid phone number')
+    error.status = 400
+    throw error
+  }
+  return normalized
+}
+
+function hashPhoneCode(phone, code) {
+  return createHash('sha256')
+    .update(`${phone}:${code}:${config.adminToken}`)
+    .digest('hex')
+}
+
+function publicPhoneCodePayload(phone, code) {
+  if (config.isProduction) return {}
+  console.log(`[phone-auth] ${phone} code: ${code}`)
+  return { devCode: code }
+}
+
 function sealTotpSecret(secret) {
   return JSON.stringify(encryptMessage(secret))
 }
@@ -301,7 +333,7 @@ function openTotpSecret(value) {
 
 async function loadOwnTotpState(userId) {
   const result = await db.query(
-    `SELECT id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
+    `SELECT id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
             totp_secret, totp_pending_secret, totp_enabled_at
      FROM users WHERE id = $1 LIMIT 1`,
     [userId],
@@ -914,14 +946,19 @@ async function publicMessagesFromRows(chatId, rows, currentUserId = null) {
     reactionsByMessage.set(reaction.message_id, reactions)
   })
   const readResult = await db.query(
-    `SELECT mr.message_id
+    `SELECT mr.message_id, mr.user_id, u.name, u.username
      FROM message_reads mr
      JOIN messages m ON m.id = mr.message_id
-     WHERE m.chat_id = $1 AND mr.user_id <> m.sender_id
-     GROUP BY mr.message_id`,
+     JOIN users u ON u.id = mr.user_id
+     WHERE m.chat_id = $1 AND mr.user_id <> m.sender_id`,
     [chatId],
   )
   const readMessages = new Set(readResult.rows.map((read) => read.message_id))
+  const readByMap = new Map()
+  for (const row of readResult.rows) {
+    if (!readByMap.has(row.message_id)) readByMap.set(row.message_id, [])
+    readByMap.get(row.message_id).push({ userId: row.user_id, name: row.name, username: row.username })
+  }
   const messageIds = rows.map((message) => message.id)
   const pollResult = messageIds.length
     ? await db.query(
@@ -1003,6 +1040,7 @@ async function publicMessagesFromRows(chatId, rows, currentUserId = null) {
     forwardedFromChatId: message.forwarded_from_chat_id,
     reactions: reactionsByMessage.get(message.id) || {},
     status: readMessages.has(message.id) ? 'read' : 'sent',
+    readBy: readByMap.get(message.id) || [],
     media: message.media_id
       ? {
           id: message.media_id,
@@ -1184,6 +1222,7 @@ function messageMentionsUser(searchText, user) {
 
 function messagePushBody(message, mentioned) {
   if (mentioned) return 'Mentioned you'
+  if (message.text) return message.text.slice(0, 200)
   if (message.media) {
     const labels = {
       image: 'Photo',
@@ -1221,7 +1260,12 @@ async function sendPushToSubscription(row, payload) {
       const result = await sendFcmMessage(row.endpoint.slice(4), {
         title: payload.title,
         body: payload.body,
-        data: { chatId: payload.chatId || '', messageId: payload.messageId || '' },
+        data: {
+          type: payload.type || '',
+          chatId: payload.chatId || '',
+          messageId: payload.messageId || '',
+          code: payload.code || '',
+        },
       })
       if (result.unregistered) {
         await db.query('DELETE FROM push_subscriptions WHERE id = $1', [row.id])
@@ -1269,6 +1313,27 @@ async function sendPushToSubscription(row, payload) {
     console.warn('[push] send failed', error.statusCode || '', error.message)
     return false
   }
+}
+
+async function sendLoginCodePush(userId, code) {
+  if (!userId || (!config.vapid.enabled && !isFcmEnabled())) return 0
+  const subscriptions = await db.query(
+    `SELECT id, endpoint, p256dh, auth
+     FROM push_subscriptions
+     WHERE user_id = $1`,
+    [userId],
+  )
+  let sent = 0
+  for (const row of subscriptions.rows) {
+    const ok = await sendPushToSubscription(row, {
+      title: 'Onda login code',
+      body: `Your Onda code: ${code}`,
+      type: 'auth:code',
+      code,
+    })
+    if (ok) sent += 1
+  }
+  return sent
 }
 
 async function sendOfflineMessagePushes({ chatId, sender, message, searchText }) {
@@ -1565,12 +1630,126 @@ app.post('/api/auth/register', authLimiter, async (request, response) => {
 
   await createSession(response, userId, request)
   const userResult = await db.query(
-    `SELECT id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
+    `SELECT id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
             totp_secret, totp_enabled_at
      FROM users WHERE id = $1`,
     [userId],
   )
   response.status(201).json({ user: publicUser(userResult.rows[0]) })
+})
+
+app.post('/api/auth/phone/start', authLimiter, async (request, response) => {
+  const input = parseBody(phoneAuthStartSchema, request.body)
+  const phone = normalizePhone(input.countryCode, input.phone)
+  const code = String(randomBytes(4).readUInt32BE(0) % 1000000).padStart(6, '0')
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString()
+  const userResult = await db.query('SELECT id FROM users WHERE phone = $1 LIMIT 1', [phone])
+  const existingUserId = userResult.rows[0]?.id || ''
+
+  await db.query('DELETE FROM phone_login_codes WHERE expires_at <= NOW()')
+  await db.query(
+    `INSERT INTO phone_login_codes (phone, code_hash, attempts, expires_at)
+     VALUES ($1, $2, 0, $3)
+     ON CONFLICT (phone)
+     DO UPDATE SET code_hash = EXCLUDED.code_hash,
+                   attempts = 0,
+                   expires_at = EXCLUDED.expires_at,
+                   created_at = NOW()`,
+    [phone, hashPhoneCode(phone, code), expiresAt],
+  )
+  const pushSent = existingUserId ? await sendLoginCodePush(existingUserId, code) : 0
+
+  response.json({
+    phone,
+    expiresAt,
+    delivery: pushSent > 0 ? 'push' : config.isProduction ? 'sms-provider-required' : 'dev',
+    pushSent,
+    ...publicPhoneCodePayload(phone, code),
+  })
+})
+
+app.post('/api/auth/phone/verify', authLimiter, async (request, response) => {
+  const input = parseBody(phoneAuthVerifySchema, request.body)
+  const phone = normalizePhone(input.countryCode, input.phone)
+  const codeResult = await db.query(
+    `SELECT phone, code_hash, attempts, expires_at
+     FROM phone_login_codes
+     WHERE phone = $1
+     LIMIT 1`,
+    [phone],
+  )
+  const codeRow = codeResult.rows[0]
+  if (!codeRow || new Date(codeRow.expires_at).getTime() <= Date.now()) {
+    response.status(400).json({ error: 'Code expired. Request a new one.' })
+    return
+  }
+  if (Number(codeRow.attempts || 0) >= 5) {
+    response.status(429).json({ error: 'Too many code attempts. Request a new code.' })
+    return
+  }
+  if (codeRow.code_hash !== hashPhoneCode(phone, input.code)) {
+    await db.query('UPDATE phone_login_codes SET attempts = attempts + 1 WHERE phone = $1', [phone])
+    response.status(401).json({ error: 'Invalid code' })
+    return
+  }
+
+  const existing = await db.query(
+    `SELECT id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
+            totp_secret, totp_enabled_at
+     FROM users WHERE phone = $1 LIMIT 1`,
+    [phone],
+  )
+  if (existing.rows[0]) {
+    await db.query('DELETE FROM phone_login_codes WHERE phone = $1', [phone])
+    await createSession(response, existing.rows[0].id, request)
+    response.json({ user: publicUser(existing.rows[0]), existing: true })
+    return
+  }
+
+  if (!input.username || !input.name) {
+    response.json({ profileRequired: true, phone })
+    return
+  }
+
+  const userId = randomUUID()
+  const password = await hashPassword(randomBytes(32).toString('base64url'))
+  try {
+    await db.transaction(async (tx) => {
+      await tx.query(
+        `INSERT INTO users
+          (id, login, username, phone, name, avatar, password_salt, password_hash, encryption_public_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          userId,
+          phone,
+          input.username.toLowerCase(),
+          phone,
+          input.name,
+          initials(input.name),
+          password.salt,
+          password.hash,
+          input.encryptionPublicKey ? stringifyPublicKey(input.encryptionPublicKey) : null,
+        ],
+      )
+      await createSavedChat(tx, userId)
+      await tx.query('DELETE FROM phone_login_codes WHERE phone = $1', [phone])
+    })
+  } catch (error) {
+    if (error.code === '23505') {
+      response.status(409).json({ error: 'Phone or username is already registered' })
+      return
+    }
+    throw error
+  }
+
+  await createSession(response, userId, request)
+  const userResult = await db.query(
+    `SELECT id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
+            totp_secret, totp_enabled_at
+     FROM users WHERE id = $1`,
+    [userId],
+  )
+  response.status(201).json({ user: publicUser(userResult.rows[0]), existing: false })
 })
 
 const TEST_ACCOUNTS = {
@@ -1594,7 +1773,7 @@ app.post('/api/auth/test-login', authLimiter, async (request, response) => {
 
   // Ensure the fixed demo account exists, then sign in as it.
   let result = await db.query(
-    `SELECT id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
+    `SELECT id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
             totp_secret, totp_enabled_at
      FROM users WHERE login = $1 LIMIT 1`,
     [account.login],
@@ -1611,7 +1790,7 @@ app.post('/api/auth/test-login', authLimiter, async (request, response) => {
       await createSavedChat(tx, userId)
     })
     result = await db.query(
-      `SELECT id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
+      `SELECT id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
               totp_secret, totp_enabled_at
        FROM users WHERE id = $1`,
       [userId],
@@ -1625,7 +1804,7 @@ app.post('/api/auth/test-login', authLimiter, async (request, response) => {
 app.post('/api/auth/login', authLimiter, async (request, response) => {
   const input = parseBody(loginSchema, request.body)
   const result = await db.query(
-    `SELECT id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
+    `SELECT id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
             password_salt, password_hash, totp_secret, totp_enabled_at,
             cloud_password_hash, cloud_password_salt, cloud_password_hint
      FROM users WHERE login = $1 OR username = $1 LIMIT 1`,
@@ -1732,7 +1911,7 @@ app.post('/api/auth/totp/verify', authLimiter, requireAuth, async (request, resp
          totp_enabled_at = NOW(),
          updated_at = NOW()
      WHERE id = $2
-     RETURNING id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
+     RETURNING id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
                totp_secret, totp_enabled_at`,
     [sealTotpSecret(secret), request.user.id],
   )
@@ -1766,7 +1945,7 @@ app.delete('/api/auth/totp', authLimiter, requireAuth, async (request, response)
          totp_enabled_at = NULL,
          updated_at = NOW()
      WHERE id = $1
-     RETURNING id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
+     RETURNING id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
                totp_secret, totp_enabled_at`,
     [request.user.id],
   )
@@ -1976,7 +2155,7 @@ app.post('/api/security/events/:eventId/read', requireAuth, async (request, resp
 
 app.get('/api/users/blocks', requireAuth, async (request, response) => {
   const result = await db.query(
-    `SELECT u.id, u.login, u.username, u.name, u.bio, u.status, u.avatar,
+    `SELECT u.id, u.login, u.username, u.phone, u.name, u.bio, u.status, u.avatar,
             u.last_seen_at, u.encryption_public_key,
             TRUE AS blocked_by_me, FALSE AS blocked_me,
             ub.created_at AS blocked_at
@@ -1996,7 +2175,7 @@ app.get('/api/users/blocks', requireAuth, async (request, response) => {
 
 app.get('/api/contacts', requireAuth, async (request, response) => {
   const result = await db.query(
-    `SELECT u.id, u.login, u.username, u.name, u.bio, u.status, u.avatar,
+    `SELECT u.id, u.login, u.username, u.phone, u.name, u.bio, u.status, u.avatar,
             u.last_seen_at, u.encryption_public_key,
             TRUE AS is_contact,
             uc.created_at AS contact_since,
@@ -2023,7 +2202,7 @@ app.post('/api/contacts/:userId', requireAuth, async (request, response) => {
     return
   }
   const target = await db.query(
-    `SELECT id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key
+    `SELECT id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key
      FROM users
      WHERE id = $1
      LIMIT 1`,
@@ -2555,7 +2734,7 @@ app.delete('/api/push/subscriptions', requireAuth, async (request, response) => 
 app.get('/api/users', requireAuth, apiLimiter, async (request, response) => {
   const search = String(request.query.search || '').trim()
   const result = await db.query(
-    `SELECT id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
+    `SELECT id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
             EXISTS (
               SELECT 1 FROM user_contacts uc
               WHERE uc.owner_id = $1 AND uc.contact_user_id = users.id
@@ -2595,7 +2774,7 @@ app.patch('/api/users/me/encryption-key', requireAuth, async (request, response)
     `UPDATE users
      SET encryption_public_key = $1, updated_at = NOW()
      WHERE id = $2
-     RETURNING id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
+     RETURNING id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
                totp_secret, totp_enabled_at`,
     [keyValue, request.user.id],
   )
@@ -2638,7 +2817,7 @@ app.patch('/api/users/me/profile', requireAuth, async (request, response) => {
       `UPDATE users
        SET name = $1, username = $2, bio = $3, status = $4, avatar = $5, updated_at = NOW()
        WHERE id = $6
-       RETURNING id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
+       RETURNING id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
                  totp_secret, totp_enabled_at`,
       [input.name, input.username.toLowerCase(), input.bio, input.status, initials(input.name), request.user.id],
     )
@@ -2808,7 +2987,7 @@ app.get('/api/chats', requireAuth, async (request, response) => {
   const chats = await Promise.all(
     result.rows.map(async (chat) => {
       const members = await db.query(
-        `SELECT u.id, u.login, u.username, u.name, u.bio, u.status, u.avatar, u.last_seen_at,
+        `SELECT u.id, u.login, u.username, u.phone, u.name, u.bio, u.status, u.avatar, u.last_seen_at,
                 u.encryption_public_key, cm.role,
                 EXISTS (
                   SELECT 1 FROM user_blocks ub
@@ -4093,7 +4272,7 @@ app.get('/api/search', requireAuth, async (request, response) => {
 
   const [usersResult, chatsResult, messagesResult] = await Promise.all([
     db.query(
-      `SELECT id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key
+      `SELECT id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key
        FROM users
        WHERE id <> $1
          AND (username ILIKE '%' || $2 || '%' OR name ILIKE '%' || $2 || '%')
@@ -5011,6 +5190,32 @@ app.patch('/api/chats/:chatId/pinned-message', requireAuth, async (request, resp
   response.json(payload)
 })
 
+app.get('/api/chats/:chatId/messages/:messageId/read-by', requireAuth, async (request, response) => {
+  if (!(await isChatMember(request.params.chatId, request.user.id))) {
+    response.status(404).json({ error: 'Chat not found' })
+    return
+  }
+  const messageResult = await db.query(
+    `SELECT id FROM messages
+     WHERE id = $1 AND chat_id = $2 AND deleted_at IS NULL
+     LIMIT 1`,
+    [request.params.messageId, request.params.chatId],
+  )
+  if (!messageResult.rows.length) {
+    response.status(404).json({ error: 'Message not found' })
+    return
+  }
+  const result = await db.query(
+    `SELECT u.id, u.name, u.username, mr.read_at
+     FROM message_reads mr
+     JOIN users u ON u.id = mr.user_id
+     WHERE mr.message_id = $1
+     ORDER BY mr.read_at ASC`,
+    [request.params.messageId],
+  )
+  response.json(result.rows)
+})
+
 app.post('/api/chats/:chatId/messages/:messageId/reactions', requireAuth, async (request, response) => {
   if (!(await isChatMember(request.params.chatId, request.user.id))) {
     response.status(404).json({ error: 'Chat not found' })
@@ -5521,6 +5726,8 @@ wss.on('connection', async (socket, _request, user) => {
           type: 'message:read',
           chatId: message.chatId,
           userId: user.id,
+          userName: user.name,
+          userUsername: user.username,
           messageIds: unread.rows.map((item) => item.id),
         })
         return

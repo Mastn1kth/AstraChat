@@ -105,8 +105,12 @@ describe('database migrations', () => {
       assert.equal(afterRollback.slice(0, -1).every((migration) => migration.applied), true)
 
       await assert.rejects(
-        () => db.query('SELECT owner_id FROM user_contacts LIMIT 1'),
-        /user_contacts|relation/i,
+        () => db.query('SELECT phone FROM users LIMIT 1'),
+        /phone|column/i,
+      )
+      await assert.rejects(
+        () => db.query('SELECT phone FROM phone_login_codes LIMIT 1'),
+        /phone_login_codes|relation/i,
       )
     } finally {
       await db.close()

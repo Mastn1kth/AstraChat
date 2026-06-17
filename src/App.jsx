@@ -3,6 +3,7 @@ import { setLang, t } from './i18n'
 import { useConfirm } from './hooks/useConfirm'
 import AppShell from './components/AppShell'
 import AuthScreen from './components/AuthScreen'
+import PermissionOnboarding from './components/PermissionOnboarding'
 import useWebRTCCall from './hooks/useWebRTCCall'
 import { contacts as seedContacts, currentUser, initialChats, initialMessages } from './data/sampleData'
 import { byPinnedThenRecent, getLastMessage } from './utils/formatters'
@@ -66,6 +67,8 @@ import {
   verifyTotpSetup,
   setCloudPassword,
   removeCloudPassword,
+  startPhoneAuth,
+  verifyPhoneAuth,
 } from './api/client'
 import {
   decryptBlobForUser,
@@ -94,6 +97,7 @@ import {
 } from './api/client'
 import { ensureNotificationPermission, playIncomingSound, showDesktopNotification } from './utils/notify'
 import { disableWebPushNotifications, enableWebPushNotifications } from './utils/push'
+import { hasCompletedPermissionOnboarding } from './utils/permissions'
 import {
   decodeRichMessage,
   encodeRichMessage,
@@ -218,6 +222,7 @@ async function normalizeServerMessage(message, currentUserId) {
     reactions: message.reactions || {},
     topicId: message.topicId || null,
     media,
+    readBy: message.readBy || [],
     backend: true,
     encrypted: decrypted.encrypted,
     decryptFailed: decrypted.failed,
@@ -515,8 +520,10 @@ function AppInner() {
   const [messageSearch, setMessageSearch] = useState('')
   const [replyToId, setReplyToId] = useState('')
   const [editingMessageId, setEditingMessageId] = useState('')
+  const [forwardSource, setForwardSource] = useState(null)
   const [selectedMessageId, setSelectedMessageId] = useState('')
   const [toast, setToast] = useState('')
+  const [permissionPromptOpen, setPermissionPromptOpen] = useState(false)
   const [pendingInvite, setPendingInvite] = useState(() => {
     if (typeof window === 'undefined') return ''
     const params = new URLSearchParams(window.location.search)
@@ -565,6 +572,11 @@ function AppInner() {
     window.clearTimeout(toastTimerRef.current)
     toastTimerRef.current = window.setTimeout(() => setToast(''), 2200)
   }, [])
+
+  useEffect(() => {
+    if (auth.status !== 'authenticated' || !state.user?.id) return
+    if (!hasCompletedPermissionOnboarding()) setPermissionPromptOpen(true)
+  }, [auth.status, state.user?.id])
 
   // Sound + desktop notification for an incoming message (Telegram-style: quiet when you are reading the chat).
   const notifyIncoming = useCallback((message, chatId, senderId) => {
@@ -616,6 +628,7 @@ function AppInner() {
   // Keep this browser's Web Push subscription aligned with the notification toggle.
   useEffect(() => {
     if (auth.status !== 'authenticated') return undefined
+    if (!hasCompletedPermissionOnboarding()) return undefined
 
     let cancelled = false
     if (state.settings.notifications) {
@@ -866,14 +879,24 @@ function AppInner() {
 
       if (payload.type === 'message:read' && payload.chatId) {
         const readIds = new Set(payload.messageIds || [])
+        const reader = payload.userId && payload.userName
+          ? { userId: payload.userId, name: payload.userName, username: payload.userUsername }
+          : null
         readIds.forEach((messageId) => pendingReadIdsRef.current.add(messageId))
         setState((current) => ({
           ...current,
           messages: {
             ...current.messages,
-            [payload.chatId]: (current.messages[payload.chatId] || []).map((message) =>
-              readIds.has(message.id) ? { ...message, status: 'read' } : message,
-            ),
+            [payload.chatId]: (current.messages[payload.chatId] || []).map((message) => {
+              if (!readIds.has(message.id)) return message
+              const existingReadBy = message.readBy || []
+              const alreadyRead = reader && existingReadBy.some((r) => r.userId === reader.userId)
+              return {
+                ...message,
+                status: 'read',
+                readBy: reader && !alreadyRead ? [...existingReadBy, reader] : existingReadBy,
+              }
+            }),
           },
         }))
         return
@@ -1319,6 +1342,39 @@ function AppInner() {
     }
   }
 
+  async function handlePhoneStart(input) {
+    setAuth((current) => ({ ...current, status: 'pending', error: '' }))
+    try {
+      const result = await startPhoneAuth(input)
+      setAuth({ status: 'anonymous', user: null, error: '' })
+      return result
+    } catch (error) {
+      setAuth({ status: 'anonymous', user: null, error: error.message })
+      throw error
+    }
+  }
+
+  async function handlePhoneVerify(input) {
+    setAuth((current) => ({ ...current, status: 'pending', error: '' }))
+    try {
+      let payload = input
+      if (input.username && input.name) {
+        const keyPair = await ensureUserKeyPair(`phone:${input.countryCode}:${input.phone}:${input.username}`)
+        payload = { ...input, encryptionPublicKey: keyPair.publicKey }
+      }
+      const result = await verifyPhoneAuth(payload)
+      if (result.profileRequired) {
+        setAuth({ status: 'anonymous', user: null, error: '' })
+        return result
+      }
+      await completeAuthentication(result.user)
+      return result
+    } catch (error) {
+      setAuth({ status: 'anonymous', user: null, error: error.message })
+      throw error
+    }
+  }
+
   async function handleTestLogin(slot) {
     setAuth((current) => ({ ...current, status: 'pending', error: '' }))
     try {
@@ -1666,6 +1722,7 @@ function AppInner() {
     setSelectedMessageIds(new Set())
     setReplyToId('')
     setEditingMessageId('')
+    setForwardSource(null)
     setUi((current) => ({
       ...current,
       mobilePane: 'chat',
@@ -1687,6 +1744,15 @@ function AppInner() {
       loadMessagesFromServer(chatId)
       sendSocketEvent({ type: 'chat:read', chatId })
     }
+  }
+
+  function startForwardCompose(message, targetChatId) {
+    selectChat(targetChatId)
+    setForwardSource(message)
+  }
+
+  function clearForwardCompose() {
+    setForwardSource(null)
   }
 
   const handleTyping = useCallback(
@@ -1726,6 +1792,75 @@ function AppInner() {
       }))
       setEditingMessageId('')
       showToast('Message edited.')
+      return
+    }
+
+    if (forwardSource) {
+      const sourceText = getMessagePlainText(forwardSource).trim()
+      const mergedText = text.trim() || sourceText
+
+      let payloadText = mergedText
+      if (selectedChat.backend) {
+        try {
+          payloadText = await encryptTextForChat(mergedText, selectedChat)
+        } catch (error) {
+          showToast(error.message || 'Message was not encrypted.')
+          return
+        }
+      }
+
+      const id = createId('fwd-compose')
+      const now = new Date().toISOString()
+      const localMessage = {
+        id,
+        senderId: state.user.id,
+        text: mergedText,
+        time: now,
+        status: selectedChat.backend ? 'sending' : 'read',
+        reactions: {},
+        forwarded: true,
+      }
+
+      setState((current) => ({
+        ...current,
+        messages: {
+          ...current.messages,
+          [selectedChat.id]: [...(current.messages[selectedChat.id] || []), localMessage],
+        },
+      }))
+      const sourceMsg = forwardSource
+      setForwardSource(null)
+
+      if (selectedChat.backend) {
+        try {
+          const { message } = await sendChatMessage(selectedChat.id, {
+            text: payloadText,
+            searchText: mergedText,
+            forwardedFromMessageId: sourceMsg.backend ? sourceMsg.id : undefined,
+          })
+          const normalizedMessage = await normalizeServerMessage(message, state.user.id)
+          setState((current) => ({
+            ...current,
+            messages: {
+              ...current.messages,
+              [selectedChat.id]: (current.messages[selectedChat.id] || []).map((item) =>
+                item.id === id ? { ...normalizedMessage, forwarded: true } : item,
+              ),
+            },
+          }))
+        } catch (error) {
+          setState((current) => ({
+            ...current,
+            messages: {
+              ...current.messages,
+              [selectedChat.id]: (current.messages[selectedChat.id] || []).map((item) =>
+                item.id === id ? { ...item, status: 'failed' } : item,
+              ),
+            },
+          }))
+          showToast(error.message || 'Message was not sent.')
+        }
+      }
       return
     }
 
@@ -3257,6 +3392,8 @@ function AppInner() {
         onCloudPasswordLogin={handleCloudPasswordLogin}
         onCancelTotp={cancelTotpLogin}
         onRegister={handleRegister}
+        onPhoneStart={handlePhoneStart}
+        onPhoneVerify={handlePhoneVerify}
         onTestLogin={handleTestLogin}
       />
     )
@@ -3315,6 +3452,9 @@ function AppInner() {
       onDeleteMessage={deleteMessage}
       onCopyMessage={copyMessage}
       onReact={reactToMessage}
+      forwardSource={forwardSource}
+      onClearForwardCompose={clearForwardCompose}
+      onForwardCompose={startForwardCompose}
       onForwardMessage={forwardMessageToChat}
       onSelectMessage={(id) => setSelectedMessageId((current) => (current === id ? '' : id))}
       onJumpToMessage={jumpToMessage}
@@ -3412,6 +3552,9 @@ function AppInner() {
         window.setTimeout(() => jumpToMessage(messageId), 200)
       }}
     />
+    {permissionPromptOpen && (
+      <PermissionOnboarding onClose={() => setPermissionPromptOpen(false)} />
+    )}
     {confirmDialog}
     </>
   )

@@ -56,6 +56,7 @@ export async function migrateDatabase() {
       id UUID PRIMARY KEY,
       login TEXT NOT NULL UNIQUE,
       username TEXT NOT NULL UNIQUE,
+      phone TEXT UNIQUE,
       name TEXT NOT NULL,
       bio TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT '',
@@ -84,6 +85,17 @@ export async function migrateDatabase() {
 
     CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions(user_id);
     CREATE INDEX IF NOT EXISTS sessions_expires_at_idx ON sessions(expires_at);
+
+    CREATE TABLE IF NOT EXISTS phone_login_codes (
+      phone TEXT PRIMARY KEY,
+      code_hash TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS phone_login_codes_expires_idx
+      ON phone_login_codes(expires_at);
 
     CREATE TABLE IF NOT EXISTS chats (
       id UUID PRIMARY KEY,
@@ -207,6 +219,13 @@ export async function migrateDatabase() {
 
     ALTER TABLE users
       ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
+
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS phone TEXT;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS users_phone_unique_idx
+      ON users(phone)
+      WHERE phone IS NOT NULL;
 
     ALTER TABLE users
       ADD COLUMN IF NOT EXISTS encryption_public_key TEXT;

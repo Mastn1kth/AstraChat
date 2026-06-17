@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { Pin } from 'lucide-react'
 import AuthScreen from './AuthScreen'
 import ChatItem from './ChatItem'
+import Composer from './Composer'
 import IconButton from './IconButton'
 import MessageBubble from './MessageBubble'
 
@@ -14,13 +15,16 @@ describe('React components', () => {
         error=""
         onLogin={vi.fn()}
         onRegister={vi.fn()}
+        onPhoneStart={vi.fn()}
+        onPhoneVerify={vi.fn()}
         onTestLogin={vi.fn()}
       />,
     )
 
     expect(html).toContain('Onda')
     expect(html).toContain('astra-form')
-    expect(html).toContain('autoComplete="username"')
+    expect(html).toContain('autoComplete="tel"')
+    expect(html).toContain('Send code')
   })
 
   it('renders chat state badges and unread count', () => {
@@ -107,5 +111,284 @@ describe('React components', () => {
     expect(html).toContain('Message deleted')
     expect(html).toContain('reaction-strip align-right')
     expect(html).not.toContain('Secret text')
+  })
+
+  // ── Read-by / seen-by ──────────────────────────────────────
+
+  it('shows seen-by count for own messages in group chats', () => {
+    const html = renderToStaticMarkup(
+      <MessageBubble
+        message={{
+          id: 'msg-seen-1',
+          text: 'Hello group',
+          time: '2026-06-10T10:00:00Z',
+          status: 'read',
+          readBy: [
+            { userId: 'user-2', name: 'Bob', username: 'bob' },
+            { userId: 'user-3', name: 'Carol', username: 'carol' },
+          ],
+        }}
+        sender={{ id: 'user-1', name: 'Alice' }}
+        isOwn
+        contactType="group"
+        matched={false}
+        highlighted={false}
+        multiSelectMode={false}
+        multiSelected={false}
+        onSelect={vi.fn()}
+        onStartReply={vi.fn()}
+        onStartEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onCopy={vi.fn()}
+        onReact={vi.fn()}
+        onOpenMedia={vi.fn()}
+        onForward={vi.fn()}
+        onToggleSelect={vi.fn()}
+      />,
+    )
+
+    expect(html).toContain('seen-by')
+    expect(html).toContain('Seen by 2')
+    expect(html).toContain('title="Bob, Carol"')
+  })
+
+  it('shows seen-by for a single reader in groups', () => {
+    const html = renderToStaticMarkup(
+      <MessageBubble
+        message={{
+          id: 'msg-seen-2',
+          text: 'Single reader',
+          time: '2026-06-10T10:00:00Z',
+          status: 'read',
+          readBy: [{ userId: 'user-2', name: 'Bob', username: 'bob' }],
+        }}
+        sender={{ id: 'user-1', name: 'Alice' }}
+        isOwn
+        contactType="group"
+        matched={false}
+        highlighted={false}
+        multiSelectMode={false}
+        multiSelected={false}
+        onSelect={vi.fn()}
+        onStartReply={vi.fn()}
+        onStartEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onCopy={vi.fn()}
+        onReact={vi.fn()}
+        onOpenMedia={vi.fn()}
+        onForward={vi.fn()}
+        onToggleSelect={vi.fn()}
+      />,
+    )
+
+    expect(html).toContain('Seen by 1')
+    expect(html).toContain('title="Bob"')
+  })
+
+  it('does not show seen-by for own messages in private chats', () => {
+    const html = renderToStaticMarkup(
+      <MessageBubble
+        message={{
+          id: 'msg-private',
+          text: 'Hey',
+          time: '2026-06-10T10:00:00Z',
+          status: 'read',
+          readBy: [{ userId: 'user-2', name: 'Bob', username: 'bob' }],
+        }}
+        sender={{ id: 'user-1', name: 'Alice' }}
+        isOwn
+        contactType="private"
+        matched={false}
+        highlighted={false}
+        multiSelectMode={false}
+        multiSelected={false}
+        onSelect={vi.fn()}
+        onStartReply={vi.fn()}
+        onStartEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onCopy={vi.fn()}
+        onReact={vi.fn()}
+        onOpenMedia={vi.fn()}
+        onForward={vi.fn()}
+        onToggleSelect={vi.fn()}
+      />,
+    )
+
+    expect(html).not.toContain('Seen by')
+  })
+
+  it('does not show seen-by for incoming (not own) messages in groups', () => {
+    const html = renderToStaticMarkup(
+      <MessageBubble
+        message={{
+          id: 'msg-incoming',
+          text: 'Hello',
+          time: '2026-06-10T10:00:00Z',
+          status: 'read',
+          readBy: [{ userId: 'user-1', name: 'Alice', username: 'alice' }],
+        }}
+        sender={{ id: 'user-2', name: 'Bob' }}
+        isOwn={false}
+        contactType="group"
+        matched={false}
+        highlighted={false}
+        multiSelectMode={false}
+        multiSelected={false}
+        onSelect={vi.fn()}
+        onStartReply={vi.fn()}
+        onStartEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onCopy={vi.fn()}
+        onReact={vi.fn()}
+        onOpenMedia={vi.fn()}
+        onForward={vi.fn()}
+        onToggleSelect={vi.fn()}
+      />,
+    )
+
+    expect(html).not.toContain('Seen by')
+  })
+
+  it('does not show seen-by when readBy is empty', () => {
+    const html = renderToStaticMarkup(
+      <MessageBubble
+        message={{
+          id: 'msg-no-reads',
+          text: 'No one read yet',
+          time: '2026-06-10T10:00:00Z',
+          status: 'sent',
+          readBy: [],
+        }}
+        sender={{ id: 'user-1', name: 'Alice' }}
+        isOwn
+        contactType="group"
+        matched={false}
+        highlighted={false}
+        multiSelectMode={false}
+        multiSelected={false}
+        onSelect={vi.fn()}
+        onStartReply={vi.fn()}
+        onStartEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onCopy={vi.fn()}
+        onReact={vi.fn()}
+        onOpenMedia={vi.fn()}
+        onForward={vi.fn()}
+        onToggleSelect={vi.fn()}
+      />,
+    )
+
+    expect(html).not.toContain('Seen by')
+  })
+
+  it('does not show seen-by when readBy is undefined', () => {
+    const html = renderToStaticMarkup(
+      <MessageBubble
+        message={{
+          id: 'msg-no-reads-2',
+          text: 'No one read yet',
+          time: '2026-06-10T10:00:00Z',
+          status: 'sent',
+        }}
+        sender={{ id: 'user-1', name: 'Alice' }}
+        isOwn
+        contactType="group"
+        matched={false}
+        highlighted={false}
+        multiSelectMode={false}
+        multiSelected={false}
+        onSelect={vi.fn()}
+        onStartReply={vi.fn()}
+        onStartEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onCopy={vi.fn()}
+        onReact={vi.fn()}
+        onOpenMedia={vi.fn()}
+        onForward={vi.fn()}
+        onToggleSelect={vi.fn()}
+      />,
+    )
+
+    expect(html).not.toContain('Seen by')
+  })
+
+  it('shows status icon (double-check) alongside seen-by for read messages', () => {
+    const html = renderToStaticMarkup(
+      <MessageBubble
+        message={{
+          id: 'msg-seen-status',
+          text: 'Read message',
+          time: '2026-06-10T10:00:00Z',
+          status: 'read',
+          readBy: [{ userId: 'user-2', name: 'Bob', username: 'bob' }],
+        }}
+        sender={{ id: 'user-1', name: 'Alice' }}
+        isOwn
+        contactType="group"
+        matched={false}
+        highlighted={false}
+        multiSelectMode={false}
+        multiSelected={false}
+        onSelect={vi.fn()}
+        onStartReply={vi.fn()}
+        onStartEdit={vi.fn()}
+        onDelete={vi.fn()}
+        onCopy={vi.fn()}
+        onReact={vi.fn()}
+        onOpenMedia={vi.fn()}
+        onForward={vi.fn()}
+        onToggleSelect={vi.fn()}
+      />,
+    )
+
+    expect(html).toContain('read-check')
+    expect(html).toContain('Seen by 1')
+  })
+
+  // ── Forward compose preview ────────────────────────────────
+
+  it('shows forwarding preview bar in composer when forwardSource is set', () => {
+    const html = renderToStaticMarkup(
+      <Composer
+        chatId="chat-1"
+        forwardSource={{ id: 'msg-1', text: 'Original forwarded text' }}
+        onCancelForward={vi.fn()}
+        onSend={vi.fn()}
+        onTyping={vi.fn()}
+        currentUser={{ id: 'user-1', name: 'Alice' }}
+      />,
+    )
+
+    expect(html).toContain('composer-preview')
+    expect(html).toContain('Original forwarded text')
+  })
+
+  it('shows forwarding preview with empty text for rich messages', () => {
+    const html = renderToStaticMarkup(
+      <Composer
+        chatId="chat-2"
+        forwardSource={{ id: 'msg-2', text: '' }}
+        onCancelForward={vi.fn()}
+        onSend={vi.fn()}
+        onTyping={vi.fn()}
+        currentUser={{ id: 'user-1', name: 'Alice' }}
+      />,
+    )
+
+    expect(html).toContain('composer-preview')
+  })
+
+  it('does not show forwarding bar when forwardSource is null', () => {
+    const html = renderToStaticMarkup(
+      <Composer
+        chatId="chat-3"
+        forwardSource={null}
+        onSend={vi.fn()}
+        onTyping={vi.fn()}
+        currentUser={{ id: 'user-1', name: 'Alice' }}
+      />,
+    )
+
+    expect(html).not.toContain('composer-preview')
   })
 })

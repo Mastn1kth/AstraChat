@@ -119,6 +119,53 @@ describe('API routes', () => {
     assert.equal(meBody.user.username, 'route_user')
   })
 
+  it('logs in by phone code and creates a profile for a new number', async () => {
+    const started = await postJson(baseUrl, '/api/auth/phone/start', '', {
+      countryCode: '+7',
+      phone: '900 111-22-33',
+    })
+    assert.equal(started.response.status, 200)
+    assert.equal(started.body.phone, '+79001112233')
+    assert.match(started.body.devCode, /^\d{6}$/)
+    assert.equal(started.body.pushSent, 0)
+
+    const needsProfile = await postJson(baseUrl, '/api/auth/phone/verify', '', {
+      countryCode: '+7',
+      phone: '9001112233',
+      code: started.body.devCode,
+    })
+    assert.equal(needsProfile.response.status, 200)
+    assert.equal(needsProfile.body.profileRequired, true)
+
+    const created = await postJson(baseUrl, '/api/auth/phone/verify', '', {
+      countryCode: '+7',
+      phone: '9001112233',
+      code: started.body.devCode,
+      username: 'phone_route_user',
+      name: 'Phone Route',
+    })
+    assert.equal(created.response.status, 201)
+    assert.equal(created.body.user.phone, '+79001112233')
+    assert.equal(created.body.user.login, '+79001112233')
+    assert.equal(created.body.user.username, 'phone_route_user')
+    assert.ok(cookieFrom(created.response).startsWith('astrachat_session='))
+
+    const restarted = await postJson(baseUrl, '/api/auth/phone/start', '', {
+      countryCode: '+7',
+      phone: '9001112233',
+    })
+    assert.equal(restarted.body.delivery, 'dev')
+    assert.equal(restarted.body.pushSent, 0)
+    const existing = await postJson(baseUrl, '/api/auth/phone/verify', '', {
+      countryCode: '+7',
+      phone: '9001112233',
+      code: restarted.body.devCode,
+    })
+    assert.equal(existing.response.status, 200)
+    assert.equal(existing.body.existing, true)
+    assert.equal(existing.body.user.id, created.body.user.id)
+  })
+
   it('rejects invalid login credentials', async () => {
     const response = await fetch(`${baseUrl}/api/auth/login`, {
       method: 'POST',

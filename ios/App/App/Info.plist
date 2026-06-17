@@ -47,5 +47,9 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Onda uses the camera for video calls and sending photos.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Onda uses the microphone for calls and voice messages.</string>
 </dict>
 </plist>

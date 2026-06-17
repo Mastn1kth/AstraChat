@@ -118,6 +118,7 @@ export default function MessageBubble({
   multiSelectMode,
   multiSelected,
   chatName,
+  contactType,
   currentUser,
   albumSiblings,
   onJumpToReply,
@@ -286,6 +287,14 @@ export default function MessageBubble({
             >
               <RefreshCw size={12} />
             </button>
+          )}
+          {isOwn && contactType === 'group' && message.readBy?.length > 0 && (
+            <span
+              className="seen-by"
+              title={message.readBy.map((r) => r.name || r.username).join(', ')}
+            >
+              Seen by {message.readBy.length}
+            </span>
           )}
         </span>
       </div>
