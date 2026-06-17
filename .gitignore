@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 server-data*
+e2e-data/
+playwright-report/
+test-results/
 .playwright-mcp
 .claude/
 .env

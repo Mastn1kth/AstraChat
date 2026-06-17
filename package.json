@@ -13,6 +13,8 @@
     "test": "npm run test:server && npm run test:client",
     "test:server": "node --test server/*.test.js",
     "test:client": "vitest run src",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "mobile:sync": "vite build && npx cap sync",
     "mobile:android": "vite build && npx cap sync android && npx cap open android",
     "mobile:ios": "vite build && npx cap sync ios && npx cap open ios",
@@ -53,6 +55,7 @@
   "devDependencies": {
     "@capacitor/cli": "^8.4.0",
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.61.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
