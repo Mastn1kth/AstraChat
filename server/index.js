@@ -198,6 +198,51 @@ const wallLimiter = rateLimit({
     : undefined,
 })
 
+// 60 messages per minute per user
+const messageLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 60,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (request) => request.user?.id || ipKeyGenerator(request.ip),
+  store: redis
+    ? new RedisStore({
+        prefix: 'rl:msg:',
+        sendCommand: (...args) => redis.call(...args),
+      })
+    : undefined,
+})
+
+// 30 media uploads per 10 minutes per user
+const uploadLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (request) => request.user?.id || ipKeyGenerator(request.ip),
+  store: redis
+    ? new RedisStore({
+        prefix: 'rl:upload:',
+        sendCommand: (...args) => redis.call(...args),
+      })
+    : undefined,
+})
+
+// 200 general API requests per minute per user (search, profile reads, etc.)
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 200,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (request) => request.user?.id || ipKeyGenerator(request.ip),
+  store: redis
+    ? new RedisStore({
+        prefix: 'rl:api:',
+        sendCommand: (...args) => redis.call(...args),
+      })
+    : undefined,
+})
+
 function publicUser(user) {
   return {
     id: user.id,
@@ -2397,7 +2442,7 @@ app.delete('/api/push/subscriptions', requireAuth, async (request, response) => 
   response.status(204).end()
 })
 
-app.get('/api/users', requireAuth, async (request, response) => {
+app.get('/api/users', requireAuth, apiLimiter, async (request, response) => {
   const search = String(request.query.search || '').trim()
   const result = await db.query(
     `SELECT id, login, username, name, bio, status, avatar, last_seen_at, encryption_public_key,
@@ -2497,7 +2542,7 @@ app.patch('/api/users/me/profile', requireAuth, async (request, response) => {
   }
 })
 
-app.post('/api/users/me/avatar', requireAuth, mediaUpload.single('file'), async (request, response) => {
+app.post('/api/users/me/avatar', requireAuth, uploadLimiter, mediaUpload.single('file'), async (request, response) => {
   try {
     if (!request.file) {
       response.status(400).json({ error: 'No file uploaded' })
@@ -4005,7 +4050,7 @@ app.get('/api/search', requireAuth, async (request, response) => {
   })
 })
 
-app.get('/api/chats/:chatId/search', requireAuth, async (request, response) => {
+app.get('/api/chats/:chatId/search', requireAuth, apiLimiter, async (request, response) => {
   if (!(await isChatMember(request.params.chatId, request.user.id))) {
     response.status(404).json({ error: 'Chat not found' })
     return
@@ -4046,7 +4091,7 @@ app.get('/api/chats/:chatId/search', requireAuth, async (request, response) => {
   })
 })
 
-app.get('/api/chats/:chatId/messages', requireAuth, async (request, response) => {
+app.get('/api/chats/:chatId/messages', requireAuth, apiLimiter, async (request, response) => {
   if (!(await isChatMember(request.params.chatId, request.user.id))) {
     response.status(404).json({ error: 'Chat not found' })
     return
@@ -4151,7 +4196,7 @@ app.get('/api/chats/:chatId/messages/:messageId/context', requireAuth, async (re
   })
 })
 
-app.post('/api/chats/:chatId/messages', requireAuth, async (request, response) => {
+app.post('/api/chats/:chatId/messages', requireAuth, messageLimiter, async (request, response) => {
   await requireUnblockedPrivateChat(request.params.chatId, request.user.id)
   const input = parseBody(messageSchema, request.body)
   const member = await assertCanSendToChat(request.params.chatId, request.user.id, {
@@ -4903,7 +4948,7 @@ app.post('/api/chats/:chatId/messages/:messageId/reactions', requireAuth, async 
   response.json(payload)
 })
 
-app.post('/api/media', requireAuth, mediaUpload.single('file'), async (request, response) => {
+app.post('/api/media', requireAuth, uploadLimiter, mediaUpload.single('file'), async (request, response) => {
   let storageName
   try {
     if (!request.file) {

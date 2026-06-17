@@ -1758,6 +1758,7 @@ function AppInner() {
             ),
           },
         }))
+        scheduleRetry(id, selectedChat.id)
         showToast(error.message || 'Message was not sent.')
       }
       return
@@ -2258,6 +2259,45 @@ function AppInner() {
   useEffect(() => {
     resendFailedRef.current = resendFailedMessages
   })
+
+  // Retry timers: messageId -> { attempts, timerId }
+  const retryTimersRef = useRef({})
+
+  function scheduleRetry(messageId, chatId) {
+    const existing = retryTimersRef.current[messageId]
+    const attempts = existing ? existing.attempts : 0
+    if (attempts >= 3) return // give up after 3 auto-retries
+    const delay = [5000, 15000, 45000][attempts]
+    const timerId = window.setTimeout(async () => {
+      delete retryTimersRef.current[messageId]
+      const current = stateRef.current
+      const chat = current?.chats.find((c) => c.id === chatId)
+      const message = (current?.messages[chatId] || []).find((m) => m.id === messageId)
+      if (!chat?.backend || !message || message.status !== 'failed') return
+      try {
+        const payloadText = await encryptTextForChat(message.text, chat)
+        const { message: serverMessage } = await sendChatMessage(chatId, {
+          text: payloadText,
+          searchText: message.text,
+          replyToId: message.replyToId,
+          topicId: message.topicId || undefined,
+        })
+        const normalized = await normalizeServerMessage(serverMessage, current.user.id)
+        setState((prev) => ({
+          ...prev,
+          messages: {
+            ...prev.messages,
+            [chatId]: (prev.messages[chatId] || []).map((m) => m.id === messageId ? normalized : m),
+          },
+        }))
+      } catch {
+        // schedule next retry with increased backoff
+        retryTimersRef.current[messageId] = { attempts: attempts + 1 }
+        scheduleRetry(messageId, chatId)
+      }
+    }, delay)
+    retryTimersRef.current[messageId] = { attempts: attempts + 1, timerId }
+  }
 
   useEffect(() => {
     function handleOnline() {
