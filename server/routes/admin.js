@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { resolve } from 'node:path'
 import {
   cpSync,
@@ -25,9 +25,15 @@ export const TEST_ACCOUNTS = {
 }
 export const TEST_ACCOUNT_LOGINS = new Set(Object.values(TEST_ACCOUNTS).map((a) => a.login))
 
+function safeEqual(a, b) {
+  const ab = Buffer.from(String(a || ''))
+  const bb = Buffer.from(String(b || ''))
+  return ab.length === bb.length && timingSafeEqual(ab, bb)
+}
+
 export function requireAdmin(request, response, next) {
   const token = request.headers['x-admin-token']
-  if (!token || token !== config.adminToken) {
+  if (!token || !safeEqual(token, config.adminToken)) {
     response.status(401).json({ error: 'Admin token required' })
     return
   }

@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { randomBytes, randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { config } from '../config.js'
 import { db, createSavedChat } from '../db.js'
 import { requireAuth, createSession, destroySession, getSessionUser } from '../auth.js'
@@ -132,7 +132,11 @@ router.post('/phone/verify', async (request, response) => {
     response.status(429).json({ error: 'Too many code attempts. Request a new code.' })
     return
   }
-  if (codeRow.code_hash !== hashPhoneCode(phone, input.code)) {
+  const expectedHash = hashPhoneCode(phone, input.code)
+  const codeMatches =
+    codeRow.code_hash.length === expectedHash.length &&
+    timingSafeEqual(Buffer.from(codeRow.code_hash), Buffer.from(expectedHash))
+  if (!codeMatches) {
     await db.query('UPDATE phone_login_codes SET attempts = attempts + 1 WHERE phone = $1', [phone])
     response.status(401).json({ error: 'Invalid code' })
     return
