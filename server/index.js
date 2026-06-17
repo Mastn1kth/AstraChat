@@ -3692,6 +3692,56 @@ app.patch('/api/chats/:chatId/info', requireAuth, async (request, response) => {
   response.json({ chat: { id: request.params.chatId, title } })
 })
 
+// --- Discussion groups ---
+
+app.get('/api/chats/:chatId/discussion', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+  if (row.type !== 'channel') { response.status(400).json({ error: 'Only channels can have discussion groups' }); return }
+
+  const result = await db.query(
+    `SELECT c.id, c.title, c.type,
+            (SELECT COUNT(*) FROM chat_members cm WHERE cm.chat_id = c.id) AS member_count
+     FROM chats c
+     WHERE c.id = (SELECT linked_group_id FROM chats WHERE id = $1)`,
+    [request.params.chatId],
+  )
+  const group = result.rows[0]
+  response.json({ group: group
+    ? { id: group.id, title: group.title, type: group.type, memberCount: Number(group.member_count) }
+    : null,
+  })
+})
+
+app.put('/api/chats/:chatId/discussion', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+  if (row.type !== 'channel') { response.status(400).json({ error: 'Only channels can have discussion groups' }); return }
+  requirePermission(row, 'manage_chat', 'Only admins can set discussion group')
+
+  const groupId = request.body.groupId ? String(request.body.groupId) : null
+
+  if (groupId) {
+    const groupRow = await requireChatMemberRow(groupId, request.user.id)
+    if (!groupRow || groupRow.type !== 'group') {
+      response.status(400).json({ error: 'Target must be a group you belong to' })
+      return
+    }
+    if (!hasPermission(groupRow, 'manage_chat')) {
+      response.status(403).json({ error: 'You must be an admin of the target group' })
+      return
+    }
+  }
+
+  await db.query(
+    'UPDATE chats SET linked_group_id = $1 WHERE id = $2',
+    [groupId, request.params.chatId],
+  )
+  const payload = { type: 'chat:discussion-updated', chatId: request.params.chatId, groupId }
+  await sendToChat(request.params.chatId, payload)
+  response.json({ groupId })
+})
+
 app.get('/api/chats/:chatId/topics', requireAuth, async (request, response) => {
   const row = await requireChatMemberRow(request.params.chatId, request.user.id)
   if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
@@ -4331,6 +4381,49 @@ app.post('/api/chats/:chatId/messages', requireAuth, async (request, response) =
     messageId,
     delivered: recipientDeliveries > 0,
   })
+
+  // Auto-forward channel posts to the linked discussion group (silent, no push)
+  if (member?.type === 'channel' && !scheduledAt) {
+    const linkedResult = await db.query(
+      'SELECT linked_group_id FROM chats WHERE id = $1 AND linked_group_id IS NOT NULL',
+      [request.params.chatId],
+    )
+    if (linkedResult.rows[0]?.linked_group_id) {
+      const groupId = linkedResult.rows[0].linked_group_id
+      const discussionId = randomUUID()
+      await db.query(
+        `INSERT INTO messages
+           (id, chat_id, sender_id, ciphertext, iv, auth_tag, encryption_version,
+            search_text, forwarded_from_message_id, forwarded_from_chat_id, sent_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`,
+        [discussionId, groupId, request.user.id,
+          input.text || '', '', '', 1,
+          input.searchText || '',
+          messageId, request.params.chatId],
+      )
+      await sendToChat(groupId, {
+        type: 'message:new',
+        message: {
+          id: discussionId,
+          chatId: groupId,
+          senderId: request.user.id,
+          text: input.text || '',
+          createdAt: new Date().toISOString(),
+          topicId: null,
+          replyToId: null,
+          forwarded: true,
+          forwardedFromMessageId: messageId,
+          forwardedFromChatId: request.params.chatId,
+          silent: true,
+          reactions: {},
+          status: 'sent',
+          media: publicMessage.media,
+          poll: null,
+        },
+      })
+    }
+  }
+
   response.status(201).json({ message: publicMessage })
 })
 

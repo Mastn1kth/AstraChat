@@ -569,6 +569,17 @@ export function updateChatTopic(chatId, topicId, input) {
   })
 }
 
+export function getChatDiscussion(chatId) {
+  return request(`/api/chats/${encodeURIComponent(chatId)}/discussion`)
+}
+
+export function setChatDiscussion(chatId, groupId) {
+  return request(`/api/chats/${encodeURIComponent(chatId)}/discussion`, {
+    method: 'PUT',
+    body: JSON.stringify({ groupId: groupId || null }),
+  })
+}
+
 export function getChatMedia(chatId, { kinds, before, limit } = {}) {
   const params = new URLSearchParams()
   if (kinds?.length) kinds.forEach((k) => params.append('kind', k))

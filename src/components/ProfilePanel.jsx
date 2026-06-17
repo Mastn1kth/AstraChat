@@ -16,6 +16,7 @@ import {
   Phone,
   Play,
   Plus,
+  RefreshCw,
   Shield,
   Trash2,
   Users,
@@ -26,7 +27,7 @@ import Avatar from './Avatar'
 import FocusSchedule from './FocusSchedule'
 import { formatMessageTime } from '../utils/formatters'
 import { t } from '../i18n'
-import { getChannelStats, getChatAdminLog, getChatBans, unbanChatMember, getChatInvites, createChatInvite, revokeChatInvite, getChatJoinRequests, reviewChatJoinRequest, getChatMedia } from '../api/client'
+import { getChannelStats, getChatAdminLog, getChatBans, unbanChatMember, getChatInvites, createChatInvite, revokeChatInvite, getChatJoinRequests, reviewChatJoinRequest, getChatMedia, getChatDiscussion, setChatDiscussion } from '../api/client'
 
 const linkPattern = /\bhttps?:\/\/[^\s<>"']+/gi
 const roleOptions = ['owner', 'admin', 'moderator', 'member']
@@ -99,6 +100,7 @@ export default function ProfilePanel({
   const [titleInput, setTitleInput] = useState(contact.name || '')
   const [adminPanel, setAdminPanel] = useState(null) // { bans, events, error } when open
   const [channelStats, setChannelStats] = useState(null) // { subscribers, ... } | { error }
+  const [discussion, setDiscussion] = useState(undefined) // undefined=not loaded, null=none, { id,title } = linked
   const [invites, setInvites] = useState(null)
   const [invitesLoading, setInvitesLoading] = useState(false)
   const [copiedInviteId, setCopiedInviteId] = useState('')
@@ -214,6 +216,38 @@ export default function ProfilePanel({
       )
     } catch (error) {
       setAdminPanel((current) => (current ? { ...current, error: error.message } : current))
+    }
+  }
+
+  async function loadDiscussion() {
+    if (!chat.backend || contact.type !== 'channel') return
+    try {
+      const data = await getChatDiscussion(chat.id)
+      setDiscussion(data.group || null)
+    } catch {
+      setDiscussion(null)
+    }
+  }
+
+  async function unlinkDiscussion() {
+    try {
+      await setChatDiscussion(chat.id, null)
+      setDiscussion(null)
+    } catch {
+      // toast shown by App
+    }
+  }
+
+  async function handleSetDiscussion(e) {
+    e.preventDefault()
+    const groupId = e.currentTarget.elements.groupId?.value?.trim()
+    if (!groupId) return
+    try {
+      await setChatDiscussion(chat.id, groupId)
+      const data = await getChatDiscussion(chat.id)
+      setDiscussion(data.group || null)
+    } catch {
+      // toast shown by App
     }
   }
 
@@ -745,6 +779,35 @@ export default function ProfilePanel({
               <li><strong>{channelStats.views}</strong><small>{t('pp.views')}</small></li>
               <li><strong>{channelStats.reposts}</strong><small>{t('pp.reposts')}</small></li>
             </ul>
+          )}
+        </section>
+      )}
+
+      {chat.backend && contact.type === 'channel' && isOwnerOrAdmin && (
+        <section className="admin-panel-section discussion-section">
+          <div className="group-members-header">
+            <strong><Users size={15} /> Discussion group</strong>
+            {discussion === undefined && (
+              <button type="button" className="icon-btn" onClick={loadDiscussion} title="Load discussion group">
+                <RefreshCw size={14} />
+              </button>
+            )}
+          </div>
+          {discussion === undefined ? (
+            <p className="shared-empty">Click refresh to load</p>
+          ) : discussion ? (
+            <div className="discussion-linked">
+              <span>
+                <strong>{discussion.title}</strong>
+                <small>{discussion.memberCount} members</small>
+              </span>
+              <button type="button" className="danger-text-btn" onClick={unlinkDiscussion}>Unlink</button>
+            </div>
+          ) : (
+            <form className="discussion-link-form" onSubmit={handleSetDiscussion}>
+              <input name="groupId" placeholder="Paste group ID to link…" />
+              <button type="submit" className="primary-button">Link</button>
+            </form>
           )}
         </section>
       )}

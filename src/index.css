@@ -3758,6 +3758,50 @@ textarea::placeholder {
   text-align: center;
 }
 
+.discussion-linked {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.discussion-linked span {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.discussion-linked small { color: var(--muted); font-size: 12px; }
+
+.discussion-link-form {
+  display: flex;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.discussion-link-form input {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.danger-text-btn {
+  background: none;
+  border: none;
+  color: var(--danger);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+.danger-text-btn:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+
 .shared-load-more {
   grid-column: 1 / -1;
   width: 100%;

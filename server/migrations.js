@@ -537,6 +537,18 @@ export const migrations = [
     `,
   },
   {
+    id: '20260617_discussion_groups',
+    sql: `
+      ALTER TABLE chats
+        ADD COLUMN IF NOT EXISTS linked_group_id UUID REFERENCES chats(id) ON DELETE SET NULL;
+
+      CREATE INDEX IF NOT EXISTS chats_linked_group_idx ON chats(linked_group_id);
+    `,
+    downSql: `
+      ALTER TABLE chats DROP COLUMN IF EXISTS linked_group_id;
+    `,
+  },
+  {
     id: '20260617_user_contacts',
     sql: `
       CREATE TABLE IF NOT EXISTS user_contacts (
