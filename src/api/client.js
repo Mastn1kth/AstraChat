@@ -569,6 +569,15 @@ export function updateChatTopic(chatId, topicId, input) {
   })
 }
 
+export function getChatMedia(chatId, { kinds, before, limit } = {}) {
+  const params = new URLSearchParams()
+  if (kinds?.length) kinds.forEach((k) => params.append('kind', k))
+  if (before) params.set('before', before)
+  if (limit) params.set('limit', String(limit))
+  const qs = params.toString()
+  return request(`/api/chats/${encodeURIComponent(chatId)}/media${qs ? `?${qs}` : ''}`)
+}
+
 export function getScheduledMessages(chatId) {
   return request(`/api/chats/${encodeURIComponent(chatId)}/scheduled-messages`)
 }

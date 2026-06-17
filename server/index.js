@@ -3796,6 +3796,62 @@ app.patch('/api/chats/:chatId/topics/:topicId', requireAuth, async (request, res
   response.json(payload)
 })
 
+app.get('/api/chats/:chatId/media', requireAuth, async (request, response) => {
+  const row = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!row) { response.status(404).json({ error: 'Chat not found' }); return }
+
+  const rawKinds = [request.query.kind].flat().filter(Boolean)
+  const allowed = ['image', 'video', 'file', 'voice', 'audio']
+  const kinds = rawKinds.length ? rawKinds.filter((k) => allowed.includes(k)) : allowed
+
+  const limit = Math.min(Number(request.query.limit) || 40, 100)
+  const before = request.query.before || null
+
+  const result = await db.query(
+    `SELECT m.id AS message_id, m.created_at,
+            mf.id, mf.kind, mf.original_name, mf.mime_type,
+            mf.plain_size, mf.original_size, mf.width, mf.height,
+            mf.client_encrypted, mf.media_envelope, mf.duration_ms
+     FROM messages m
+     JOIN media_files mf ON mf.id = m.media_id
+     LEFT JOIN chat_history_clears chc ON chc.chat_id = m.chat_id AND chc.user_id = $2
+     WHERE m.chat_id = $1
+       AND mf.kind = ANY($3)
+       AND m.deleted_at IS NULL
+       AND (m.scheduled_at IS NULL OR m.scheduled_at <= NOW())
+       AND m.sent_at IS NOT NULL
+       AND (chc.cleared_at IS NULL OR m.created_at > chc.cleared_at)
+       AND NOT EXISTS (
+         SELECT 1 FROM message_user_deletions mud
+         WHERE mud.message_id = m.id AND mud.user_id = $2
+       )
+       AND ($4::timestamptz IS NULL OR m.created_at < $4)
+     ORDER BY m.created_at DESC
+     LIMIT $5`,
+    [request.params.chatId, request.user.id, kinds, before, limit + 1],
+  )
+
+  const rows = result.rows
+  const hasMore = rows.length > limit
+  const items = rows.slice(0, limit).map((row) => ({
+    messageId: row.message_id,
+    id: row.id,
+    kind: row.kind,
+    name: row.original_name,
+    mimeType: row.mime_type,
+    size: Number(row.plain_size || row.original_size || 0),
+    width: row.width ? Number(row.width) : null,
+    height: row.height ? Number(row.height) : null,
+    clientEncrypted: isDatabaseTrue(row.client_encrypted),
+    mediaEnvelope: row.media_envelope || null,
+    durationMs: row.duration_ms ? Number(row.duration_ms) : null,
+    url: `/api/media/${row.id}`,
+    createdAt: row.created_at,
+  }))
+
+  response.json({ items, hasMore, nextBefore: hasMore ? items.at(-1).createdAt : null })
+})
+
 app.get('/api/search', requireAuth, async (request, response) => {
   const query = normalizeSearchQuery(request.query.q)
   if (!query) {

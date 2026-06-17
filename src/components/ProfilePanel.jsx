@@ -26,7 +26,7 @@ import Avatar from './Avatar'
 import FocusSchedule from './FocusSchedule'
 import { formatMessageTime } from '../utils/formatters'
 import { t } from '../i18n'
-import { getChannelStats, getChatAdminLog, getChatBans, unbanChatMember, getChatInvites, createChatInvite, revokeChatInvite, getChatJoinRequests, reviewChatJoinRequest } from '../api/client'
+import { getChannelStats, getChatAdminLog, getChatBans, unbanChatMember, getChatInvites, createChatInvite, revokeChatInvite, getChatJoinRequests, reviewChatJoinRequest, getChatMedia } from '../api/client'
 
 const linkPattern = /\bhttps?:\/\/[^\s<>"']+/gi
 const roleOptions = ['owner', 'admin', 'moderator', 'member']
@@ -89,6 +89,7 @@ export default function ProfilePanel({
   onReportUser,
 }) {
   const [sharedTab, setSharedTab] = useState('media')
+  const [serverMedia, setServerMedia] = useState({ chatId: null, items: null, hasMore: false, nextBefore: null, loading: false })
   const [memberLoad, setMemberLoad] = useState({ chatId: null, members: null })
   const [callHistoryLoad, setCallHistoryLoad] = useState({ chatId: null, calls: null })
   const [addingMember, setAddingMember] = useState(false)
@@ -152,6 +153,39 @@ export default function ProfilePanel({
 
     return () => { cancelled = true }
   }, [chat.backend, chat.id, onLoadCallHistory])
+
+  async function loadServerMedia(before = null) {
+    if (!chat.backend) return
+    const isFirst = before === null
+    setServerMedia((current) => ({
+      ...current,
+      chatId: chat.id,
+      loading: true,
+      ...(isFirst ? { items: null, hasMore: false, nextBefore: null } : {}),
+    }))
+    try {
+      const kinds = sharedTab === 'media' ? ['image', 'video']
+        : sharedTab === 'files' ? ['file']
+        : sharedTab === 'audio' ? ['voice', 'audio']
+        : null
+      const data = await getChatMedia(chat.id, { kinds: kinds || undefined, before, limit: 40 })
+      setServerMedia((current) => ({
+        chatId: chat.id,
+        items: isFirst ? data.items : [...(current.items || []), ...data.items],
+        hasMore: data.hasMore,
+        nextBefore: data.nextBefore,
+        loading: false,
+      }))
+    } catch {
+      setServerMedia((current) => ({ ...current, loading: false }))
+    }
+  }
+
+  useEffect(() => {
+    if (!chat.backend) return
+    loadServerMedia(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chat.id, chat.backend, sharedTab])
 
   async function toggleAdminPanel() {
     if (adminPanel) {
@@ -874,55 +908,89 @@ export default function ProfilePanel({
           </button>
         </div>
 
-        {sharedTab === 'media' && (
-          <div className="shared-media-grid">
-            {sharedMedia.map((media) => (
-              <button key={`${media.messageId}-${media.id}`} onClick={() => onOpenMedia(media)}>
-                {media.kind === 'image' ? (
-                  <img src={media.url} alt={media.name || 'Shared media'} loading="lazy" />
-                ) : (
-                  <>
-                    <video src={media.url} preload="metadata" muted />
-                    <span>
-                      <Play size={18} fill="currentColor" />
-                    </span>
-                  </>
-                )}
-              </button>
-            ))}
-            {!sharedMedia.length && <p className="shared-empty">{t('pp.noSharedMedia')}</p>}
-          </div>
-        )}
+        {sharedTab === 'media' && (() => {
+          const items = chat.backend
+            ? (serverMedia.chatId === chat.id ? serverMedia.items : null)
+            : sharedMedia
+          const loading = chat.backend && serverMedia.loading && !items
+          return (
+            <div className="shared-media-grid">
+              {loading && <p className="shared-empty"><Loader2 size={16} className="spin" /> Loading…</p>}
+              {(items || []).map((media) => (
+                <button key={`${media.messageId}-${media.id}`} onClick={() => onOpenMedia(media)}>
+                  {media.kind === 'image' ? (
+                    <img src={media.url} alt={media.name || 'Shared media'} loading="lazy" />
+                  ) : (
+                    <>
+                      <video src={media.url} preload="metadata" muted />
+                      <span><Play size={18} fill="currentColor" /></span>
+                    </>
+                  )}
+                </button>
+              ))}
+              {!loading && items?.length === 0 && <p className="shared-empty">{t('pp.noSharedMedia')}</p>}
+              {chat.backend && serverMedia.hasMore && (
+                <button className="shared-load-more" onClick={() => loadServerMedia(serverMedia.nextBefore)}>
+                  {serverMedia.loading ? <Loader2 size={14} className="spin" /> : 'Load more'}
+                </button>
+              )}
+            </div>
+          )
+        })()}
 
-        {sharedTab === 'files' && (
-          <div className="shared-links-list">
-            {sharedFiles.map((file) => (
-              <a key={`${file.messageId}-${file.id}`} href={file.url} download={file.name || 'file'}>
-                <FileText size={16} />
-                <span>
-                  <strong>{file.name || 'File'}</strong>
-                  <small>{formatMessageTime(file.time)}</small>
-                </span>
-              </a>
-            ))}
-            {!sharedFiles.length && <p className="shared-empty">{t('pp.noSharedFiles')}</p>}
-          </div>
-        )}
+        {sharedTab === 'files' && (() => {
+          const items = chat.backend
+            ? (serverMedia.chatId === chat.id ? serverMedia.items : null)
+            : sharedFiles
+          const loading = chat.backend && serverMedia.loading && !items
+          return (
+            <div className="shared-links-list">
+              {loading && <p className="shared-empty"><Loader2 size={16} className="spin" /> Loading…</p>}
+              {(items || []).map((file) => (
+                <a key={`${file.messageId}-${file.id}`} href={file.url} download={file.name || 'file'}>
+                  <FileText size={16} />
+                  <span>
+                    <strong>{file.name || 'File'}</strong>
+                    <small>{file.createdAt ? formatMessageTime(file.createdAt) : formatMessageTime(file.time)}</small>
+                  </span>
+                </a>
+              ))}
+              {!loading && items?.length === 0 && <p className="shared-empty">{t('pp.noSharedFiles')}</p>}
+              {chat.backend && serverMedia.hasMore && (
+                <button className="shared-load-more" onClick={() => loadServerMedia(serverMedia.nextBefore)}>
+                  {serverMedia.loading ? <Loader2 size={14} className="spin" /> : 'Load more'}
+                </button>
+              )}
+            </div>
+          )
+        })()}
 
-        {sharedTab === 'audio' && (
-          <div className="shared-links-list">
-            {sharedAudio.map((audio) => (
-              <a key={`${audio.messageId}-${audio.id}`} href={audio.url} download={audio.name || 'audio'}>
-                <Music size={16} />
-                <span>
-                  <strong>{audio.name || (audio.kind === 'voice' ? t('pp.voiceMessage') : t('pp.audio'))}</strong>
-                  <small>{formatMessageTime(audio.time)}</small>
-                </span>
-              </a>
-            ))}
-            {!sharedAudio.length && <p className="shared-empty">{t('pp.noSharedAudio')}</p>}
-          </div>
-        )}
+        {sharedTab === 'audio' && (() => {
+          const items = chat.backend
+            ? (serverMedia.chatId === chat.id ? serverMedia.items : null)
+            : sharedAudio
+          const loading = chat.backend && serverMedia.loading && !items
+          return (
+            <div className="shared-links-list">
+              {loading && <p className="shared-empty"><Loader2 size={16} className="spin" /> Loading…</p>}
+              {(items || []).map((audio) => (
+                <a key={`${audio.messageId}-${audio.id}`} href={audio.url} download={audio.name || 'audio'}>
+                  <Music size={16} />
+                  <span>
+                    <strong>{audio.name || (audio.kind === 'voice' ? t('pp.voiceMessage') : t('pp.audio'))}</strong>
+                    <small>{audio.createdAt ? formatMessageTime(audio.createdAt) : formatMessageTime(audio.time)}</small>
+                  </span>
+                </a>
+              ))}
+              {!loading && items?.length === 0 && <p className="shared-empty">{t('pp.noSharedAudio')}</p>}
+              {chat.backend && serverMedia.hasMore && (
+                <button className="shared-load-more" onClick={() => loadServerMedia(serverMedia.nextBefore)}>
+                  {serverMedia.loading ? <Loader2 size={14} className="spin" /> : 'Load more'}
+                </button>
+              )}
+            </div>
+          )
+        })()}
 
         {sharedTab === 'links' && (
           <div className="shared-links-list">

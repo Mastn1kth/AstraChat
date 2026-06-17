@@ -3722,6 +3722,27 @@ textarea::placeholder {
   text-align: center;
 }
 
+.shared-load-more {
+  grid-column: 1 / -1;
+  width: 100%;
+  padding: 8px;
+  margin-top: 4px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--accent);
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.shared-load-more:hover {
+  background: var(--hover);
+}
+
 .modal-backdrop {
   position: absolute;
   inset: 0;
