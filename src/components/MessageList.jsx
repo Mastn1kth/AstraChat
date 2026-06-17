@@ -68,9 +68,13 @@ function MessageListRow({
     )
   }
 
-  const { albumPosition, matched, message, showDivider, showUnreadSeparator } = row
+  const { albumPosition, albumSiblings, matched, message, showDivider, showUnreadSeparator } = row
   const replyMessage = message.replyToId ? replyMap[message.replyToId] : null
   const sender = message.senderId === currentUser.id ? currentUser : contact
+
+  if (row.hidden) {
+    return <div className="message-list-virtual-row message-list-hidden-row" style={style} {...ariaAttributes} />
+  }
 
   return (
     <div
@@ -99,6 +103,7 @@ function MessageListRow({
         }
         sender={sender}
         currentUser={currentUser}
+        albumSiblings={albumSiblings}
         isOwn={message.senderId === currentUser.id || message.senderId === 'me'}
         selected={message.id === selectedMessageId}
         matched={matched}
@@ -163,16 +168,31 @@ export default function MessageList({
     if (hasMore) nextRows.push({ id: 'load-more', type: 'load-more' })
 
     const query = search.trim().toLowerCase()
+
+    // Pre-build album groups: albumId -> sorted list of messages
+    const albumGroups = new Map()
+    messages.forEach((msg) => {
+      if (msg.albumId) {
+        if (!albumGroups.has(msg.albumId)) albumGroups.set(msg.albumId, [])
+        albumGroups.get(msg.albumId).push(msg)
+      }
+    })
+
     messages.forEach((message, index) => {
       const dateKey = new Date(message.time).toDateString()
       const previousDateKey = index > 0 ? new Date(messages[index - 1].time).toDateString() : ''
+      const isAlbumContinuation = message.albumId && messages[index - 1]?.albumId === message.albumId
       nextRows.push({
         id: message.id,
         type: 'message',
         message,
-        showDivider: dateKey !== previousDateKey,
+        hidden: isAlbumContinuation, // non-first album items collapse into first
+        showDivider: !isAlbumContinuation && dateKey !== previousDateKey,
         showUnreadSeparator: Boolean(unreadFromId && message.id === unreadFromId),
         matched: Boolean(query && message.text?.toLowerCase().includes(query)),
+        albumSiblings: message.albumId && !isAlbumContinuation
+          ? albumGroups.get(message.albumId) || null
+          : null,
         albumPosition: message.albumId
           ? {
               previous: messages[index - 1]?.albumId === message.albumId,

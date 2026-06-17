@@ -119,6 +119,7 @@ export default function MessageBubble({
   multiSelected,
   chatName,
   currentUser,
+  albumSiblings,
   onJumpToReply,
   onSelect,
   onStartReply,
@@ -186,7 +187,27 @@ export default function MessageBubble({
             <span className="message-media-failed">Encrypted media unavailable</span>
           </button>
         )}
-        {message.media && !message.deleted && !message.media.decryptFailed && (
+        {albumSiblings && albumSiblings.length > 1 ? (
+          <div className={`media-album media-album-${Math.min(albumSiblings.length, 4)}`}>
+            {albumSiblings.map((sibling, idx) => sibling.media && !sibling.media.decryptFailed && (
+              <button
+                key={sibling.id}
+                className={`message-media album-item ${sibling.media.kind}`}
+                onClick={(e) => { e.stopPropagation(); onOpenMedia(sibling.media, sibling) }}
+                aria-label={`Open photo ${idx + 1}`}
+              >
+                {sibling.media.kind === 'image' ? (
+                  <img src={sibling.media.url} alt="" loading="lazy" />
+                ) : (
+                  <>
+                    <video src={sibling.media.url} preload="metadata" muted />
+                    <span className="media-play"><Play size={18} fill="currentColor" /></span>
+                  </>
+                )}
+              </button>
+            ))}
+          </div>
+        ) : message.media && !message.deleted && !message.media.decryptFailed && (
           message.media.kind === 'voice' || message.media.kind === 'audio' ? (
             <AudioMessagePlayer media={message.media} compact={message.media.kind === 'voice'} chatName={chatName} />
           ) : message.media.kind === 'file' ? (
@@ -229,11 +250,6 @@ export default function MessageBubble({
               )}
             </button>
           )
-        )}
-        {message.albumId && (
-          <small className="album-label">
-            Album {message.albumIndex || 1}/{message.albumCount || 1}
-          </small>
         )}
         {!message.deleted && message.poll && (
           <PollCard
