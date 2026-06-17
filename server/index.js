@@ -2240,16 +2240,41 @@ app.delete('/api/admin/wall/:messageId', requireAdmin, async (request, response)
   response.json({ ok: true })
 })
 
-app.get('/api/admin/reports', requireAdmin, async (_request, response) => {
+app.get('/api/admin/reports', requireAdmin, async (request, response) => {
+  const { status } = request.query
+  const allowed = ['open', 'reviewed', 'dismissed']
+  const whereClause = status && allowed.includes(status) ? `WHERE r.status = '${status}'` : ''
   const result = await db.query(
-    `SELECT r.id, r.reason, r.details, r.status, r.created_at,
-            reporter.username AS reporter, target.username AS target
+    `SELECT r.id, r.reason, r.details, r.status, r.admin_note, r.created_at, r.reviewed_at,
+            reporter.username AS reporter, target.username AS target,
+            reviewer.username AS reviewed_by
      FROM reports r
      LEFT JOIN users reporter ON reporter.id = r.reporter_id
      LEFT JOIN users target ON target.id = r.target_user_id
-     ORDER BY r.created_at DESC LIMIT 100`,
+     LEFT JOIN users reviewer ON reviewer.id = r.reviewed_by
+     ${whereClause}
+     ORDER BY r.created_at DESC LIMIT 200`,
   )
   response.json({ reports: result.rows })
+})
+
+app.patch('/api/admin/reports/:id', requireAdmin, async (request, response) => {
+  const { status, adminNote } = request.body
+  const allowed = ['open', 'reviewed', 'dismissed']
+  if (!allowed.includes(status)) {
+    response.status(400).json({ error: 'invalid status' })
+    return
+  }
+  const result = await db.query(
+    `UPDATE reports SET status=$1, admin_note=$2, reviewed_at=NOW(), reviewed_by=$3
+     WHERE id=$4 RETURNING id, status, admin_note, reviewed_at`,
+    [status, adminNote || null, request.user.id, request.params.id],
+  )
+  if (!result.rows.length) {
+    response.status(404).json({ error: 'not found' })
+    return
+  }
+  response.json({ report: result.rows[0] })
 })
 
 app.get('/api/admin/backups', requireAdmin, (_request, response) => {
@@ -2612,7 +2637,8 @@ app.delete('/api/users/me', requireAuth, async (request, response) => {
 app.get('/api/chats', requireAuth, async (request, response) => {
   const result = await db.query(
     `SELECT c.id, c.type, c.title, c.created_at, c.pinned_message_id,
-            c.slow_mode_seconds, c.default_permissions, cm.role, cm.permissions,
+            c.slow_mode_seconds, c.default_permissions, c.linked_group_id,
+            cm.role, cm.permissions,
             cus.pinned, cus.pinned_at, cus.muted_until, cus.archived, cus.archived_at,
             cus.push_mode
      FROM chats c
@@ -2647,6 +2673,7 @@ app.get('/api/chats', requireAuth, async (request, response) => {
         ...chat,
         settings: publicChatSettings(chat),
         pinnedMessageId: chat.pinned_message_id || null,
+        linkedGroupId: chat.linked_group_id || null,
         slowModeSeconds: Number(chat.slow_mode_seconds || 0),
         permissions: publicChatPermissions(chat),
         members: members.rows.map((member) => ({

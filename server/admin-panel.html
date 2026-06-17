@@ -89,9 +89,24 @@
   </section>
 
   <section id="tab-reports">
-    <div class="row"><button class="primary" onclick="loadReports()">Обновить</button></div>
-    <table><thead><tr><th>От кого</th><th>На кого</th><th>Причина</th><th>Детали</th><th>Статус</th><th>Когда</th></tr></thead>
-    <tbody id="reportsBody"></tbody></table>
+    <div class="row">
+      <button class="primary" onclick="loadReports()">Обновить</button>
+      <label style="margin-left:12px">
+        Фильтр:
+        <select id="reportFilter" onchange="loadReports()">
+          <option value="open">Открытые</option>
+          <option value="all">Все</option>
+          <option value="reviewed">Проверенные</option>
+          <option value="dismissed">Отклонённые</option>
+        </select>
+      </label>
+    </div>
+    <table>
+      <thead>
+        <tr><th>От кого</th><th>На кого</th><th>Причина</th><th>Детали</th><th>Статус</th><th>Заметка</th><th>Когда</th><th>Действия</th></tr>
+      </thead>
+      <tbody id="reportsBody"></tbody>
+    </table>
   </section>
 
   <section id="tab-backups">
@@ -191,11 +206,31 @@ async function deleteWall(id) {
 }
 
 async function loadReports() {
-  const { reports } = await api('/api/admin/reports')
-  $('reportsBody').innerHTML = reports.map((r) =>
-    '<tr><td>' + esc(r.reporter || '—') + '</td><td>' + esc(r.target || '—') + '</td><td>' + esc(r.reason) +
-    '</td><td>' + esc(r.details || '') + '</td><td>' + esc(r.status) + '</td><td>' + fmtDate(r.created_at) + '</td></tr>'
-  ).join('') || '<tr><td colspan="6" class="muted">Жалоб нет.</td></tr>'
+  const filter = $('reportFilter')?.value || 'open'
+  const params = filter === 'all' ? '' : '?status=' + filter
+  const { reports } = await api('/api/admin/reports' + params)
+  $('reportsBody').innerHTML = reports.map((r) => {
+    const statusClass = r.status === 'open' ? 'color:#f59e0b' : r.status === 'reviewed' ? 'color:#10b981' : 'color:#6b7280'
+    const actions = r.status === 'open'
+      ? '<button class="act" onclick="reviewReport(\'' + r.id + '\',\'reviewed\')">✓ Проверено</button> ' +
+        '<button class="act danger" onclick="reviewReport(\'' + r.id + '\',\'dismissed\')">✕ Отклонить</button>'
+      : '<button class="act" onclick="reviewReport(\'' + r.id + '\',\'open\')">↩ Открыть</button>'
+    return '<tr><td>' + esc(r.reporter || '—') + '</td><td>' + esc(r.target || '—') + '</td><td>' + esc(r.reason) +
+      '</td><td style="max-width:180px;white-space:pre-wrap">' + esc(r.details || '') +
+      '</td><td style="' + statusClass + ';font-weight:600">' + esc(r.status) +
+      '</td><td style="max-width:160px;white-space:pre-wrap;color:#aaa">' + esc(r.admin_note || '') +
+      '</td><td>' + fmtDate(r.created_at) + '</td><td>' + actions + '</td></tr>'
+  }).join('') || '<tr><td colspan="8" class="muted">Жалоб нет.</td></tr>'
+}
+
+async function reviewReport(id, status) {
+  let adminNote = null
+  if (status === 'reviewed' || status === 'dismissed') {
+    adminNote = prompt('Заметка (необязательно):')
+    if (adminNote === null) return
+  }
+  await api('/api/admin/reports/' + id, { method: 'PATCH', body: JSON.stringify({ status, adminNote: adminNote || undefined }) })
+  loadReports()
 }
 
 async function loadBackups() {

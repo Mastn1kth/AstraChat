@@ -448,6 +448,9 @@ export default function AppShell({
               onOpenCall={onOpenCall}
               onOpenScheduled={selectedChat.backend ? () => setScheduledPanelOpen((open) => !open) : undefined}
               onOpenTopics={selectedChat.backend && selectedContact?.type === 'group' ? () => setTopicsPanelOpen((open) => !open) : undefined}
+              onOpenDiscussion={selectedChat.backend && selectedContact?.type === 'channel' && selectedChat.linkedGroupId
+                ? () => onSelectChat(selectedChat.linkedGroupId)
+                : undefined}
             />
             {pinnedMessageId && (
               <div className="pinned-message-bar" onClick={() => {
@@ -544,6 +547,7 @@ export default function AppShell({
                 onCancelEdit={onCancelEdit}
                 onAttach={(message) => onUpdateSettings({ toast: message })}
                 currentUser={user}
+                chatMembers={selectedChat?.members}
               />
             )}
           </>

@@ -60,6 +60,7 @@ export default function Composer({
   replyTo,
   editingMessage,
   activeTopic,
+  chatMembers,
   onSend,
   onScheduleSend,
   onCancelReply,
@@ -95,6 +96,8 @@ export default function Composer({
   const [pollCreator, setPollCreator] = useState(null) // null | { question, options, multipleChoice }
   const [schedulePickerOpen, setSchedulePickerOpen] = useState(false)
   const [scheduleAt, setScheduleAt] = useState('')
+  const [mentionQuery, setMentionQuery] = useState(null) // null | { query, start, end }
+  const [mentionIndex, setMentionIndex] = useState(0)
   const inputRef = useRef(null)
   const fileInputRef = useRef(null)
   const emojiPopoverRef = useRef(null)
@@ -345,7 +348,71 @@ export default function Composer({
     )
   }
 
+  const mentionSuggestions = mentionQuery
+    ? (chatMembers || []).filter((m) => {
+        const q = mentionQuery.query.toLowerCase()
+        if (!q) return m.id !== currentUser?.id
+        return (
+          m.username?.toLowerCase().includes(q) ||
+          m.name?.toLowerCase().includes(q)
+        )
+      }).slice(0, 6)
+    : []
+
+  function detectMentionTrigger(text, cursor) {
+    const before = text.slice(0, cursor)
+    const match = before.match(/(^|[\s\n])@(\w*)$/)
+    if (!match) return null
+    const start = before.lastIndexOf('@')
+    return { query: match[2], start, end: cursor }
+  }
+
+  function handleValueChange(newValue) {
+    setValue(newValue)
+    const cursor = inputRef.current?.selectionStart ?? newValue.length
+    const trigger = detectMentionTrigger(newValue, cursor)
+    setMentionQuery(trigger)
+    setMentionIndex(0)
+  }
+
+  function insertMention(member) {
+    if (!mentionQuery) return
+    const username = member.username?.replace(/^@/, '') || member.name
+    const before = value.slice(0, mentionQuery.start)
+    const after = value.slice(mentionQuery.end)
+    const inserted = `@${username} `
+    const next = `${before}${inserted}${after}`
+    setValue(next)
+    setMentionQuery(null)
+    const pos = mentionQuery.start + inserted.length
+    requestAnimationFrame(() => {
+      const el = inputRef.current
+      if (el) { el.focus(); el.setSelectionRange(pos, pos) }
+    })
+  }
+
   function handleKeyDown(event) {
+    if (mentionQuery && mentionSuggestions.length) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        setMentionIndex((i) => (i + 1) % mentionSuggestions.length)
+        return
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        setMentionIndex((i) => (i - 1 + mentionSuggestions.length) % mentionSuggestions.length)
+        return
+      }
+      if (event.key === 'Tab' || (event.key === 'Enter' && mentionQuery)) {
+        event.preventDefault()
+        insertMention(mentionSuggestions[mentionIndex])
+        return
+      }
+      if (event.key === 'Escape') {
+        setMentionQuery(null)
+        return
+      }
+    }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
       submit()
@@ -721,10 +788,24 @@ export default function Composer({
               })
             }}
           />
+          {mentionQuery && mentionSuggestions.length > 0 && (
+            <ul className="mention-popup">
+              {mentionSuggestions.map((m, i) => (
+                <li
+                  key={m.id}
+                  className={i === mentionIndex ? 'active' : ''}
+                  onMouseDown={(e) => { e.preventDefault(); insertMention(m) }}
+                >
+                  <strong>{m.name}</strong>
+                  {m.username && <small>@{m.username.replace(/^@/, '')}</small>}
+                </li>
+              ))}
+            </ul>
+          )}
           <textarea
             ref={inputRef}
             value={value}
-            onChange={(event) => setValue(event.target.value)}
+            onChange={(event) => handleValueChange(event.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={t('composer.placeholder')}
             rows={1}

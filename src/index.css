@@ -1952,6 +1952,49 @@ textarea::placeholder {
   background: rgba(255,255,255,0.3);
 }
 
+.mention-popup {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0 8px;
+  padding: 4px 0;
+  list-style: none;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+  max-height: 220px;
+  overflow-y: auto;
+  z-index: 200;
+}
+
+.mention-popup li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.mention-popup li:hover,
+.mention-popup li.active {
+  background: var(--hover);
+}
+
+.mention-popup li strong {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mention-popup li small {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-left: auto;
+}
+
 .topic-unread-badge {
   min-width: 18px;
   height: 18px;

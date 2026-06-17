@@ -566,6 +566,19 @@ export const migrations = [
       DROP TABLE IF EXISTS user_contacts;
     `,
   },
+  {
+    id: '20260617_reports_review',
+    sql: `
+      ALTER TABLE reports
+        ADD COLUMN IF NOT EXISTS admin_note TEXT,
+        ADD COLUMN IF NOT EXISTS reviewed_by UUID REFERENCES users(id) ON DELETE SET NULL;
+    `,
+    downSql: `
+      ALTER TABLE reports
+        DROP COLUMN IF EXISTS admin_note,
+        DROP COLUMN IF EXISTS reviewed_by;
+    `,
+  },
 ]
 
 async function getAppliedMigrationIds(database) {
