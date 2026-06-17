@@ -118,6 +118,7 @@ export default function MessageBubble({
   multiSelectMode,
   multiSelected,
   chatName,
+  currentUser,
   onJumpToReply,
   onSelect,
   onStartReply,
@@ -250,7 +251,7 @@ export default function MessageBubble({
           <>
             {message.forwarded && <small className="forwarded-label">Forwarded</small>}
             <span className="message-text">
-              <FormattedText text={message.text} />
+              <FormattedText text={message.text} currentUsername={currentUser?.username} />
             </span>
           </>
         ) : null}

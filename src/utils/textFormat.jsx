@@ -1,10 +1,8 @@
 import { useState } from 'react'
 
-/**
- * Parses markdown-like inline formatting from a string.
- * Supported: **bold**, _italic_, `code`, ||spoiler||
- * Returns an array of token objects: { type, content }
- */
+const URL_RE = /https?:\/\/[^\s<>"']+/g
+const MENTION_RE = /@[\w.]+/g
+
 function parseInline(text) {
   const tokens = []
   let i = 0
@@ -62,6 +60,31 @@ function parseInline(text) {
   return tokens
 }
 
+// Split a plain-text token into url/mention/text sub-tokens
+function splitTextToken(content) {
+  const result = []
+  let lastIndex = 0
+
+  const combined = new RegExp(`${URL_RE.source}|${MENTION_RE.source}`, 'g')
+  let match
+  while ((match = combined.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      result.push({ type: 'text', content: content.slice(lastIndex, match.index) })
+    }
+    const value = match[0]
+    if (value.startsWith('http')) {
+      result.push({ type: 'url', content: value })
+    } else {
+      result.push({ type: 'mention', content: value })
+    }
+    lastIndex = match.index + value.length
+  }
+  if (lastIndex < content.length) {
+    result.push({ type: 'text', content: content.slice(lastIndex) })
+  }
+  return result.length ? result : [{ type: 'text', content }]
+}
+
 function SpoilerSpan({ content }) {
   const [revealed, setRevealed] = useState(false)
   return (
@@ -75,24 +98,35 @@ function SpoilerSpan({ content }) {
   )
 }
 
-function renderTokens(tokens, keyPrefix = '') {
-  return tokens.map((token, i) => {
+function renderTokens(tokens, keyPrefix = '', currentUsername) {
+  return tokens.flatMap((token, i) => {
     const key = `${keyPrefix}${i}`
     switch (token.type) {
-      case 'bold':    return <strong key={key}>{token.content}</strong>
-      case 'italic':  return <em key={key}>{token.content}</em>
-      case 'code':    return <code key={key} className="inline-code">{token.content}</code>
-      case 'spoiler': return <SpoilerSpan key={key} content={token.content} />
-      default:        return <span key={key}>{token.content}</span>
+      case 'bold':    return [<strong key={key}>{token.content}</strong>]
+      case 'italic':  return [<em key={key}>{token.content}</em>]
+      case 'code':    return [<code key={key} className="inline-code">{token.content}</code>]
+      case 'spoiler': return [<SpoilerSpan key={key} content={token.content} />]
+      case 'text': {
+        const sub = splitTextToken(token.content)
+        return sub.map((s, j) => {
+          const sk = `${key}-${j}`
+          if (s.type === 'url') {
+            return <a key={sk} href={s.content} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{s.content}</a>
+          }
+          if (s.type === 'mention') {
+            const handle = s.content.slice(1).toLowerCase()
+            const isSelf = currentUsername && handle === currentUsername.replace(/^@/, '').toLowerCase()
+            return <span key={sk} className={`mention-inline${isSelf ? ' mention-self' : ''}`}>{s.content}</span>
+          }
+          return <span key={sk}>{s.content}</span>
+        })
+      }
+      default: return [<span key={key}>{token.content}</span>]
     }
   })
 }
 
-/**
- * Renders a formatted message text string as React elements.
- * Lines starting with "> " are rendered as blockquotes.
- */
-export default function FormattedText({ text }) {
+export default function FormattedText({ text, currentUsername }) {
   if (!text) return null
 
   const lines = text.split('\n')
@@ -104,7 +138,7 @@ export default function FormattedText({ text }) {
         const isQuote = line.startsWith('> ') || (line.startsWith('>') && line.length > 1)
         const content = isQuote ? line.slice(line.startsWith('> ') ? 2 : 1) : line
         const tokens = parseInline(content)
-        const rendered = renderTokens(tokens, `${lineIndex}-`)
+        const rendered = renderTokens(tokens, `${lineIndex}-`, currentUsername)
 
         if (isQuote) {
           return (

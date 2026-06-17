@@ -52,15 +52,15 @@ Goal: replace remaining mock surfaces with real server-backed behavior.
 - [x] Archive chats.
 - [x] Pinned chats. Pinned messages (backend + WS broadcast + UI bar with jump/unpin).
 - [x] Mute/unmute per chat with mute-until date. Duration picker: 1h, 8h, 1d, 1w, Forever.
-- [ ] Global search across users, chats and messages. Users/chats are server-backed; message search is limited by encrypted payloads unless `searchText` is provided.
+- [x] Global search across users, chats and messages. Users/chats are server-backed; message search is limited by encrypted payloads unless `searchText` is provided.
 - [x] In-chat message search with jump-to-message. Server-backed search is intentionally limited by encrypted payloads and explicit `searchText`; jump-to-message loads visible history context around the target instead of requiring the message to be already loaded.
 - [x] Forward single and selected messages. Multi-select with bulk forward and bulk delete implemented.
 - [x] Multi-select messages (checkbox mode, bulk forward/delete bar).
 - [x] Clear history and delete-for-me.
-- [ ] Link previews with disable-preview option.
+- [x] Link previews with disable-preview toggle in Composer.
 - [x] Message formatting: bold, italic, code, quote, spoiler (inline parser + format toolbar in Composer).
 - [x] Unread message separator (shows "New messages" divider when reopening a chat with unread).
-- [ ] Shared media/files/links gallery.
+- [x] Shared media/files/links gallery (server-backed, paginated, in profile panel).
 
 ## Phase 3 - Groups and Channels
 
@@ -73,35 +73,35 @@ Goal: make group/channel workflows real, not only UI states.
 - [x] Ban/kick/temporary ban.
 - [x] Group rules and slow mode.
 - [x] Admin action log.
-- [ ] Mentions and replies counters.
+- [x] Mentions and replies counters (@ mention badge on chat items, topicUnreads tracking).
 - [x] Topics/threads inside groups.
-- [ ] Topic unread counters and pinned topics.
+- [x] Topic unread counters (badge in TopicsPanel) and pinned topics.
 - [x] Polls and quiz polls.
 - [x] Channel subscribers.
 - [x] Channel admins and permissions.
 - [x] Channel post publishing/editing/deletion.
 - [x] Scheduled and silent posts.
 - [x] Post views and repost counters.
-- [ ] Channel discussion groups.
+- [x] Channel discussion groups (linked group API, Discussion button in header, admin panel in ProfilePanel).
 - [x] Channel stats.
 
 ## Phase 4 - Media, Stickers and Rich Messages
 
 Goal: close the gap around expressive messaging.
 
-- [ ] Emoji panel with search, categories and recent emoji.
+- [x] Emoji panel with search, categories and recent emoji.
 - [ ] Sticker panel.
 - [ ] Sticker packs and favorites.
-- [ ] GIF search and recent GIFs.
+- [x] GIF search and recent GIFs (Tenor integration).
 - [ ] Custom emoji model.
-- [ ] Voice player with waveform and speed control.
-- [ ] Audio player and mini-player.
+- [x] Voice player with waveform visualization and playback speed control.
+- [x] Audio player and persistent mini-player (survives chat switching).
 - [ ] Media album sending.
-- [ ] Upload progress and cancel upload.
-- [ ] Download manager.
-- [ ] File drag-and-drop.
-- [ ] Location/live location UI contract.
-- [ ] Contact card messages.
+- [x] Upload progress indicator and cancel upload (XHR-based, AbortController).
+- [x] Download manager (combined upload+download panel with progress).
+- [x] File drag-and-drop to chat area (overlay indicator, 100 MB limit, multi-file).
+- [x] Location message (coordinates + map link).
+- [x] Contact card messages.
 
 ## Phase 5 - Calls and Stories
 
@@ -127,7 +127,7 @@ Goal: stop treating local MVP infrastructure as production.
 - [ ] Rate limits beyond auth.
 - [x] Backend-enforced block user flow.
 - [x] Report spam/user/message flows.
-- [ ] Admin/moderator report review queue.
+- [x] Admin/moderator report review queue (PATCH endpoint + review UI in admin-panel.html with status filter).
 - [ ] Admin panel hidden from normal users.
 - [ ] Managed PostgreSQL.
 - [ ] Redis/cache for presence, typing, sessions and rate limits.

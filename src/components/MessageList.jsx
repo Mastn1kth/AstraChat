@@ -98,6 +98,7 @@ function MessageListRow({
             : null
         }
         sender={sender}
+        currentUser={currentUser}
         isOwn={message.senderId === currentUser.id || message.senderId === 'me'}
         selected={message.id === selectedMessageId}
         matched={matched}
