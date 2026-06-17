@@ -3094,6 +3094,37 @@ app.get('/api/users', requireAuth, apiLimiter, async (request, response) => {
   response.json({ users: result.rows.map(publicUser) })
 })
 
+app.post('/api/users/by-phone', requireAuth, apiLimiter, async (request, response) => {
+  const rawPhones = request.body?.phones
+  if (!Array.isArray(rawPhones) || rawPhones.length === 0) {
+    response.status(400).json({ error: 'phones array is required' })
+    return
+  }
+  const normalized = rawPhones
+    .map((p) => String(p || '').replace(/\D/g, ''))
+    .filter((p) => p.length >= 7 && p.length <= 15)
+    .slice(0, 100)
+    .map((p) => (p.startsWith('7') || p.startsWith('8') ? `+${p.startsWith('8') ? '7' + p.slice(1) : p}` : `+${p}`))
+  if (normalized.length === 0) {
+    response.json({ users: [] })
+    return
+  }
+  const placeholders = normalized.map((_, i) => `$${i + 2}`).join(', ')
+  const result = await db.query(
+    `SELECT id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
+            EXISTS (
+              SELECT 1 FROM user_contacts uc
+              WHERE uc.owner_id = $1 AND uc.contact_user_id = users.id
+            ) AS is_contact
+     FROM users
+     WHERE id <> $1 AND phone IN (${placeholders})
+     ORDER BY name
+     LIMIT 100`,
+    [request.user.id, ...normalized],
+  )
+  response.json({ users: result.rows.map(publicUser) })
+})
+
 app.patch('/api/users/me/encryption-key', requireAuth, async (request, response) => {
   const input = parseBody(encryptionKeySchema, request.body)
   const keyValue = stringifyPublicKey(input.encryptionPublicKey)

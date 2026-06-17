@@ -56,6 +56,7 @@ import {
   clearAllCaches,
   formatBytes,
 } from '../utils/storage'
+import { findUsersByPhone } from '../api/client'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -305,6 +306,9 @@ export default function Sidebar({
   const [savedAccounts, setSavedAccounts] = useState(() => readAccounts())
   const [encryptionInfo, setEncryptionInfo] = useState(null)
   const [contactSearch, setContactSearch] = useState('')
+  const [importPhones, setImportPhones] = useState('')
+  const [importResults, setImportResults] = useState(null)
+  const [importBusy, setImportBusy] = useState(false)
   const [sessions, setSessions] = useState([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const [sessionsError, setSessionsError] = useState('')
@@ -1007,7 +1011,65 @@ export default function Sidebar({
     )
   }
 
+  async function handlePhoneImport() {
+    const lines = importPhones
+      .split(/[\n,;]+/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+    if (!lines.length) return
+    setImportBusy(true)
+    try {
+      const data = await findUsersByPhone(lines)
+      setImportResults(data.users || [])
+    } catch {
+      setImportResults([])
+    } finally {
+      setImportBusy(false)
+    }
+  }
+
   function renderContactsMenu() {
+    if (importResults !== null) {
+      return (
+        <>
+          {renderMenuHeader('Import results')}
+          <div className="drawer-list">
+            {importResults.length === 0 && (
+              <p className="drawer-empty">No matching users found for the numbers you entered.</p>
+            )}
+            {importResults.map((u) => (
+              <div key={u.id} className="drawer-contact-row">
+                <button className="drawer-contact" onClick={() => { setMenuView('contacts'); setImportResults(null) }}>
+                  <Avatar contact={{ name: u.name, avatar: u.avatar }} />
+                  <span>
+                    <strong>{u.name}</strong>
+                    <small>@{u.username}</small>
+                  </span>
+                </button>
+                {u.isContact ? (
+                  <span className="import-added-badge">✓ Added</span>
+                ) : (
+                  <button
+                    type="button"
+                    className="drawer-contact-action"
+                    title="Add contact"
+                    onClick={() => onAddContact?.(u.id)}
+                  >
+                    <UserPlus size={16} />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="import-footer">
+            <button type="button" className="astra-link" onClick={() => setImportResults(null)}>
+              <ArrowLeft size={14} /> Back
+            </button>
+          </div>
+        </>
+      )
+    }
+
     return (
       <>
         {renderMenuHeader(t('menu.contacts'))}
@@ -1053,6 +1115,24 @@ export default function Sidebar({
               {normalizedContactSearch ? 'No users found.' : 'No saved contacts yet. Search people to add them.'}
             </p>
           )}
+        </div>
+
+        <div className="import-contacts-section">
+          <p className="import-contacts-label">Import by phone number</p>
+          <textarea
+            className="import-phones-input"
+            placeholder={"Enter phone numbers, one per line\n+7 900 000-00-00\n+1 555 123 4567"}
+            value={importPhones}
+            onChange={(e) => setImportPhones(e.target.value)}
+            rows={3}
+          />
+          <button
+            className="import-phones-btn"
+            onClick={handlePhoneImport}
+            disabled={importBusy || !importPhones.trim()}
+          >
+            <Upload size={14} /> {importBusy ? 'Searching…' : 'Find & import'}
+          </button>
         </div>
       </>
     )

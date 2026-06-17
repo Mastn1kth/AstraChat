@@ -742,3 +742,7 @@ export function pollQrStatus(token) {
 export function confirmQrLogin(token) {
   return request('/api/auth/qr/confirm', { method: 'POST', body: JSON.stringify({ token }) })
 }
+
+export function findUsersByPhone(phones) {
+  return request('/api/users/by-phone', { method: 'POST', body: JSON.stringify({ phones }) })
+}
