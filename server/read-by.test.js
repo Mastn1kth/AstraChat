@@ -55,7 +55,7 @@ describe('Read receipts - API endpoint', () => {
     db = dbModule.db
     await dbModule.migrateDatabase()
 
-    listener = serverModule.app.listen(0)
+    listener = serverModule.server.listen(0)
     await new Promise((resolve) => listener.once('listening', resolve))
     const { port } = listener.address()
     baseUrl = `http://127.0.0.1:${port}`
