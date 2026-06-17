@@ -19,6 +19,7 @@ import CatchUpBanner from './CatchUpBanner'
 import ScheduledPanel from './ScheduledPanel'
 import TopicsPanel from './TopicsPanel'
 import MiniAudioPlayer from './MiniAudioPlayer'
+import StoryViewer from './StoryViewer'
 import { t } from '../i18n'
 
 export default function AppShell({
@@ -148,6 +149,7 @@ export default function AppShell({
   const [topicsPanelOpen, setTopicsPanelOpen] = useState(false)
   const [activeTopic, setActiveTopic] = useState(null)
   const [openMedia, setOpenMedia] = useState(null)
+  const [storyViewer, setStoryViewer] = useState(null)
   const [forwardMessage, setForwardMessage] = useState(null)
   const [forwardingSelected, setForwardingSelected] = useState(false)
   const [dragOver, setDragOver] = useState(false)
@@ -429,6 +431,7 @@ export default function AppShell({
         onAddContact={onAddContact}
         onRemoveContact={onRemoveContact}
         onUnblockUser={onUnblockUser}
+        onOpenStoryViewer={(groups, idx, onDeleted) => setStoryViewer({ groups, idx, onDeleted })}
       />
 
       <main className="chat-area" data-chat-bg={settings.chatBackground || 'default'}>
@@ -669,6 +672,18 @@ export default function AppShell({
       )}
 
       <MiniAudioPlayer />
+      {storyViewer && (
+        <StoryViewer
+          groups={storyViewer.groups}
+          initialGroupIndex={storyViewer.idx}
+          currentUserId={user?.id}
+          onClose={() => setStoryViewer(null)}
+          onDeleted={(storyId, userId) => {
+            storyViewer.onDeleted?.(storyId, userId)
+            setStoryViewer(null)
+          }}
+        />
+      )}
       {toast && <div className="toast">{toast}</div>}
       <MediaViewer
         key={openMedia?.media?.id || openMedia?.media?.url || 'media-viewer'}

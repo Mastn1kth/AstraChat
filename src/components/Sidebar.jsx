@@ -45,6 +45,7 @@ import {
 import Avatar from './Avatar'
 import ChatList from './ChatList'
 import IconButton from './IconButton'
+import StoriesBar from './StoriesBar'
 import { formatChatTime } from '../utils/formatters'
 import {
   getLocalStorageInfo,
@@ -294,6 +295,7 @@ export default function Sidebar({
   onAddContact,
   onRemoveContact,
   onUnblockUser,
+  onOpenStoryViewer,
 }) {
   const [menuView, setMenuView] = useState('main')
   const [encryptionInfo, setEncryptionInfo] = useState(null)
@@ -1907,6 +1909,10 @@ export default function Sidebar({
           <kbd>K</kbd>
         </button>
       </div>
+
+      {user?.backend && onOpenStoryViewer && (
+        <StoriesBar currentUser={user} onOpenViewer={onOpenStoryViewer} />
+      )}
 
       <ChatList
         chats={visibleChats}

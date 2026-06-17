@@ -112,7 +112,7 @@ Goal: implement real-time group calls and ephemeral stories.
 - [x] Call participants and call history API.
 - [x] Screen sharing with real media track support where available.
 - [ ] SFU/MCU media server for large production group calls.
-- [ ] Stories list, viewer and privacy settings.
+- [x] Stories list, viewer and privacy settings (text stories, 24h expiry, view tracking, delete own, StoriesBar rings + StoryViewer overlay).
 
 ## Phase 6 - Security and Production Architecture
 

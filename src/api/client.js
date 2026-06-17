@@ -714,3 +714,19 @@ export function installStickerPack(packId) {
 export function uninstallStickerPack(packId) {
   return request(`/api/stickers/packs/${encodeURIComponent(packId)}/install`, { method: 'DELETE' })
 }
+
+export function getStories() {
+  return request('/api/stories')
+}
+
+export function createStory(data) {
+  return request('/api/stories', { method: 'POST', body: JSON.stringify(data) })
+}
+
+export function deleteStory(storyId) {
+  return request(`/api/stories/${encodeURIComponent(storyId)}`, { method: 'DELETE' })
+}
+
+export function viewStory(storyId) {
+  return request(`/api/stories/${encodeURIComponent(storyId)}/view`, { method: 'POST' })
+}

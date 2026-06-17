@@ -693,6 +693,42 @@ export const migrations = [
       DROP TABLE IF EXISTS sticker_packs;
     `,
   },
+  {
+    id: '20260617_stories',
+    sql: `
+      CREATE TABLE IF NOT EXISTS stories (
+        id UUID PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        text TEXT NOT NULL DEFAULT '',
+        bg_color TEXT NOT NULL DEFAULT '#7c3aed',
+        media_url TEXT,
+        media_kind TEXT,
+        privacy TEXT NOT NULL DEFAULT 'contacts',
+        expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '24 hours',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS stories_user_idx
+        ON stories(user_id, expires_at DESC);
+
+      CREATE INDEX IF NOT EXISTS stories_expires_idx
+        ON stories(expires_at);
+
+      CREATE TABLE IF NOT EXISTS story_views (
+        story_id UUID NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+        viewer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        viewed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (story_id, viewer_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS story_views_viewer_idx
+        ON story_views(viewer_id, viewed_at DESC);
+    `,
+    downSql: `
+      DROP TABLE IF EXISTS story_views;
+      DROP TABLE IF EXISTS stories;
+    `,
+  },
 ]
 
 async function getAppliedMigrationIds(database) {

@@ -2549,6 +2549,159 @@ app.delete('/api/stickers/packs/:packId/install', requireAuth, async (request, r
   response.json({ ok: true })
 })
 
+// ── Stories ──────────────────────────────────────────────────────────────
+
+const storiesLimiter = rateLimit({ windowMs: 60_000, max: 10 })
+
+function publicStory(story, viewerIds = [], viewedByMe = false) {
+  return {
+    id: story.id,
+    userId: story.user_id,
+    text: story.text,
+    bgColor: story.bg_color,
+    mediaUrl: story.media_url || null,
+    mediaKind: story.media_kind || null,
+    privacy: story.privacy,
+    expiresAt: story.expires_at,
+    createdAt: story.created_at,
+    viewCount: viewerIds.length,
+    viewedByMe,
+  }
+}
+
+app.get('/api/stories', requireAuth, async (request, response) => {
+  const userId = request.user.id
+  // Return own stories + stories of contacts + groups you belong to
+  const result = await db.query(
+    `SELECT s.*
+     FROM stories s
+     WHERE s.expires_at > NOW()
+       AND (
+         s.user_id = $1
+         OR s.user_id IN (
+           SELECT contact_user_id FROM user_contacts WHERE owner_id = $1
+           UNION
+           SELECT owner_id FROM user_contacts WHERE contact_user_id = $1
+           UNION
+           SELECT cm2.user_id FROM chat_members cm1
+           JOIN chat_members cm2 ON cm2.chat_id = cm1.chat_id
+           WHERE cm1.user_id = $1 AND cm2.user_id <> $1
+         )
+       )
+     ORDER BY s.user_id, s.created_at DESC`,
+    [userId],
+  )
+
+  if (!result.rows.length) {
+    response.json({ stories: [] })
+    return
+  }
+
+  const storyIds = result.rows.map((r) => r.id)
+  const viewsResult = await db.query(
+    `SELECT story_id, viewer_id FROM story_views WHERE story_id = ANY($1)`,
+    [storyIds],
+  )
+  const viewersByStory = new Map()
+  const viewedByMeSet = new Set()
+  for (const row of viewsResult.rows) {
+    if (!viewersByStory.has(row.story_id)) viewersByStory.set(row.story_id, [])
+    viewersByStory.get(row.story_id).push(row.viewer_id)
+    if (row.viewer_id === userId) viewedByMeSet.add(row.story_id)
+  }
+
+  const userIds = [...new Set(result.rows.map((r) => r.user_id))]
+  const usersResult = await db.query(
+    `SELECT id, name, username, avatar FROM users WHERE id = ANY($1)`,
+    [userIds],
+  )
+  const usersById = new Map(usersResult.rows.map((u) => [u.id, u]))
+
+  const grouped = []
+  const seen = new Map()
+  for (const story of result.rows) {
+    const user = usersById.get(story.user_id) || {}
+    const entry = seen.get(story.user_id)
+    const storyPublic = publicStory(
+      story,
+      viewersByStory.get(story.id) || [],
+      viewedByMeSet.has(story.id),
+    )
+    if (entry) {
+      entry.stories.push(storyPublic)
+    } else {
+      const group = {
+        userId: story.user_id,
+        name: user.name || '',
+        username: user.username || '',
+        avatar: user.avatar || null,
+        stories: [storyPublic],
+        hasUnviewed: false,
+      }
+      seen.set(story.user_id, group)
+      grouped.push(group)
+    }
+  }
+  for (const group of grouped) {
+    group.hasUnviewed = group.stories.some((s) => !s.viewedByMe && s.userId !== userId)
+  }
+
+  response.json({ stories: grouped })
+})
+
+app.post('/api/stories', requireAuth, storiesLimiter, async (request, response) => {
+  const text = String(request.body?.text || '').trim().slice(0, 1000)
+  const bgColor = String(request.body?.bgColor || '#7c3aed').slice(0, 20)
+  const privacy = ['contacts', 'everyone', 'closeFriends'].includes(request.body?.privacy)
+    ? request.body.privacy
+    : 'contacts'
+  if (!text) {
+    response.status(400).json({ error: 'Story text is required' })
+    return
+  }
+  const id = randomUUID()
+  const result = await db.query(
+    `INSERT INTO stories (id, user_id, text, bg_color, privacy)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING *`,
+    [id, request.user.id, text, bgColor, privacy],
+  )
+  const story = publicStory(result.rows[0], [], false)
+  response.status(201).json({ story })
+})
+
+app.delete('/api/stories/:storyId', requireAuth, async (request, response) => {
+  const result = await db.query(
+    'DELETE FROM stories WHERE id = $1 AND user_id = $2 RETURNING id',
+    [request.params.storyId, request.user.id],
+  )
+  if (!result.rows.length) {
+    response.status(404).json({ error: 'Story not found' })
+    return
+  }
+  response.json({ ok: true })
+})
+
+app.post('/api/stories/:storyId/view', requireAuth, async (request, response) => {
+  const storyResult = await db.query(
+    'SELECT id, user_id FROM stories WHERE id = $1 AND expires_at > NOW()',
+    [request.params.storyId],
+  )
+  if (!storyResult.rows.length) {
+    response.status(404).json({ error: 'Story not found' })
+    return
+  }
+  if (storyResult.rows[0].user_id === request.user.id) {
+    response.json({ ok: true })
+    return
+  }
+  await db.query(
+    `INSERT INTO story_views (story_id, viewer_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+    [request.params.storyId, request.user.id],
+  )
+  response.json({ ok: true })
+})
+
 // ── Admin panel ──────────────────────────────────────────────────────────
 // Token-protected management API + a self-contained HTML panel at /admin.
 // The token lives in ADMIN_TOKEN env or <dataDir>/.admin-token.
