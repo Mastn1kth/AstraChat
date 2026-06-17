@@ -150,6 +150,8 @@ export default function AppShell({
   const [forwardingSelected, setForwardingSelected] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [downloads, setDownloads] = useState({})
+  const [uploads, setUploads] = useState({})
+  const uploadControllersRef = useRef({})
   const dragCounterRef = useRef(0)
   const downloadRequestsRef = useRef({})
   const multiSelectMode = selectedMessageIds.size > 0
@@ -287,6 +289,46 @@ export default function AppShell({
       return next
     })
     startDownload(item.media)
+  }
+
+  function sendAttachmentWithProgress(file, caption, options = {}) {
+    const uploadId = `upload-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const controller = new AbortController()
+    uploadControllersRef.current[uploadId] = controller
+    setUploads((current) => ({
+      ...current,
+      [uploadId]: { id: uploadId, name: file.name, progress: 0, status: 'uploading' },
+    }))
+    return onSendAttachment(file, caption, {
+      ...options,
+      signal: controller.signal,
+      onUploadProgress: (percent) => {
+        setUploads((current) =>
+          current[uploadId] ? { ...current, [uploadId]: { ...current[uploadId], progress: percent } } : current,
+        )
+      },
+    }).then((result) => {
+      setUploads((current) => {
+        if (!current[uploadId]) return current
+        return { ...current, [uploadId]: { ...current[uploadId], progress: 100, status: 'done' } }
+      })
+      delete uploadControllersRef.current[uploadId]
+      return result
+    }).catch((error) => {
+      const cancelled = error?.name === 'AbortError'
+      setUploads((current) => {
+        if (!current[uploadId]) return current
+        return cancelled
+          ? Object.fromEntries(Object.entries(current).filter(([k]) => k !== uploadId))
+          : { ...current, [uploadId]: { ...current[uploadId], status: 'failed' } }
+      })
+      delete uploadControllersRef.current[uploadId]
+      if (!cancelled) throw error
+    })
+  }
+
+  function cancelUpload(uploadId) {
+    uploadControllersRef.current[uploadId]?.abort()
   }
 
   function openMediaViewer(media, sourceMessage = null) {
@@ -494,7 +536,7 @@ export default function AppShell({
                 activeTopic={activeTopic}
                 onSend={onSendMessage}
                 onScheduleSend={selectedChat.backend ? onScheduleSend : undefined}
-                onSendAttachment={onSendAttachment}
+                onSendAttachment={sendAttachmentWithProgress}
                 onSendAttachments={onSendAttachments}
                 onSendRichMessage={onSendRichMessage}
                 onTyping={onTyping}
@@ -630,11 +672,18 @@ export default function AppShell({
       />
       <DownloadManager
         downloads={downloads}
+        uploads={uploads}
         onCancel={cancelDownload}
+        onCancelUpload={cancelUpload}
         onRetry={retryDownload}
-        onClear={() => setDownloads((current) => Object.fromEntries(
-          Object.entries(current).filter(([, item]) => item.status === 'downloading'),
-        ))}
+        onClear={() => {
+          setDownloads((current) => Object.fromEntries(
+            Object.entries(current).filter(([, item]) => item.status === 'downloading'),
+          ))
+          setUploads((current) => Object.fromEntries(
+            Object.entries(current).filter(([, item]) => item.status === 'uploading'),
+          ))
+        }}
       />
       <ForwardModal
         message={forwardMessage}

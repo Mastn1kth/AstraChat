@@ -1,18 +1,41 @@
-import { Download, RefreshCw, X } from 'lucide-react'
+import { Download, RefreshCw, Upload, X } from 'lucide-react'
 
-export default function DownloadManager({ downloads, onCancel, onRetry, onClear }) {
-  const items = Object.values(downloads)
-  if (!items.length) return null
+export default function DownloadManager({ downloads, uploads = {}, onCancel, onCancelUpload, onRetry, onClear }) {
+  const downloadItems = Object.values(downloads)
+  const uploadItems = Object.values(uploads)
+  const total = downloadItems.length + uploadItems.length
+  if (!total) return null
 
   return (
-    <aside className="download-manager" aria-label="Download manager">
+    <aside className="download-manager" aria-label="Transfer manager">
       <header>
-        <strong>Downloads</strong>
-        <button onClick={onClear} aria-label="Clear completed downloads">
+        <strong>Transfers</strong>
+        <button onClick={onClear} aria-label="Clear completed transfers">
           <X size={15} />
         </button>
       </header>
-      {items.map((item) => (
+
+      {uploadItems.map((item) => (
+        <div key={item.id} className={`download-item ${item.status}`}>
+          <span className="download-icon upload-icon">
+            <Upload size={16} />
+          </span>
+          <span className="download-body">
+            <strong>{item.name || 'upload'}</strong>
+            <small>
+              {item.status === 'done' ? 'Uploaded' : item.status === 'failed' ? 'Failed' : `${item.progress}%`}
+            </small>
+            <i style={{ '--download-progress': `${item.progress}%` }} />
+          </span>
+          {item.status === 'uploading' && (
+            <button onClick={() => onCancelUpload?.(item.id)} aria-label="Cancel upload">
+              <X size={14} />
+            </button>
+          )}
+        </div>
+      ))}
+
+      {downloadItems.map((item) => (
         <div key={item.id} className={`download-item ${item.status}`}>
           <span className="download-icon">
             <Download size={16} />

@@ -5663,6 +5663,11 @@ textarea::placeholder {
   color: var(--accent);
 }
 
+.upload-icon {
+  background: color-mix(in srgb, #10b981 15%, transparent);
+  color: #10b981;
+}
+
 .download-body {
   display: grid;
   min-width: 0;
