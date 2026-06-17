@@ -213,6 +213,7 @@ async function normalizeServerMessage(message, currentUserId) {
     forwardedFromMessageId: message.forwardedFromMessageId || undefined,
     forwardedFromChatId: message.forwardedFromChatId || undefined,
     reactions: message.reactions || {},
+    topicId: message.topicId || null,
     media,
     backend: true,
     encrypted: decrypted.encrypted,
@@ -936,13 +937,24 @@ function AppInner() {
               setUnreadFromId((prev) => prev[chatId] ? prev : { ...prev, [chatId]: message.id })
             }
 
+            const isFromOther = payload.message.senderId !== current.user?.id
+            const isMention = isFromOther && messageMentionsCurrentUser(message.text, current.user)
+            const topicId = message.topicId
+
             return {
               ...current,
-              chats: current.chats.map((chat) =>
-                chat.id === chatId && !isActiveChat
-                  ? { ...chat, unread: (chat.unread || 0) + 1 }
-                  : chat,
-              ),
+              chats: current.chats.map((chat) => {
+                if (chat.id !== chatId || isActiveChat) return chat
+                const topicUnreads = chat.topicUnreads || {}
+                return {
+                  ...chat,
+                  unread: (chat.unread || 0) + (isFromOther ? 1 : 0),
+                  mentions: (chat.mentions || 0) + (isMention ? 1 : 0),
+                  topicUnreads: topicId
+                    ? { ...topicUnreads, [topicId]: (topicUnreads[topicId] || 0) + (isFromOther ? 1 : 0) }
+                    : topicUnreads,
+                }
+              }),
               messages: {
                 ...current.messages,
                 [chatId]: [...currentMessages, message],
@@ -1620,7 +1632,7 @@ function AppInner() {
     }))
     setState((current) => ({
       ...current,
-      chats: current.chats.map((chat) => (chat.id === chatId ? { ...chat, unread: 0 } : chat)),
+      chats: current.chats.map((chat) => (chat.id === chatId ? { ...chat, unread: 0, mentions: 0, topicUnreads: {} } : chat)),
     }))
     setUnreadFromId((current) => {
       if (!current[chatId]) return current

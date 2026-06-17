@@ -41,7 +41,8 @@ export default function ChatItem({
             {chat.folderPinned && <Pin size={13} className="folder-pin-flag" />}
             {chat.pinned && <Pin size={13} />}
             {chat.muted && <BellOff size={13} />}
-            {chat.unread > 0 && <span className="unread-badge">{chat.unread}</span>}
+            {chat.mentions > 0 && <span className="mention-badge">@</span>}
+            {chat.unread > 0 && <span className={`unread-badge${chat.muted ? ' muted' : ''}`}>{chat.unread}</span>}
           </div>
         </div>
       </div>

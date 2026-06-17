@@ -576,6 +576,7 @@ export default function AppShell({
         <TopicsPanel
           chatId={selectedChat.id}
           activeTopic={activeTopic}
+          topicUnreads={selectedChat.topicUnreads || {}}
           currentMemberRole={selectedChat.members?.find((m) => m.id === user.id)?.role || selectedContact?.role}
           onSelectTopic={(topic) => {
             setActiveTopic(topic)

@@ -15,6 +15,7 @@ function formatRelativeTime(iso) {
 export default function TopicsPanel({
   chatId,
   activeTopic,
+  topicUnreads = {},
   currentMemberRole,
   onSelectTopic,
   onClose,
@@ -173,6 +174,9 @@ export default function TopicsPanel({
                 {topic.lastMessageAt ? ` · ${formatRelativeTime(topic.lastMessageAt)}` : ''}
               </small>
             </span>
+            {topicUnreads[topic.id] > 0 && (
+              <span className="topic-unread-badge">{topicUnreads[topic.id]}</span>
+            )}
             {canManage && (
               <span className="topic-admin-actions" onClick={(e) => e.stopPropagation()}>
                 <button
