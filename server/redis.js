@@ -89,7 +89,7 @@ export async function removePresence(userId, localCount) {
       return
     }
     await client.del(key)
-    const keys = await client.keys(`astrachat:presence:user:${userId}:instance:*`)
+    const keys = await scanKeys(client, `astrachat:presence:user:${userId}:instance:*`)
     if (!keys.length) await client.srem(USER_SET_KEY, userId)
   })
 }
@@ -105,9 +105,20 @@ export async function refreshPresence(entries) {
   })
 }
 
+async function scanKeys(client, pattern) {
+  const found = []
+  let cursor = '0'
+  do {
+    const [nextCursor, keys] = await client.scan(cursor, 'MATCH', pattern, 'COUNT', 100)
+    cursor = nextCursor
+    found.push(...keys)
+  } while (cursor !== '0')
+  return found
+}
+
 export async function isUserOnline(userId) {
   return safeRedis(async (client) => {
-    const keys = await client.keys(`astrachat:presence:user:${userId}:instance:*`)
+    const keys = await scanKeys(client, `astrachat:presence:user:${userId}:instance:*`)
     return keys.length > 0
   }, false)
 }
@@ -118,7 +129,7 @@ export async function getOnlineUserIds() {
     if (!users.length) return []
     const online = []
     for (const userId of users) {
-      const keys = await client.keys(`astrachat:presence:user:${userId}:instance:*`)
+      const keys = await scanKeys(client, `astrachat:presence:user:${userId}:instance:*`)
       if (keys.length) {
         online.push(userId)
       } else {
@@ -157,4 +168,50 @@ export async function deleteCachedSessions(tokenHashes) {
   const hashes = tokenHashes.filter(Boolean)
   if (!hashes.length) return
   await safeRedis((client) => client.del(...hashes.map(sessionKey)))
+}
+
+// Brute-force protection: track failed login attempts per login handle.
+// In-memory fallback when Redis is unavailable.
+const inMemoryLoginAttempts = new Map()
+
+function loginAttemptKey(login) {
+  return `astrachat:login:fail:${login.toLowerCase()}`
+}
+
+export async function recordFailedLogin(login) {
+  const key = loginAttemptKey(login)
+  if (redis) {
+    await safeRedis(async (client) => {
+      const count = await client.incr(key)
+      if (count === 1) await client.expire(key, 900) // 15 min window
+    })
+  } else {
+    const entry = inMemoryLoginAttempts.get(key) || { count: 0, resetAt: Date.now() + 900_000 }
+    if (Date.now() > entry.resetAt) { entry.count = 0; entry.resetAt = Date.now() + 900_000 }
+    entry.count++
+    inMemoryLoginAttempts.set(key, entry)
+  }
+}
+
+export async function clearFailedLogins(login) {
+  const key = loginAttemptKey(login)
+  if (redis) {
+    await safeRedis((client) => client.del(key))
+  } else {
+    inMemoryLoginAttempts.delete(key)
+  }
+}
+
+export async function isLoginLocked(login) {
+  const key = loginAttemptKey(login)
+  if (redis) {
+    return safeRedis(async (client) => {
+      const count = await client.get(key)
+      return Number(count || 0) >= 10
+    }, false)
+  }
+  const entry = inMemoryLoginAttempts.get(key)
+  if (!entry) return false
+  if (Date.now() > entry.resetAt) { inMemoryLoginAttempts.delete(key); return false }
+  return entry.count >= 10
 }

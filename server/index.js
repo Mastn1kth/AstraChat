@@ -25,15 +25,18 @@ import {
 } from './storage.js'
 import {
   addPresence,
+  clearFailedLogins,
   closeRedis,
   checkRedis,
   deleteCachedSession,
   deleteCachedSessions,
   getOnlineUserIds,
   initRedis,
+  isLoginLocked,
   isUserOnline,
   onSocketMessage,
   publishSocketMessage,
+  recordFailedLogin,
   redis,
   refreshPresence,
   removePresence,
@@ -125,7 +128,27 @@ if (config.vapid.enabled) {
 
 app.disable('x-powered-by')
 if (config.trustProxy) app.set('trust proxy', config.trustProxy)
-app.use(helmet({ crossOriginResourcePolicy: false }))
+app.use(
+  helmet({
+    crossOriginResourcePolicy: false,
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", 'https:', 'data:', 'blob:'],
+        mediaSrc: ["'self'", 'blob:'],
+        connectSrc: ["'self'", 'wss:', 'ws:'],
+        fontSrc: ["'self'", 'data:'],
+        workerSrc: ["'self'", 'blob:'],
+        frameSrc: ["'none'"],
+        objectSrc: ["'none'"],
+        baseUri: ["'self'"],
+        formAction: ["'self'"],
+      },
+    },
+  }),
+)
 app.use(express.json({ limit: '512kb' }))
 app.use(cookieParser())
 app.use((request, response, next) => {
@@ -1888,12 +1911,19 @@ app.post('/api/auth/qr/confirm', requireAuth, async (request, response) => {
 
 app.post('/api/auth/login', authLimiter, async (request, response) => {
   const input = parseBody(loginSchema, request.body)
+  const loginKey = input.login.toLowerCase()
+
+  if (await isLoginLocked(loginKey)) {
+    response.status(429).json({ error: 'Too many failed attempts. Try again in 15 minutes.' })
+    return
+  }
+
   const result = await db.query(
     `SELECT id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
             password_salt, password_hash, totp_secret, totp_enabled_at,
             cloud_password_hash, cloud_password_salt, cloud_password_hint
      FROM users WHERE login = $1 OR username = $1 LIMIT 1`,
-    [input.login.toLowerCase()],
+    [loginKey],
   )
   const user = result.rows[0]
   const valid = user
@@ -1901,6 +1931,7 @@ app.post('/api/auth/login', authLimiter, async (request, response) => {
     : false
 
   if (!valid) {
+    await recordFailedLogin(loginKey)
     response.status(401).json({ error: 'Invalid login or password' })
     return
   }
@@ -1911,6 +1942,7 @@ app.post('/api/auth/login', authLimiter, async (request, response) => {
   }
 
   if (user.totp_secret && !verifyTotpCode(openTotpSecret(user.totp_secret), input.totpCode)) {
+    await recordFailedLogin(loginKey)
     response.status(401).json({ error: 'Invalid authentication code' })
     return
   }
@@ -1923,11 +1955,13 @@ app.post('/api/auth/login', authLimiter, async (request, response) => {
   if (user.cloud_password_hash && input.cloudPassword) {
     const cpValid = await verifyPassword(input.cloudPassword, user.cloud_password_salt, user.cloud_password_hash)
     if (!cpValid) {
+      await recordFailedLogin(loginKey)
       response.status(401).json({ error: 'Incorrect cloud password' })
       return
     }
   }
 
+  await clearFailedLogins(loginKey)
   await createSession(response, user.id, request)
   response.json({ user: publicUser(user) })
 })
@@ -2708,7 +2742,16 @@ app.delete('/api/custom-emoji/packs/:packId/install', requireAuth, async (reques
 
 // ── Stories ──────────────────────────────────────────────────────────────
 
-const storiesLimiter = rateLimit({ windowMs: 60_000, max: 10 })
+const storiesLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 10,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (request) => request.user?.id || ipKeyGenerator(request.ip),
+  store: redis
+    ? new RedisStore({ prefix: 'rl:stories:', sendCommand: (...args) => redis.call(...args) })
+    : undefined,
+})
 
 function publicStory(story, viewerIds = [], viewedByMe = false) {
   return {
@@ -2864,7 +2907,7 @@ app.post('/api/stories/:storyId/view', requireAuth, async (request, response) =>
 // The token lives in ADMIN_TOKEN env or <dataDir>/.admin-token.
 
 function requireAdmin(request, response, next) {
-  const token = request.headers['x-admin-token'] || request.query.token
+  const token = request.headers['x-admin-token']
   if (!token || token !== config.adminToken) {
     response.status(401).json({ error: 'Admin token required' })
     return
@@ -2889,12 +2932,9 @@ async function adminCount(sql, params = []) {
   return Number(result.rows[0]?.count || 0)
 }
 
-app.get('/admin', (request, response) => {
-  const token = request.headers['x-admin-token'] || request.query.token
-  if (!token || token !== config.adminToken) {
-    response.status(403).send('<!DOCTYPE html><html><body style="font-family:sans-serif;padding:40px"><h1>403 Forbidden</h1><p>Admin token required. Append <code>?token=YOUR_TOKEN</code> to the URL.</p></body></html>')
-    return
-  }
+app.get('/admin', (_request, response) => {
+  // Admin panel is a public HTML page; auth is done client-side via x-admin-token header.
+  // The token input form in admin-panel.html handles authentication.
   response.sendFile(resolve(config.rootDir, 'server', 'admin-panel.html'))
 })
 
@@ -2992,7 +3032,12 @@ app.delete('/api/admin/wall/:messageId', requireAdmin, async (request, response)
 app.get('/api/admin/reports', requireAdmin, async (request, response) => {
   const { status } = request.query
   const allowed = ['open', 'reviewed', 'dismissed']
-  const whereClause = status && allowed.includes(status) ? `WHERE r.status = '${status}'` : ''
+  const params = []
+  let whereClause = ''
+  if (status && allowed.includes(status)) {
+    params.push(status)
+    whereClause = 'WHERE r.status = $1'
+  }
   const result = await db.query(
     `SELECT r.id, r.reason, r.details, r.status, r.admin_note, r.created_at, r.reviewed_at,
             reporter.username AS reporter, target.username AS target,
@@ -3003,6 +3048,7 @@ app.get('/api/admin/reports', requireAdmin, async (request, response) => {
      LEFT JOIN users reviewer ON reviewer.id = r.reviewed_by
      ${whereClause}
      ORDER BY r.created_at DESC LIMIT 200`,
+    params,
   )
   response.json({ reports: result.rows })
 })
@@ -6115,8 +6161,18 @@ wss.on('connection', async (socket, _request, user) => {
     socket.isAlive = true
   })
 
+  // Per-connection throttle: max 20 WS messages/second, typing deduplicated per chat
+  let wsMessageCount = 0
+  let wsThrottleReset = Date.now() + 1000
+  const lastTypingBroadcast = new Map() // chatId -> timestamp
+
   socket.on('message', async (raw) => {
     try {
+      const now = Date.now()
+      if (now > wsThrottleReset) { wsMessageCount = 0; wsThrottleReset = now + 1000 }
+      wsMessageCount++
+      if (wsMessageCount > 20) return // silently drop excess
+
       const message = JSON.parse(raw.toString())
 
       if (message.type === 'typing') {
@@ -6126,6 +6182,14 @@ wss.on('connection', async (socket, _request, user) => {
           !(await isChatMember(message.chatId, user.id))
         ) {
           return
+        }
+        // Throttle typing to once per 2 s per chat (active=false always passes through)
+        if (message.active) {
+          const last = lastTypingBroadcast.get(message.chatId) || 0
+          if (now - last < 2000) return
+          lastTypingBroadcast.set(message.chatId, now)
+        } else {
+          lastTypingBroadcast.delete(message.chatId)
         }
         await sendToChatExcept(message.chatId, user.id, {
           type: 'typing:update',
@@ -6160,21 +6224,20 @@ wss.on('connection', async (socket, _request, user) => {
           [message.chatId, user.id],
         )
         if (!unread.rows.length) return
-        for (const unreadMessage of unread.rows) {
-          await db.query(
-            `INSERT INTO message_reads (message_id, user_id)
-             VALUES ($1, $2)
-             ON CONFLICT (message_id, user_id) DO NOTHING`,
-            [unreadMessage.id, user.id],
-          )
-        }
+        const messageIds = unread.rows.map((item) => item.id)
+        const placeholders = messageIds.map((_, i) => `($${i + 1}, $${messageIds.length + 1})`).join(', ')
+        await db.query(
+          `INSERT INTO message_reads (message_id, user_id) VALUES ${placeholders}
+           ON CONFLICT (message_id, user_id) DO NOTHING`,
+          [...messageIds, user.id],
+        )
         await sendToChatExcept(message.chatId, user.id, {
           type: 'message:read',
           chatId: message.chatId,
           userId: user.id,
           userName: user.name,
           userUsername: user.username,
-          messageIds: unread.rows.map((item) => item.id),
+          messageIds,
         })
         return
       }
@@ -6372,6 +6435,7 @@ wss.on('connection', async (socket, _request, user) => {
   })
 
   socket.on('close', () => {
+    lastTypingBroadcast.clear()
     const socketCount = removeSocket(user.id, socket)
     void removePresence(user.id, socketCount)
     if (!socketsByUserId.has(user.id)) {
