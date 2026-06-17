@@ -46,6 +46,7 @@ import Avatar from './Avatar'
 import ChatList from './ChatList'
 import IconButton from './IconButton'
 import StoriesBar from './StoriesBar'
+import { readAccounts, removeAccount } from '../utils/accounts'
 import { formatChatTime } from '../utils/formatters'
 import {
   getLocalStorageInfo,
@@ -296,8 +297,12 @@ export default function Sidebar({
   onRemoveContact,
   onUnblockUser,
   onOpenStoryViewer,
+  onSwitchAccount,
+  onAddAccount,
+  onRemoveAccount,
 }) {
   const [menuView, setMenuView] = useState('main')
+  const [savedAccounts, setSavedAccounts] = useState(() => readAccounts())
   const [encryptionInfo, setEncryptionInfo] = useState(null)
   const [contactSearch, setContactSearch] = useState('')
   const [sessions, setSessions] = useState([])
@@ -331,6 +336,10 @@ export default function Sidebar({
   const keyImportRef = useRef(null)
   const avatarInputRef = useRef(null)
   const { confirm, dialog } = useConfirm()
+
+  useEffect(() => {
+    if (menuOpen) setSavedAccounts(readAccounts())
+  }, [menuOpen])
 
   const WALLPAPERS = ['default', 'plain', 'lavender', 'mint', 'peach', 'night']
   const inviteUsername = String(user.username || '').replace(/^@/, '')
@@ -882,6 +891,43 @@ export default function Sidebar({
             <Settings size={19} /> {t('menu.settings')}
           </button>
         </div>
+        {savedAccounts.length > 0 && (
+          <div className="account-switcher">
+            {savedAccounts
+              .filter((a) => a.id !== user.id)
+              .map((account) => (
+                <div key={account.id} className="account-row">
+                  <button
+                    className="account-row-btn"
+                    onClick={() => onSwitchAccount?.(account)}
+                    title={`Switch to ${account.name}`}
+                  >
+                    <Avatar contact={account} size={32} />
+                    <div className="account-row-info">
+                      <strong>{account.name}</strong>
+                      <span>{account.username}</span>
+                    </div>
+                    <LogOut size={14} className="account-switch-icon" />
+                  </button>
+                  <button
+                    className="account-row-remove"
+                    onClick={() => {
+                      removeAccount(account.id)
+                      onRemoveAccount?.(account.id)
+                      setSavedAccounts(readAccounts())
+                    }}
+                    title="Remove account"
+                    aria-label="Remove saved account"
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+              ))}
+            <button className="account-add-btn" onClick={() => onAddAccount?.()}>
+              <UserPlus size={15} /> Add account
+            </button>
+          </div>
+        )}
         <div className="side-menu-footer">
           <Sun size={15} /> {t('menu.themeHint')} <Moon size={15} />
         </div>

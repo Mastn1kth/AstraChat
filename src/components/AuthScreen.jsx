@@ -51,6 +51,7 @@ export default function AuthScreen({
   onPhoneStart,
   onPhoneVerify,
   onTestLogin,
+  prefillLogin,
 }) {
   const t = useT()
   const lang = useLang()
@@ -61,8 +62,8 @@ export default function AuthScreen({
   const [devCode, setDevCode] = useState('')
   const [name, setName] = useState('')
   const [username, setUsername] = useState('')
-  const [legacyOpen, setLegacyOpen] = useState(false)
-  const [legacyLogin, setLegacyLogin] = useState('')
+  const [legacyOpen, setLegacyOpen] = useState(!!prefillLogin)
+  const [legacyLogin, setLegacyLogin] = useState(prefillLogin || '')
   const [legacyPassword, setLegacyPassword] = useState('')
   const [cloudPassword, setCloudPassword] = useState('')
   const [totpCode, setTotpCode] = useState('')

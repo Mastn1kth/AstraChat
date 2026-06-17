@@ -857,6 +857,86 @@ textarea:focus-visible {
   color: var(--muted);
 }
 
+.account-switcher {
+  border-top: 1px solid var(--border);
+  padding: 8px 0 4px;
+}
+
+.account-row {
+  display: flex;
+  align-items: center;
+  padding: 2px 8px 2px 12px;
+  gap: 4px;
+}
+
+.account-row-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  padding: 6px 8px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  transition: background 0.15s;
+}
+.account-row-btn:hover { background: var(--hover); }
+
+.account-row-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.account-row-info strong {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.account-row-info span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.account-switch-icon {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.account-row-remove {
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 4px;
+  cursor: pointer;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+.account-row:hover .account-row-remove { opacity: 1; }
+.account-row-remove:hover { background: var(--hover); color: var(--danger, #ef4444); }
+
+.account-add-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 20px;
+  font-size: 13px;
+  color: var(--accent);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.account-add-btn:hover { background: var(--hover); }
+
 .side-menu-footer {
   display: flex;
   align-items: center;

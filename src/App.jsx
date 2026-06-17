@@ -8,6 +8,7 @@ import useWebRTCCall from './hooks/useWebRTCCall'
 import { contacts as seedContacts, currentUser, initialChats, initialMessages } from './data/sampleData'
 import { byPinnedThenRecent, getLastMessage } from './utils/formatters'
 import { loadMessengerState, resetMessengerState, saveMessengerState } from './utils/storage'
+import { upsertAccount } from './utils/accounts'
 import { bumpAvatarCache } from './utils/avatarCache'
 import {
   changePassword,
@@ -511,6 +512,7 @@ function AppInner() {
     user: null,
     error: '',
   })
+  const [prefillLogin, setPrefillLogin] = useState(null)
   const [selectedChatId, setSelectedChatId] = useState(() => state.chats.find((chat) => !chat.archived)?.id || '')
   const [selectedFolderId, setSelectedFolderId] = useState('all')
   const [hasMoreMessages, setHasMoreMessages] = useState({})
@@ -1236,6 +1238,8 @@ function AppInner() {
       encryptionPublicKey,
       totpEnabled: Boolean(user.totpEnabled),
     }
+    upsertAccount(appUser)
+    setPrefillLogin(null)
     setState((current) => ({ ...current, user: appUser }))
     setAuth({ status: 'authenticated', user: appUser, error: '' })
     await loadServerWorkspace(user.id, encryptionPublicKey)
@@ -1394,6 +1398,34 @@ function AppInner() {
       setSelectedFolderId('all')
       setUi((current) => ({ ...current, menuOpen: false, mobilePane: 'list' }))
     }
+  }
+
+  async function handleSwitchAccount(account) {
+    setPrefillLogin(account.username.replace(/^@/, ''))
+    try {
+      await disableWebPushNotifications()
+      await logoutAccount()
+    } finally {
+      setAuth({ status: 'anonymous', user: null, error: '' })
+      setSelectedFolderId('all')
+      setUi((current) => ({ ...current, menuOpen: false, mobilePane: 'list' }))
+    }
+  }
+
+  async function handleAddAccount() {
+    setPrefillLogin(null)
+    try {
+      await disableWebPushNotifications()
+      await logoutAccount()
+    } finally {
+      setAuth({ status: 'anonymous', user: null, error: '' })
+      setSelectedFolderId('all')
+      setUi((current) => ({ ...current, menuOpen: false, mobilePane: 'list' }))
+    }
+  }
+
+  function handleRemoveAccount(accountId) {
+    removeAccount(accountId)
   }
 
   async function uploadUserAvatar(file) {
@@ -3395,6 +3427,7 @@ function AppInner() {
         onPhoneStart={handlePhoneStart}
         onPhoneVerify={handlePhoneVerify}
         onTestLogin={handleTestLogin}
+        prefillLogin={prefillLogin}
       />
     )
   }
@@ -3541,6 +3574,9 @@ function AppInner() {
       }}
       onResetState={resetState}
       onLogout={handleLogout}
+      onSwitchAccount={handleSwitchAccount}
+      onAddAccount={handleAddAccount}
+      onRemoveAccount={handleRemoveAccount}
       onBackToList={() => setUi((current) => ({ ...current, mobilePane: 'list' }))}
       onGlobalSearchSelectChat={(result) => {
         const chat = state.chats?.find((c) => c.id === result.id)
