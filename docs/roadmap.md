@@ -90,8 +90,8 @@ Goal: make group/channel workflows real, not only UI states.
 Goal: close the gap around expressive messaging.
 
 - [x] Emoji panel with search, categories and recent emoji.
-- [ ] Sticker panel.
-- [ ] Sticker packs and favorites.
+- [x] Sticker panel.
+- [x] Sticker packs and favorites (emoji-based; server-backed install/uninstall + localStorage recent + favorites).
 - [x] GIF search and recent GIFs (Tenor integration).
 - [ ] Custom emoji model.
 - [x] Voice player with waveform visualization and playback speed control.

@@ -28,7 +28,8 @@ import {
 import IconButton from './IconButton'
 import EmojiPicker from './EmojiPicker'
 import GifPicker from './GifPicker'
-import { getMessagePlainText, stickerPacks } from '../utils/richMessages'
+import StickerPicker from './StickerPicker'
+import { getMessagePlainText } from '../utils/richMessages'
 import { extractFirstUrl, fetchLinkPreview } from '../utils/linkPreview'
 
 const DRAFT_PREFIX = 'astrachat.draft.'
@@ -86,7 +87,6 @@ export default function Composer({
   })
   const [emojiOpen, setEmojiOpen] = useState(false)
   const [panelTab, setPanelTab] = useState('emoji')
-  const [activeStickerPack, setActiveStickerPack] = useState(0)
   const [attachments, setAttachments] = useState([])
   const [sending, setSending] = useState(false)
   const [sendProgress, setSendProgress] = useState(null)
@@ -619,32 +619,9 @@ export default function Composer({
             />
           )}
           {panelTab === 'sticker' && (
-            <div className="sticker-panel">
-              <div className="sticker-grid">
-                {stickerPacks[activeStickerPack]?.stickers.map((sticker) => (
-                  <button
-                    key={sticker.id}
-                    className="sticker-item"
-                    title={sticker.title}
-                    onClick={() => { sendRichAsset({ type: 'sticker', ...sticker }); setEmojiOpen(false) }}
-                  >
-                    {sticker.emoji}
-                  </button>
-                ))}
-              </div>
-              <div className="sticker-pack-tabs">
-                {stickerPacks.map((pack, i) => (
-                  <button
-                    key={pack.id}
-                    className={`sticker-pack-tab ${activeStickerPack === i ? 'active' : ''}`}
-                    title={pack.title}
-                    onClick={() => setActiveStickerPack(i)}
-                  >
-                    {pack.icon}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <StickerPicker
+              onSelect={(rich) => { sendRichAsset(rich); setEmojiOpen(false) }}
+            />
           )}
           {panelTab === 'gif' && (
             <GifPicker onSelect={(gif) => { sendRichAsset(gif); setEmojiOpen(false) }} />

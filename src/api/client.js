@@ -698,3 +698,19 @@ export function getMessageReadBy(chatId, messageId) {
     `/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}/read-by`,
   )
 }
+
+export function getStickerPacks() {
+  return request('/api/stickers/packs')
+}
+
+export function getInstalledStickerPacks() {
+  return request('/api/stickers/packs/installed')
+}
+
+export function installStickerPack(packId) {
+  return request(`/api/stickers/packs/${encodeURIComponent(packId)}/install`, { method: 'POST' })
+}
+
+export function uninstallStickerPack(packId) {
+  return request(`/api/stickers/packs/${encodeURIComponent(packId)}/install`, { method: 'DELETE' })
+}

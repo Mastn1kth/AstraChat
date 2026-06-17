@@ -2449,6 +2449,106 @@ app.delete('/api/keys/backup', requireAuth, async (request, response) => {
   response.json({ ok: true })
 })
 
+// ── Sticker packs ────────────────────────────────────────────────────────
+
+function publicStickerPack(pack, items = [], installed = false) {
+  return {
+    id: pack.id,
+    title: pack.title,
+    icon: pack.icon,
+    author: pack.author || '',
+    isDefault: Boolean(pack.is_default),
+    installed,
+    stickers: items.map((item) => ({
+      id: item.id,
+      packId: item.pack_id,
+      emoji: item.emoji,
+      title: item.title,
+    })),
+  }
+}
+
+app.get('/api/stickers/packs', requireAuth, async (request, response) => {
+  const packsResult = await db.query(
+    `SELECT sp.*, (usp.user_id IS NOT NULL) AS installed
+     FROM sticker_packs sp
+     LEFT JOIN user_sticker_packs usp ON usp.pack_id = sp.id AND usp.user_id = $1
+     ORDER BY sp.sort_order, sp.title`,
+    [request.user.id],
+  )
+  const itemsResult = await db.query(
+    'SELECT pack_id, id, emoji, title FROM sticker_pack_items ORDER BY pack_id, sort_order',
+  )
+  const itemsByPack = new Map()
+  for (const item of itemsResult.rows) {
+    if (!itemsByPack.has(item.pack_id)) itemsByPack.set(item.pack_id, [])
+    itemsByPack.get(item.pack_id).push(item)
+  }
+  const packs = packsResult.rows.map((pack) =>
+    publicStickerPack(pack, itemsByPack.get(pack.id) || [], Boolean(pack.installed)),
+  )
+  response.json({ packs })
+})
+
+app.get('/api/stickers/packs/installed', requireAuth, async (request, response) => {
+  const result = await db.query(
+    `SELECT sp.*
+     FROM user_sticker_packs usp
+     JOIN sticker_packs sp ON sp.id = usp.pack_id
+     WHERE usp.user_id = $1
+     ORDER BY usp.sort_order, usp.installed_at`,
+    [request.user.id],
+  )
+  if (!result.rows.length) {
+    response.json({ packs: [] })
+    return
+  }
+  const packIds = result.rows.map((r) => r.id)
+  const itemsResult = await db.query(
+    `SELECT pack_id, id, emoji, title FROM sticker_pack_items
+     WHERE pack_id = ANY($1)
+     ORDER BY pack_id, sort_order`,
+    [packIds],
+  )
+  const itemsByPack = new Map()
+  for (const item of itemsResult.rows) {
+    if (!itemsByPack.has(item.pack_id)) itemsByPack.set(item.pack_id, [])
+    itemsByPack.get(item.pack_id).push(item)
+  }
+  const packs = result.rows.map((pack) =>
+    publicStickerPack(pack, itemsByPack.get(pack.id) || [], true),
+  )
+  response.json({ packs })
+})
+
+app.post('/api/stickers/packs/:packId/install', requireAuth, async (request, response) => {
+  const { packId } = request.params
+  const pack = await db.query('SELECT id FROM sticker_packs WHERE id = $1', [packId])
+  if (!pack.rows.length) {
+    response.status(404).json({ error: 'Pack not found' })
+    return
+  }
+  const countResult = await db.query(
+    'SELECT COUNT(*) AS n FROM user_sticker_packs WHERE user_id = $1',
+    [request.user.id],
+  )
+  await db.query(
+    `INSERT INTO user_sticker_packs (user_id, pack_id, sort_order)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (user_id, pack_id) DO NOTHING`,
+    [request.user.id, packId, Number(countResult.rows[0].n)],
+  )
+  response.status(201).json({ ok: true })
+})
+
+app.delete('/api/stickers/packs/:packId/install', requireAuth, async (request, response) => {
+  await db.query(
+    'DELETE FROM user_sticker_packs WHERE user_id = $1 AND pack_id = $2',
+    [request.user.id, request.params.packId],
+  )
+  response.json({ ok: true })
+})
+
 // ── Admin panel ──────────────────────────────────────────────────────────
 // Token-protected management API + a self-contained HTML panel at /admin.
 // The token lives in ADMIN_TOKEN env or <dataDir>/.admin-token.

@@ -625,6 +625,74 @@ export const migrations = [
         DROP COLUMN IF EXISTS phone;
     `,
   },
+  {
+    id: '20260617_sticker_packs',
+    sql: `
+      CREATE TABLE IF NOT EXISTS sticker_packs (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        icon TEXT NOT NULL DEFAULT '🎭',
+        author TEXT NOT NULL DEFAULT '',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        is_default BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS sticker_pack_items (
+        pack_id TEXT NOT NULL REFERENCES sticker_packs(id) ON DELETE CASCADE,
+        id TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        title TEXT NOT NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (pack_id, id)
+      );
+
+      CREATE INDEX IF NOT EXISTS sticker_pack_items_pack_idx
+        ON sticker_pack_items(pack_id, sort_order);
+
+      CREATE TABLE IF NOT EXISTS user_sticker_packs (
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        pack_id TEXT NOT NULL REFERENCES sticker_packs(id) ON DELETE CASCADE,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        installed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, pack_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS user_sticker_packs_user_idx
+        ON user_sticker_packs(user_id, sort_order, installed_at);
+
+      INSERT INTO sticker_packs (id, title, icon, author, sort_order, is_default) VALUES
+        ('launch', 'Launch', '🚀', 'Onda', 0, TRUE),
+        ('vibes',  'Vibes',  '🌊', 'Onda', 1, TRUE),
+        ('feels',  'Feels',  '😊', 'Onda', 2, TRUE),
+        ('work',   'Work',   '💼', 'Onda', 3, TRUE)
+      ON CONFLICT (id) DO NOTHING;
+
+      INSERT INTO sticker_pack_items (pack_id, id, emoji, title, sort_order) VALUES
+        ('launch','ship','🚀','Ship it',0), ('launch','ok','👌','OK',1),
+        ('launch','done','✅','Done',2),    ('launch','fire','🔥','Hot',3),
+        ('launch','eyes','👀','Looking',4), ('launch','clap','👏','Nice',5),
+        ('launch','think','🤔','Hmm',6),   ('launch','100','💯','Perfect',7),
+        ('vibes','wave','🌊','Wave',0),     ('vibes','sun','☀️','Sunny',1),
+        ('vibes','moon','🌙','Night',2),    ('vibes','star','⭐','Star',3),
+        ('vibes','sparkles','✨','Magic',4),('vibes','rainbow','🌈','Rainbow',5),
+        ('vibes','flower','🌸','Bloom',6),  ('vibes','leaf','🍃','Fresh',7),
+        ('feels','smile','😊','Happy',0),   ('feels','laugh','😂','Lol',1),
+        ('feels','love','🥰','Love',2),     ('feels','cry','😢','Sad',3),
+        ('feels','angry','😤','Angry',4),   ('feels','cool','😎','Cool',5),
+        ('feels','nervous','😬','Nervous',6),('feels','sleep','😴','Sleepy',7),
+        ('work','laptop','💻','Working',0), ('work','coffee','☕','Coffee',1),
+        ('work','meeting','📅','Meeting',2),('work','chart','📈','Growing',3),
+        ('work','deadline','⏰','Deadline',4),('work','idea','💡','Idea',5),
+        ('work','bug','🐛','Bug',6),        ('work','deploy','🎯','Deploy',7)
+      ON CONFLICT (pack_id, id) DO NOTHING;
+    `,
+    downSql: `
+      DROP TABLE IF EXISTS user_sticker_packs;
+      DROP TABLE IF EXISTS sticker_pack_items;
+      DROP TABLE IF EXISTS sticker_packs;
+    `,
+  },
 ]
 
 async function getAppliedMigrationIds(database) {
