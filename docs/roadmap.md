@@ -36,15 +36,15 @@ Goal: make the existing messenger core reliable locally.
 - [x] Robust optimistic UI retry queue (exponential backoff 5→15→45s, 3 auto-retries; triggered on network online event).
 - [x] Persist pinned/muted/archived chat state on backend.
 - [x] Integration tests for message visibility (delete-for-me, clear-history, delete-for-everyone, pagination).
-- [ ] Integration tests for auth, media and WebSocket flows.
+- [x] Integration tests for auth, media and WebSocket flows.
 - [ ] Add e2e tests for the main user workflows.
 
 ## Phase 2 - Core Feature Completeness
 
 Goal: replace remaining mock surfaces with real server-backed behavior.
 
-- [ ] Phone-number login flow or explicit decision to keep username/password auth.
-- [ ] QR login.
+- [x] Phone-number login flow (SMS code + profile creation, backend + AuthScreen).
+- [x] QR login.
 - [x] Two-factor password (cloud password — scrypt-hashed, hint, three-step login, settings in Sidebar).
 - [x] Saved contact list: backend model, API and UI add/remove flow.
 - [x] Contact import: find registered users by phone number (bulk lookup, up to 100 numbers).
