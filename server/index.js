@@ -2811,7 +2811,12 @@ async function adminCount(sql, params = []) {
   return Number(result.rows[0]?.count || 0)
 }
 
-app.get('/admin', (_request, response) => {
+app.get('/admin', (request, response) => {
+  const token = request.headers['x-admin-token'] || request.query.token
+  if (!token || token !== config.adminToken) {
+    response.status(403).send('<!DOCTYPE html><html><body style="font-family:sans-serif;padding:40px"><h1>403 Forbidden</h1><p>Admin token required. Append <code>?token=YOUR_TOKEN</code> to the URL.</p></body></html>')
+    return
+  }
   response.sendFile(resolve(config.rootDir, 'server', 'admin-panel.html'))
 })
 

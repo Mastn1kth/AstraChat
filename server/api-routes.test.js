@@ -327,7 +327,7 @@ describe('API routes', () => {
   // ── Media upload ───────────────────────────────────────────
 
   it('uploads a file, returns media metadata, and serves it back', async () => {
-    const { cookie, user } = await registerUser(baseUrl, 'media_upload_user')
+    const { cookie } = await registerUser(baseUrl, 'media_upload_user')
 
     const buf = Buffer.from(
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
