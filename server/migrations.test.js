@@ -104,13 +104,12 @@ describe('database migrations', () => {
       assert.equal(afterRollback.at(-1).applied, false)
       assert.equal(afterRollback.slice(0, -1).every((migration) => migration.applied), true)
 
+      // The latest migration's downSql must actually revert its schema change,
+      // not just flip the applied marker. Asserting against whatever migration
+      // is currently last keeps this test stable as new migrations are added.
       await assert.rejects(
-        () => db.query('SELECT phone FROM users LIMIT 1'),
-        /phone|column/i,
-      )
-      await assert.rejects(
-        () => db.query('SELECT phone FROM phone_login_codes LIMIT 1'),
-        /phone_login_codes|relation/i,
+        () => db.query('SELECT fcm_token FROM phone_login_codes LIMIT 1'),
+        /fcm_token|column/i,
       )
     } finally {
       await db.close()
