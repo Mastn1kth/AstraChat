@@ -100,7 +100,7 @@ import {
   sendWallMessage,
 } from './api/client'
 import { ensureNotificationPermission, playIncomingSound, showDesktopNotification } from './utils/notify'
-import { disableWebPushNotifications, enableWebPushNotifications } from './utils/push'
+import { disableWebPushNotifications, enableWebPushNotifications, requestFcmTokenForAuth } from './utils/push'
 import { hasCompletedPermissionOnboarding } from './utils/permissions'
 import {
   decodeRichMessage,
@@ -1361,7 +1361,9 @@ function AppInner() {
   async function handlePhoneStart(input) {
     setAuth((current) => ({ ...current, status: 'pending', error: '' }))
     try {
-      const result = await startPhoneAuth(input)
+      // On native (Capacitor) request push permission now so the code can arrive as a push notification.
+      const fcmToken = await requestFcmTokenForAuth().catch(() => null)
+      const result = await startPhoneAuth({ ...input, fcmToken: fcmToken || undefined })
       setAuth({ status: 'anonymous', user: null, error: '' })
       return result
     } catch (error) {

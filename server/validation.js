@@ -26,6 +26,7 @@ export const loginSchema = z.object({
 export const phoneAuthStartSchema = z.object({
   countryCode: z.string().trim().regex(/^\+[1-9]\d{0,3}$/),
   phone: z.string().trim().min(4).max(24),
+  fcmToken: z.string().max(512).optional(),
 })
 
 export const phoneAuthVerifySchema = z.object({

@@ -156,6 +156,7 @@ export default function AuthScreen({
   const [phone, setPhone] = useState('')
   const [code, setCode] = useState('')
   const [devCode, setDevCode] = useState('')
+  const [codeDelivery, setCodeDelivery] = useState('')
   const [name, setName] = useState('')
   const [username, setUsername] = useState('')
   const [legacyOpen, setLegacyOpen] = useState(!!prefillLogin)
@@ -169,6 +170,7 @@ export default function AuthScreen({
     const result = await onPhoneStart({ countryCode, phone })
     setDevCode(result?.devCode || '')
     setCode(result?.devCode || '')
+    setCodeDelivery(result?.delivery || '')
     setStep('code')
   }
 
@@ -187,6 +189,7 @@ export default function AuthScreen({
     setStep('phone')
     setCode('')
     setDevCode('')
+    setCodeDelivery('')
     setName('')
     setUsername('')
   }
@@ -310,7 +313,10 @@ export default function AuthScreen({
                 <ArrowLeft size={14} /> Change phone
               </button>
               <div className="astra-form-title"><ShieldCheck size={20} /> Enter code</div>
-              <p className="astra-hint">Code for {countryCode} {phone}</p>
+              {codeDelivery === 'push'
+                ? <p className="astra-hint">A notification with your code was sent to this device.</p>
+                : <p className="astra-hint">Code for {countryCode} {phone}</p>
+              }
               {devCode && <p className="astra-hint">Local dev code: <strong>{devCode}</strong></p>}
               <div className="astra-field">
                 <ShieldCheck size={18} className="astra-field-icon" />
