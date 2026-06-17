@@ -115,6 +115,7 @@ export const profileSchema = z.object({
   name: z.string().trim().min(1).max(64),
   username: z.string().trim().min(3).max(32).regex(usernamePattern),
   bio: z.string().trim().max(240).default(''),
+  status: z.string().trim().max(80).default(''),
 })
 
 export const reactionSchema = z.object({
