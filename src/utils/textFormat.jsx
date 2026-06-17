@@ -3,6 +3,8 @@ import { useState } from 'react'
 const URL_RE = /https?:\/\/[^\s<>"']+/g
 const MENTION_RE = /@[\w.]+/g
 
+import { getCustomEmojiUrl } from './customEmojiStore'
+
 function parseInline(text) {
   const tokens = []
   let i = 0
@@ -17,6 +19,19 @@ function parseInline(text) {
   }
 
   while (i < len) {
+    // Custom emoji: :shortcode:
+    if (text[i] === ':') {
+      const end = text.indexOf(':', i + 1)
+      if (end > i + 1) {
+        const shortcode = text.slice(i + 1, end)
+        const ceUrl = /^\w+$/.test(shortcode) && getCustomEmojiUrl(shortcode)
+        if (ceUrl) {
+          tokens.push({ type: 'custom-emoji', shortcode, url: ceUrl })
+          i = end + 1
+          continue
+        }
+      }
+    }
     // Bold: **text**
     if (text[i] === '*' && text[i + 1] === '*') {
       const end = text.indexOf('**', i + 2)
@@ -102,6 +117,7 @@ function renderTokens(tokens, keyPrefix = '', currentUsername) {
   return tokens.flatMap((token, i) => {
     const key = `${keyPrefix}${i}`
     switch (token.type) {
+      case 'custom-emoji': return [<img key={key} src={token.url} alt={`:${token.shortcode}:`} title={token.shortcode} className="custom-emoji-inline" />]
       case 'bold':    return [<strong key={key}>{token.content}</strong>]
       case 'italic':  return [<em key={key}>{token.content}</em>]
       case 'code':    return [<code key={key} className="inline-code">{token.content}</code>]

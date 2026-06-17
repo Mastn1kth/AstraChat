@@ -715,6 +715,22 @@ export function uninstallStickerPack(packId) {
   return request(`/api/stickers/packs/${encodeURIComponent(packId)}/install`, { method: 'DELETE' })
 }
 
+export function getCustomEmojiPacks() {
+  return request('/api/custom-emoji/packs')
+}
+
+export function getInstalledCustomEmojiPacks() {
+  return request('/api/custom-emoji/packs/installed')
+}
+
+export function installCustomEmojiPack(packId) {
+  return request(`/api/custom-emoji/packs/${encodeURIComponent(packId)}/install`, { method: 'POST' })
+}
+
+export function uninstallCustomEmojiPack(packId) {
+  return request(`/api/custom-emoji/packs/${encodeURIComponent(packId)}/install`, { method: 'DELETE' })
+}
+
 export function getStories() {
   return request('/api/stories')
 }

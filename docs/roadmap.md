@@ -93,7 +93,7 @@ Goal: close the gap around expressive messaging.
 - [x] Sticker panel.
 - [x] Sticker packs and favorites (emoji-based; server-backed install/uninstall + localStorage recent + favorites).
 - [x] GIF search and recent GIFs (Tenor integration).
-- [ ] Custom emoji model.
+- [x] Custom emoji model (packs + items tables, install/uninstall API, inline `:shortcode:` rendering in messages, picker tab in composer).
 - [x] Voice player with waveform visualization and playback speed control.
 - [x] Audio player and persistent mini-player (survives chat switching).
 - [x] Media album sending (grouped upload with shared albumId, grid display in bubbles).

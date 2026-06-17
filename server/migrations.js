@@ -745,6 +745,75 @@ export const migrations = [
     `,
     downSql: `DROP TABLE IF EXISTS qr_tokens;`,
   },
+  {
+    id: '20260617_custom_emoji',
+    sql: `
+      CREATE TABLE IF NOT EXISTS custom_emoji_packs (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        thumbnail_url TEXT NOT NULL DEFAULT '',
+        author TEXT NOT NULL DEFAULT 'Onda',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        is_default BOOLEAN NOT NULL DEFAULT FALSE
+      );
+
+      CREATE TABLE IF NOT EXISTS custom_emoji_items (
+        pack_id TEXT NOT NULL REFERENCES custom_emoji_packs(id) ON DELETE CASCADE,
+        shortcode TEXT NOT NULL,
+        image_url TEXT NOT NULL,
+        title TEXT NOT NULL DEFAULT '',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (pack_id, shortcode)
+      );
+
+      CREATE INDEX IF NOT EXISTS custom_emoji_items_pack_idx
+        ON custom_emoji_items(pack_id, sort_order);
+
+      CREATE TABLE IF NOT EXISTS user_custom_emoji_packs (
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        pack_id TEXT NOT NULL REFERENCES custom_emoji_packs(id) ON DELETE CASCADE,
+        installed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, pack_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS user_custom_emoji_packs_user_idx
+        ON user_custom_emoji_packs(user_id, installed_at);
+
+      INSERT INTO custom_emoji_packs (id, title, thumbnail_url, author, sort_order, is_default) VALUES
+        ('reactions', 'Reactions',   'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/2764.png',  'Onda', 0, TRUE),
+        ('vibes',     'Vibes',       'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f30a.png', 'Onda', 1, TRUE),
+        ('animals',   'Cute Animals','https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f431.png', 'Onda', 2, TRUE)
+      ON CONFLICT (id) DO NOTHING;
+
+      INSERT INTO custom_emoji_items (pack_id, shortcode, image_url, title, sort_order) VALUES
+        ('reactions','heart',      'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/2764.png',  'Heart',        0),
+        ('reactions','fire',       'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f525.png', 'Fire',         1),
+        ('reactions','thumbsup',   'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f44d.png', 'Thumbs Up',    2),
+        ('reactions','joy',        'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f602.png', 'Joy',          3),
+        ('reactions','sparkles',   'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/2728.png',  'Sparkles',     4),
+        ('reactions','rocket',     'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f680.png', 'Rocket',       5),
+        ('reactions','tada',       'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f389.png', 'Party',        6),
+        ('reactions','eyes',       'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f440.png', 'Eyes',         7),
+        ('vibes',    'wave',       'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f30a.png', 'Wave',         0),
+        ('vibes',    'blossom',    'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f338.png', 'Blossom',      1),
+        ('vibes',    'dizzy',      'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f4ab.png', 'Dizzy',        2),
+        ('vibes',    'butterfly',  'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f98b.png', 'Butterfly',    3),
+        ('vibes',    'hundredpts', 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f4af.png', 'Hundred',      4),
+        ('vibes',    'grin',       'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f60a.png', 'Grin',         5),
+        ('animals',  'cat',        'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f431.png', 'Cat',          0),
+        ('animals',  'dog',        'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f436.png', 'Dog',          1),
+        ('animals',  'panda',      'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f43c.png', 'Panda',        2),
+        ('animals',  'fox',        'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f98a.png', 'Fox',          3),
+        ('animals',  'owl',        'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f989.png', 'Owl',          4),
+        ('animals',  'penguin',    'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f427.png', 'Penguin',      5)
+      ON CONFLICT (pack_id, shortcode) DO NOTHING;
+    `,
+    downSql: `
+      DROP TABLE IF EXISTS user_custom_emoji_packs;
+      DROP TABLE IF EXISTS custom_emoji_items;
+      DROP TABLE IF EXISTS custom_emoji_packs;
+    `,
+  },
 ]
 
 async function getAppliedMigrationIds(database) {

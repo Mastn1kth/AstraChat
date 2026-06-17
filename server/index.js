@@ -2628,6 +2628,78 @@ app.delete('/api/stickers/packs/:packId/install', requireAuth, async (request, r
   response.json({ ok: true })
 })
 
+// ── Custom emoji ─────────────────────────────────────────────────────────
+
+app.get('/api/custom-emoji/packs', requireAuth, async (request, response) => {
+  const [packs, items, installed] = await Promise.all([
+    db.query('SELECT * FROM custom_emoji_packs ORDER BY sort_order'),
+    db.query('SELECT pack_id, shortcode, image_url, title FROM custom_emoji_items ORDER BY pack_id, sort_order'),
+    db.query('SELECT pack_id FROM user_custom_emoji_packs WHERE user_id = $1', [request.user.id]),
+  ])
+  const installedSet = new Set(installed.rows.map((r) => r.pack_id))
+  const itemsByPack = {}
+  for (const item of items.rows) {
+    if (!itemsByPack[item.pack_id]) itemsByPack[item.pack_id] = []
+    itemsByPack[item.pack_id].push({ shortcode: item.shortcode, imageUrl: item.image_url, title: item.title })
+  }
+  response.json({
+    packs: packs.rows.map((p) => ({
+      id: p.id, title: p.title, thumbnailUrl: p.thumbnail_url, author: p.author,
+      installed: installedSet.has(p.id), isDefault: p.is_default,
+      emoji: itemsByPack[p.id] || [],
+    })),
+  })
+})
+
+app.get('/api/custom-emoji/packs/installed', requireAuth, async (request, response) => {
+  const [packs, items] = await Promise.all([
+    db.query(
+      `SELECT cep.* FROM user_custom_emoji_packs ucep
+       JOIN custom_emoji_packs cep ON cep.id = ucep.pack_id
+       WHERE ucep.user_id = $1 ORDER BY ucep.installed_at`,
+      [request.user.id],
+    ),
+    db.query(
+      `SELECT cei.pack_id, cei.shortcode, cei.image_url, cei.title
+       FROM custom_emoji_items cei
+       WHERE cei.pack_id IN (
+         SELECT pack_id FROM user_custom_emoji_packs WHERE user_id = $1
+       ) ORDER BY cei.pack_id, cei.sort_order`,
+      [request.user.id],
+    ),
+  ])
+  const itemsByPack = {}
+  for (const item of items.rows) {
+    if (!itemsByPack[item.pack_id]) itemsByPack[item.pack_id] = []
+    itemsByPack[item.pack_id].push({ shortcode: item.shortcode, imageUrl: item.image_url, title: item.title })
+  }
+  response.json({
+    packs: packs.rows.map((p) => ({
+      id: p.id, title: p.title, thumbnailUrl: p.thumbnail_url, author: p.author,
+      emoji: itemsByPack[p.id] || [],
+    })),
+  })
+})
+
+app.post('/api/custom-emoji/packs/:packId/install', requireAuth, async (request, response) => {
+  const { packId } = request.params
+  const pack = await db.query('SELECT id FROM custom_emoji_packs WHERE id = $1', [packId])
+  if (!pack.rows.length) return response.status(404).json({ error: 'Pack not found' })
+  await db.query(
+    'INSERT INTO user_custom_emoji_packs (user_id, pack_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+    [request.user.id, packId],
+  )
+  response.status(201).json({ ok: true })
+})
+
+app.delete('/api/custom-emoji/packs/:packId/install', requireAuth, async (request, response) => {
+  await db.query(
+    'DELETE FROM user_custom_emoji_packs WHERE user_id = $1 AND pack_id = $2',
+    [request.user.id, request.params.packId],
+  )
+  response.json({ ok: true })
+})
+
 // ── Stories ──────────────────────────────────────────────────────────────
 
 const storiesLimiter = rateLimit({ windowMs: 60_000, max: 10 })

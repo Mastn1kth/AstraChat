@@ -9,6 +9,7 @@ import { contacts as seedContacts, currentUser, initialChats, initialMessages } 
 import { byPinnedThenRecent, getLastMessage } from './utils/formatters'
 import { loadMessengerState, resetMessengerState, saveMessengerState } from './utils/storage'
 import { upsertAccount } from './utils/accounts'
+import { setCustomEmojiMap } from './utils/customEmojiStore'
 import { bumpAvatarCache } from './utils/avatarCache'
 import {
   changePassword,
@@ -70,6 +71,7 @@ import {
   removeCloudPassword,
   startPhoneAuth,
   verifyPhoneAuth,
+  getInstalledCustomEmojiPacks,
 } from './api/client'
 import {
   decryptBlobForUser,
@@ -1244,6 +1246,15 @@ function AppInner() {
     setState((current) => ({ ...current, user: appUser }))
     setAuth({ status: 'authenticated', user: appUser, error: '' })
     await loadServerWorkspace(user.id, encryptionPublicKey)
+    getInstalledCustomEmojiPacks()
+      .then(({ packs }) => {
+        const map = {}
+        for (const pack of packs) {
+          for (const e of pack.emoji) map[e.shortcode] = e.imageUrl
+        }
+        setCustomEmojiMap(map)
+      })
+      .catch(() => {})
     try {
       const { events } = await getSecurityEvents({ unread: true })
       if (events?.length) {

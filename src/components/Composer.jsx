@@ -29,6 +29,7 @@ import IconButton from './IconButton'
 import EmojiPicker from './EmojiPicker'
 import GifPicker from './GifPicker'
 import StickerPicker from './StickerPicker'
+import CustomEmojiPicker from './CustomEmojiPicker'
 import { getMessagePlainText } from '../utils/richMessages'
 import { extractFirstUrl, fetchLinkPreview } from '../utils/linkPreview'
 
@@ -604,9 +605,9 @@ export default function Composer({
       {emojiOpen && (
         <div className="emoji-popover" ref={emojiPopoverRef}>
           <div className="emoji-tabs">
-            {['emoji', 'sticker', 'gif', 'share'].map((tab) => (
+            {['emoji', 'custom', 'sticker', 'gif', 'share'].map((tab) => (
               <button key={tab} className={panelTab === tab ? 'active' : ''} onClick={() => setPanelTab(tab)}>
-                {tab === 'emoji' ? '😀' : tab === 'sticker' ? '🎭' : tab === 'gif' ? 'GIF' : '📎'}
+                {tab === 'emoji' ? '😀' : tab === 'custom' ? '⭐' : tab === 'sticker' ? '🎭' : tab === 'gif' ? 'GIF' : '📎'}
               </button>
             ))}
           </div>
@@ -614,6 +615,14 @@ export default function Composer({
             <EmojiPicker
               onSelect={(emoji) => {
                 setValue((current) => `${current}${emoji}`)
+                inputRef.current?.focus()
+              }}
+            />
+          )}
+          {panelTab === 'custom' && (
+            <CustomEmojiPicker
+              onSelect={(text) => {
+                setValue((current) => `${current}${text}`)
                 inputRef.current?.focus()
               }}
             />
