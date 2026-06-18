@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Trash2, X } from 'lucide-react'
 import Avatar from './Avatar'
-import { deleteStory, viewStory } from '../api/client'
+import { deleteStory, viewStory, reactToStory } from '../api/client'
 import { formatChatTime } from '../utils/formatters'
+
+const STORY_REACTIONS = ['❤️', '🔥', '😂', '😮', '👍', '🎉']
 
 const STORY_DURATION = 5000
 
@@ -10,6 +12,8 @@ export default function StoryViewer({ groups, initialGroupIndex = 0, currentUser
   const [groupIndex, setGroupIndex] = useState(initialGroupIndex)
   const [storyIndex, setStoryIndex] = useState(0)
   const [progress, setProgress] = useState(0)
+  // Overrides after user reacts (keyed by storyId); falls back to story.reactions from server
+  const [reactOverrides, setReactOverrides] = useState({})
   const pausedRef = useRef(false)
   const timerRef = useRef(null)
   const startRef = useRef(null)
@@ -58,6 +62,19 @@ export default function StoryViewer({ groups, initialGroupIndex = 0, currentUser
     if (!story?.id) return
     viewStory(story.id).catch(() => {})
   }, [story?.id])
+
+  async function handleReact(emoji) {
+    if (!story?.id) return
+    const current = reactOverrides[story.id] || { reactions: story.reactions || {}, myReaction: story.myReaction || null }
+    const next = current.myReaction === emoji ? '' : emoji
+    try {
+      const result = await reactToStory(story.id, next)
+      setReactOverrides((prev) => ({
+        ...prev,
+        [story.id]: { reactions: result.reactions, myReaction: result.myReaction },
+      }))
+    } catch { /* ignore */ }
+  }
 
   function setPaused(next) {
     if (next) {
@@ -143,6 +160,33 @@ export default function StoryViewer({ groups, initialGroupIndex = 0, currentUser
           )}
           {story.text && <p className="story-text">{story.text}</p>}
         </div>
+
+        {/* Reaction bar */}
+        {!isOwn && (
+          <div className="story-reactions" onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
+            {STORY_REACTIONS.map((emoji) => {
+              const data = reactOverrides[story.id] || { reactions: story.reactions || {}, myReaction: story.myReaction || null }
+              const count = (data.reactions || {})[emoji] || 0
+              const active = data.myReaction === emoji
+              return (
+                <button
+                  key={emoji}
+                  className={`story-react-btn ${active ? 'active' : ''}`}
+                  onClick={(e) => { e.stopPropagation(); handleReact(emoji) }}
+                >
+                  {emoji}{count > 0 && <span>{count}</span>}
+                </button>
+              )
+            })}
+          </div>
+        )}
+        {isOwn && Object.keys((reactOverrides[story.id]?.reactions || story.reactions) || {}).length > 0 && (
+          <div className="story-reactions story-reactions-owner">
+            {Object.entries(reactOverrides[story.id]?.reactions || story.reactions || {}).map(([emoji, count]) => (
+              <span key={emoji} className="story-react-count">{emoji} {count}</span>
+            ))}
+          </div>
+        )}
 
         {/* Nav zones */}
         <button className="story-nav story-nav-prev" onClick={(e) => { e.stopPropagation(); goPrev() }}>

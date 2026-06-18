@@ -3808,6 +3808,40 @@ textarea::placeholder {
 
 .story-group-dot.active { background: #fff; }
 
+.story-reactions {
+  position: absolute;
+  bottom: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  z-index: 10;
+}
+.story-react-btn {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(0,0,0,.45);
+  border: 1.5px solid rgba(255,255,255,.25);
+  border-radius: 20px;
+  color: #fff;
+  font-size: 18px;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: background .15s, transform .1s;
+}
+.story-react-btn span { font-size: 12px; }
+.story-react-btn:hover { background: rgba(0,0,0,.65); }
+.story-react-btn.active { background: rgba(255,255,255,.25); border-color: #fff; transform: scale(1.12); }
+.story-reactions-owner { bottom: 16px; }
+.story-react-count {
+  background: rgba(0,0,0,.45);
+  border-radius: 20px;
+  padding: 4px 8px;
+  font-size: 14px;
+  color: #fff;
+}
+
 /* ─── GifPicker ─── */
 .gif-root {
   display: flex;

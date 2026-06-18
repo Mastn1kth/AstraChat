@@ -740,6 +740,13 @@ export function viewStory(storyId) {
   return request(`/api/stories/${encodeURIComponent(storyId)}/view`, { method: 'POST' })
 }
 
+export function reactToStory(storyId, emoji) {
+  return request(`/api/stories/${encodeURIComponent(storyId)}/react`, {
+    method: 'POST',
+    body: JSON.stringify({ emoji }),
+  })
+}
+
 export function startQrLogin() {
   return request('/api/auth/qr/start', { method: 'POST' })
 }

@@ -214,7 +214,7 @@ router.delete('/api/custom-emoji/packs/:packId/install', requireAuth, async (req
 
 // ── Stories ───────────────────────────────────────────────────────────────────
 
-function publicStory(story, viewerIds = [], viewedByMe = false) {
+function publicStory(story, viewerIds = [], viewedByMe = false, reactions = {}, myReaction = null) {
   return {
     id: story.id,
     userId: story.user_id,
@@ -227,6 +227,8 @@ function publicStory(story, viewerIds = [], viewedByMe = false) {
     createdAt: story.created_at,
     viewCount: viewerIds.length,
     viewedByMe,
+    reactions,
+    myReaction,
   }
 }
 
@@ -271,6 +273,19 @@ router.get('/api/stories', requireAuth, async (request, response) => {
     if (row.viewer_id === userId) viewedByMeSet.add(row.story_id)
   }
 
+  const reactionsResult = await db.query(
+    `SELECT story_id, user_id, emoji FROM story_reactions WHERE story_id = ANY($1)`,
+    [storyIds],
+  )
+  const reactionsByStory = new Map()
+  const myReactionByStory = new Map()
+  for (const row of reactionsResult.rows) {
+    const agg = reactionsByStory.get(row.story_id) || {}
+    agg[row.emoji] = (agg[row.emoji] || 0) + 1
+    reactionsByStory.set(row.story_id, agg)
+    if (row.user_id === userId) myReactionByStory.set(row.story_id, row.emoji)
+  }
+
   const userIds = [...new Set(result.rows.map((r) => r.user_id))]
   const usersResult = await db.query(
     `SELECT id, name, username, avatar FROM users WHERE id = ANY($1)`,
@@ -287,6 +302,8 @@ router.get('/api/stories', requireAuth, async (request, response) => {
       story,
       viewersByStory.get(story.id) || [],
       viewedByMeSet.has(story.id),
+      reactionsByStory.get(story.id) || {},
+      myReactionByStory.get(story.id) || null,
     )
     if (entry) {
       entry.stories.push(storyPublic)
@@ -361,6 +378,38 @@ router.post('/api/stories/:storyId/view', requireAuth, async (request, response)
     [request.params.storyId, request.user.id],
   )
   response.json({ ok: true })
+})
+
+router.post('/api/stories/:storyId/react', requireAuth, async (request, response) => {
+  const emoji = String(request.body?.emoji || '').trim()
+  const storyResult = await db.query(
+    'SELECT id, user_id FROM stories WHERE id = $1 AND expires_at > NOW()',
+    [request.params.storyId],
+  )
+  if (!storyResult.rows.length) {
+    response.status(404).json({ error: 'Story not found' })
+    return
+  }
+  if (emoji) {
+    await db.query(
+      `INSERT INTO story_reactions (story_id, user_id, emoji)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (story_id, user_id) DO UPDATE SET emoji = $3, created_at = NOW()`,
+      [request.params.storyId, request.user.id, emoji],
+    )
+  } else {
+    await db.query(
+      'DELETE FROM story_reactions WHERE story_id = $1 AND user_id = $2',
+      [request.params.storyId, request.user.id],
+    )
+  }
+  const aggResult = await db.query(
+    `SELECT emoji, COUNT(*)::integer AS count FROM story_reactions
+     WHERE story_id = $1 GROUP BY emoji`,
+    [request.params.storyId],
+  )
+  const reactions = Object.fromEntries(aggResult.rows.map((r) => [r.emoji, r.count]))
+  response.json({ ok: true, reactions, myReaction: emoji || null })
 })
 
 export default router

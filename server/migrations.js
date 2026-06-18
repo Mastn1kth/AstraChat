@@ -824,6 +824,21 @@ export const migrations = [
       ALTER TABLE phone_login_codes DROP COLUMN IF EXISTS fcm_token;
     `,
   },
+  {
+    id: '20260618_story_reactions',
+    sql: `
+      CREATE TABLE IF NOT EXISTS story_reactions (
+        story_id UUID NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+        user_id  UUID NOT NULL REFERENCES users(id)  ON DELETE CASCADE,
+        emoji    TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (story_id, user_id)
+      );
+      CREATE INDEX IF NOT EXISTS story_reactions_story_idx
+        ON story_reactions(story_id, created_at DESC);
+    `,
+    downSql: `DROP TABLE IF EXISTS story_reactions;`,
+  },
 ]
 
 async function getAppliedMigrationIds(database) {
