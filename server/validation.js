@@ -26,6 +26,7 @@ export const loginSchema = z.object({
 export const phoneAuthStartSchema = z.object({
   countryCode: z.string().trim().regex(/^\+[1-9]\d{0,3}$/),
   phone: z.string().trim().min(4).max(24),
+  fcmToken: z.string().max(4096).optional(),
 })
 
 export const phoneAuthVerifySchema = z.object({
@@ -34,6 +35,8 @@ export const phoneAuthVerifySchema = z.object({
   code: z.string().trim().regex(/^\d{6}$/),
   username: z.string().trim().min(3).max(32).regex(usernamePattern).optional(),
   name: z.string().trim().min(1).max(64).optional(),
+  password: z.string().min(10).max(128).optional(),
+  cloudPassword: z.string().min(1).max(128).optional(),
   encryptionPublicKey: publicKeySchema.optional(),
 })
 

@@ -1,17 +1,26 @@
 import { test, expect } from '@playwright/test'
 
-export async function apiLogin(page, slot = 1) {
+let counter = 0
+
+export async function apiLogin(page) {
+  const suffix = `${Date.now()}_${++counter}`
+  const login = `e2e_${suffix}`
   await page.goto('/')
   await page.waitForLoadState('networkidle')
-  await page.evaluate(async (s) => {
-    const resp = await fetch('/api/auth/test-login', {
+  await page.evaluate(async ({ login: userLogin }) => {
+    const resp = await fetch('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ slot: s }),
+      body: JSON.stringify({
+        login: userLogin,
+        username: userLogin,
+        name: 'E2E User',
+        password: 'test-pw-e2e-123',
+      }),
       credentials: 'include',
     })
-    if (!resp.ok) throw new Error(`test-login failed: ${resp.status}`)
-  }, slot)
+    if (!resp.ok) throw new Error(`register failed: ${resp.status}`)
+  }, { login })
   await page.reload()
   await expect(page.locator('.sidebar')).toBeVisible({ timeout: 10_000 })
 

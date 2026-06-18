@@ -544,6 +544,90 @@
 
 .astra-field input::placeholder { color: #B8ADA4; }
 
+/* Phone field: country picker + number in one row */
+.astra-phone-field {
+  padding: 0;
+  gap: 0;
+  overflow: visible;
+  position: relative;
+}
+.astra-phone-field input {
+  flex: 1;
+  padding: 0 14px;
+  height: 100%;
+  background: transparent;
+  border: none;
+  font-size: 15px;
+  letter-spacing: 0.3px;
+  color: #2C1810;
+  outline: none;
+}
+.astra-phone-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 10px 0;
+  background: #E0D8D0;
+  flex-shrink: 0;
+}
+
+.astra-country { position: relative; flex-shrink: 0; }
+.astra-country-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 100%;
+  padding: 0 12px 0 14px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 600;
+  color: #2C1810;
+  border-radius: 12px 0 0 12px;
+  transition: background 0.15s;
+}
+.astra-country-btn:hover { background: #FAF6F2; }
+.astra-country-flag { font-size: 19px; line-height: 1; }
+.astra-country-code { color: #2C1810; }
+.astra-country-chev { color: #A89888; transition: transform 0.18s; }
+.astra-country-chev.open { transform: rotate(180deg); }
+
+.astra-country-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 260px;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  background: #fff;
+  border: 1.5px solid #E0D8D0;
+  border-radius: 14px;
+  box-shadow: 0 18px 40px -12px rgba(60, 40, 25, 0.28);
+  max-height: 280px;
+  overflow-y: auto;
+}
+.astra-country-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 9px 11px;
+  background: transparent;
+  border: none;
+  border-radius: 9px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #2C1810;
+  text-align: left;
+  transition: background 0.12s;
+}
+.astra-country-item:hover { background: #FAF6F2; }
+.astra-country-item.active { background: #F3E9E2; }
+.astra-country-name { flex: 1; color: #2C1810; }
+.astra-country-dial { color: #A89888; font-weight: 600; }
+
 .astra-eye {
   background: none;
   border: none;

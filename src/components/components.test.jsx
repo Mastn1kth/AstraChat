@@ -17,14 +17,13 @@ describe('React components', () => {
         onRegister={vi.fn()}
         onPhoneStart={vi.fn()}
         onPhoneVerify={vi.fn()}
-        onTestLogin={vi.fn()}
       />,
     )
 
     expect(html).toContain('Onda')
     expect(html).toContain('astra-form')
     expect(html).toContain('autoComplete="tel"')
-    expect(html).toContain('Send code')
+    expect(html).toContain('Отправить код')
   })
 
   it('renders chat state badges and unread count', () => {

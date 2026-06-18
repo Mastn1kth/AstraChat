@@ -814,6 +814,16 @@ export const migrations = [
       DROP TABLE IF EXISTS custom_emoji_packs;
     `,
   },
+  {
+    id: '20260618_phone_login_codes_fcm_token',
+    sql: `
+      ALTER TABLE phone_login_codes
+        ADD COLUMN IF NOT EXISTS fcm_token TEXT;
+    `,
+    downSql: `
+      ALTER TABLE phone_login_codes DROP COLUMN IF EXISTS fcm_token;
+    `,
+  },
 ]
 
 async function getAppliedMigrationIds(database) {

@@ -48,7 +48,6 @@ import {
   markSecurityEventRead,
   registerAccount,
   reportAbuse,
-  testLogin,
   searchUsers,
   sendChatMessage,
   startTotpSetup,
@@ -100,7 +99,7 @@ import {
   sendWallMessage,
 } from './api/client'
 import { ensureNotificationPermission, playIncomingSound, showDesktopNotification } from './utils/notify'
-import { disableWebPushNotifications, enableWebPushNotifications } from './utils/push'
+import { disableWebPushNotifications, enableWebPushNotifications, requestFcmTokenForAuth } from './utils/push'
 import { hasCompletedPermissionOnboarding } from './utils/permissions'
 import {
   decodeRichMessage,
@@ -1265,34 +1264,6 @@ function AppInner() {
     }
   }
 
-  async function handleLogin(input) {
-    setAuth((current) => ({ ...current, status: 'pending', error: '' }))
-    try {
-      const { user, totpRequired, cloudPasswordRequired, hint } = await loginAccount(input)
-      if (totpRequired) {
-        setAuth({
-          status: 'totp',
-          user: null,
-          error: '',
-          totpChallenge: { login: input.login, password: input.password },
-        })
-        return
-      }
-      if (cloudPasswordRequired) {
-        setAuth({
-          status: 'cloudPassword',
-          user: null,
-          error: '',
-          cloudChallenge: { login: input.login, password: input.password, hint: hint || null },
-        })
-        return
-      }
-      await completeAuthentication(user)
-    } catch (error) {
-      setAuth({ status: 'anonymous', user: null, error: error.message })
-    }
-  }
-
   async function handleTotpLogin({ code }) {
     const challenge = auth.totpChallenge
     if (!challenge) {
@@ -1323,6 +1294,34 @@ function AppInner() {
     }
   }
 
+  async function handleLogin(input) {
+    setAuth((current) => ({ ...current, status: 'pending', error: '' }))
+    try {
+      const { user, totpRequired, cloudPasswordRequired, hint } = await loginAccount(input)
+      if (totpRequired) {
+        setAuth({
+          status: 'totp',
+          user: null,
+          error: '',
+          totpChallenge: { login: input.login, password: input.password },
+        })
+        return
+      }
+      if (cloudPasswordRequired) {
+        setAuth({
+          status: 'cloudPassword',
+          user: null,
+          error: '',
+          cloudChallenge: { login: input.login, password: input.password, hint: hint || null },
+        })
+        return
+      }
+      await completeAuthentication(user)
+    } catch (error) {
+      setAuth({ status: 'anonymous', user: null, error: error.message })
+    }
+  }
+
   async function handleCloudPasswordLogin({ cloudPassword }) {
     const challenge = auth.cloudChallenge
     if (!challenge) {
@@ -1331,7 +1330,10 @@ function AppInner() {
     }
     setAuth((current) => ({ ...current, status: 'pending', error: '' }))
     try {
-      const { user } = await loginAccount({ ...challenge, cloudPassword })
+      const result = challenge.type === 'phone'
+        ? await verifyPhoneAuth({ ...challenge, cloudPassword })
+        : await loginAccount({ ...challenge, cloudPassword })
+      const { user } = result
       await completeAuthentication(user)
     } catch (error) {
       setAuth((current) => ({
@@ -1361,7 +1363,9 @@ function AppInner() {
   async function handlePhoneStart(input) {
     setAuth((current) => ({ ...current, status: 'pending', error: '' }))
     try {
-      const result = await startPhoneAuth(input)
+      // On native (Capacitor) request push permission now so the code can arrive as a push notification.
+      const fcmToken = await requestFcmTokenForAuth().catch(() => null)
+      const result = await startPhoneAuth({ ...input, fcmToken: fcmToken || undefined })
       setAuth({ status: 'anonymous', user: null, error: '' })
       return result
     } catch (error) {
@@ -1379,6 +1383,21 @@ function AppInner() {
         payload = { ...input, encryptionPublicKey: keyPair.publicKey }
       }
       const result = await verifyPhoneAuth(payload)
+      if (result.cloudPasswordRequired) {
+        setAuth({
+          status: 'cloudPassword',
+          user: null,
+          error: '',
+          cloudChallenge: {
+            type: 'phone',
+            countryCode: input.countryCode,
+            phone: input.phone,
+            code: input.code,
+            hint: result.hint || null,
+          },
+        })
+        return result
+      }
       if (result.profileRequired) {
         setAuth({ status: 'anonymous', user: null, error: '' })
         return result
@@ -1388,16 +1407,6 @@ function AppInner() {
     } catch (error) {
       setAuth({ status: 'anonymous', user: null, error: error.message })
       throw error
-    }
-  }
-
-  async function handleTestLogin(slot) {
-    setAuth((current) => ({ ...current, status: 'pending', error: '' }))
-    try {
-      const { user } = await testLogin(slot)
-      await completeAuthentication(user)
-    } catch (error) {
-      setAuth({ status: 'anonymous', user: null, error: error.message })
     }
   }
 
@@ -3452,7 +3461,6 @@ function AppInner() {
         onRegister={handleRegister}
         onPhoneStart={handlePhoneStart}
         onPhoneVerify={handlePhoneVerify}
-        onTestLogin={handleTestLogin}
         onQrSuccess={completeAuthentication}
         prefillLogin={prefillLogin}
       />

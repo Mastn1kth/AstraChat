@@ -66,6 +66,35 @@ export async function enableWebPushNotifications() {
   return { enabled: true }
 }
 
+// Gets an FCM token for the pre-auth flow (phone code delivery).
+// Requests OS permission if not yet granted. Returns null on web or if denied.
+export async function requestFcmTokenForAuth() {
+  if (!Capacitor.isNativePlatform()) return null
+  try {
+    const { PushNotifications } = await import('@capacitor/push-notifications')
+    const current = await PushNotifications.checkPermissions()
+    let permission = current
+    if (current.receive !== 'granted') {
+      permission = await PushNotifications.requestPermissions()
+    }
+    if (permission.receive !== 'granted') return null
+    return await new Promise((resolve) => {
+      let settled = false
+      const done = (value) => {
+        if (settled) return
+        settled = true
+        resolve(value)
+      }
+      PushNotifications.addListener('registration', ({ value }) => done(value))
+      PushNotifications.addListener('registrationError', () => done(null))
+      PushNotifications.register()
+      setTimeout(() => done(null), 8000)
+    })
+  } catch {
+    return null
+  }
+}
+
 export async function disableWebPushNotifications() {
   if (!canUsePush()) {
     await deletePushSubscription().catch(() => {})

@@ -42,6 +42,9 @@ ios/App/build/
 ios/DerivedData/
 *.keystore
 android/keystore.properties
+android/app/google-services.json
+ios/App/App/GoogleService-Info.plist
+firebase-service-account*.json
 backups/
 Onda-Admin.exe
 dist-admin/

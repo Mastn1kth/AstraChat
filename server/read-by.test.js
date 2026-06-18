@@ -46,6 +46,7 @@ describe('Read receipts - API endpoint', () => {
 
   before(async () => {
     dataDir = await mkdtemp(join(tmpdir(), 'astrachat-readby-test-'))
+    process.env.NODE_ENV = 'test'
     process.env.DATA_DIR = dataDir
     process.env.DATABASE_URL = ''
     process.env.ALLOWED_ORIGINS = ''
