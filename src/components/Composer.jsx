@@ -93,6 +93,7 @@ export default function Composer({
   const [sendProgress, setSendProgress] = useState(null)
   const [recording, setRecording] = useState(false)
   const [recordSeconds, setRecordSeconds] = useState(0)
+  const [liveWaveform, setLiveWaveform] = useState([])
   const [formatBarOpen, setFormatBarOpen] = useState(false)
   const [linkPreview, setLinkPreview] = useState(null)
   const [suppressPreview, setSuppressPreview] = useState(false)
@@ -109,6 +110,9 @@ export default function Composer({
   const recordChunksRef = useRef([])
   const recordTimerRef = useRef(null)
   const recordSendRef = useRef(true)
+  const analyserRef = useRef(null)
+  const audioCtxRef = useRef(null)
+  const waveAnimRef = useRef(null)
   const sendAbortRef = useRef(null)
   const mountedRef = useRef(true)
 
@@ -189,12 +193,26 @@ export default function Composer({
     if (!stream || recordStreamRef.current === stream) recordStreamRef.current = null
   }, [])
 
+  const stopWaveformAnimation = useCallback(() => {
+    if (waveAnimRef.current) {
+      cancelAnimationFrame(waveAnimRef.current)
+      waveAnimRef.current = null
+    }
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close().catch(() => {})
+      audioCtxRef.current = null
+    }
+    analyserRef.current = null
+  }, [])
+
   const resetRecordingState = useCallback(() => {
     clearRecordingTimer()
+    stopWaveformAnimation()
     if (!mountedRef.current) return
     setRecording(false)
     setRecordSeconds(0)
-  }, [clearRecordingTimer])
+    setLiveWaveform([])
+  }, [clearRecordingTimer, stopWaveformAnimation])
 
   useEffect(() => {
     return () => {
@@ -448,6 +466,36 @@ export default function Composer({
     recordStreamRef.current = stream
     recordChunksRef.current = []
     recordSendRef.current = true
+
+    // Live waveform via Web Audio API
+    try {
+      const ctx = new AudioContext()
+      const source = ctx.createMediaStreamSource(stream)
+      const analyser = ctx.createAnalyser()
+      analyser.fftSize = 64
+      analyser.smoothingTimeConstant = 0.7
+      source.connect(analyser)
+      audioCtxRef.current = ctx
+      analyserRef.current = analyser
+      const data = new Uint8Array(analyser.frequencyBinCount)
+      const BAR_COUNT = 28
+      function tick() {
+        if (!analyserRef.current) return
+        analyserRef.current.getByteFrequencyData(data)
+        // Sample evenly across the frequency spectrum
+        const step = Math.floor(data.length / BAR_COUNT)
+        const bars = []
+        for (let i = 0; i < BAR_COUNT; i++) {
+          bars.push(Math.min(1, (data[i * step] || 0) / 200))
+        }
+        setLiveWaveform(bars)
+        waveAnimRef.current = requestAnimationFrame(tick)
+      }
+      waveAnimRef.current = requestAnimationFrame(tick)
+    } catch {
+      // silently skip waveform if AudioContext unavailable
+    }
+
     let recorder
     try {
       recorder = new MediaRecorder(stream, { mimeType })
@@ -738,7 +786,20 @@ export default function Composer({
           </button>
           <div className="recording-status">
             <span className="recording-dot" />
-            <span>{t('composer.recording')} {formatRecordTime(recordSeconds)}</span>
+            {liveWaveform.length > 0 ? (
+              <div className="recording-waveform" aria-hidden="true">
+                {liveWaveform.map((v, i) => (
+                  <span
+                    key={i}
+                    className="recording-waveform-bar"
+                    style={{ '--h': `${Math.max(0.12, v).toFixed(3)}` }}
+                  />
+                ))}
+              </div>
+            ) : (
+              <span>{t('composer.recording')}</span>
+            )}
+            <span className="recording-timer">{formatRecordTime(recordSeconds)}</span>
           </div>
           <button className="send-button" onClick={() => stopRecording(true)} aria-label="Send voice message">
             <Send size={20} />
