@@ -90,7 +90,7 @@ Goal: make group/channel workflows real, not only UI states.
 - [x] Post views and repost counters.
 - [x] Channel discussion groups.
 - [x] Channel stats.
-- [ ] Reaction aggregation in channel posts (emoji breakdown by type).
+- [x] Reaction aggregation in channel posts (emoji breakdown by type — already via publicMessagesFromRows).
 - [ ] Join/leave event messages in group history.
 
 ## Phase 4 — Media, Stickers and Rich Messages
@@ -110,9 +110,9 @@ Goal: close the gap around expressive messaging.
 - [x] File drag-and-drop to chat area (overlay indicator, 100 MB limit, multi-file).
 - [x] Location message (coordinates + map link).
 - [x] Contact card messages.
-- [ ] Live waveform during voice recording (realtime amplitude bars).
+- [x] Live waveform during voice recording (realtime amplitude bars via Web Audio API).
 - [ ] Live location sharing (sends GPS updates every N seconds).
-- [ ] Chat background / wallpaper customization per chat.
+- [x] Chat background / wallpaper customization per chat (picker in ProfilePanel, stored in localStorage).
 
 ## Phase 5 — Calls and Stories
 
@@ -124,7 +124,8 @@ Goal: implement real-time group calls and ephemeral stories.
 - [x] Screen sharing with real media track support.
 - [x] Stories list, viewer and privacy settings (24h expiry, view tracking).
 - [ ] SFU/MCU media server for large production group calls.
-- [ ] Story reactions and replies.
+- [x] Story reactions (6-emoji bar, aggregated counts, toggle; replies TODO).
+- [ ] Story replies.
 - [ ] Story mentions and highlights.
 
 ## Phase 6 — Security and Production Architecture
