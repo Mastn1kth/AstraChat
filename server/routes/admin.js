@@ -19,12 +19,6 @@ import { parseBody, pushSubscriptionSchema, deletePushSubscriptionSchema, fcmTok
 import { publicWallMessage } from '../server-helpers.js'
 import { normalizePushExpiration } from '../push-service.js'
 
-export const TEST_ACCOUNTS = {
-  1: { login: 'test_one', name: 'Test One', password: 'astrachat-demo-one' },
-  2: { login: 'test_two', name: 'Test Two', password: 'astrachat-demo-two' },
-}
-export const TEST_ACCOUNT_LOGINS = new Set(Object.values(TEST_ACCOUNTS).map((a) => a.login))
-
 function safeEqual(a, b) {
   const ab = Buffer.from(String(a || ''))
   const bb = Buffer.from(String(b || ''))
@@ -59,7 +53,7 @@ async function adminCount(sql, params = []) {
 
 const router = Router()
 
-router.get('/admin', (_request, response) => {
+router.get('/admin', requireAuth, (_request, response) => {
   response.sendFile(resolve(config.rootDir, 'server', 'admin-panel.html'))
 })
 
@@ -111,10 +105,6 @@ router.delete('/api/admin/users/:userId', requireAdmin, async (request, response
     response.status(404).json({ error: 'User not found' })
     return
   }
-  if (TEST_ACCOUNT_LOGINS.has(target.rows[0].login)) {
-    response.status(400).json({ error: 'Test accounts cannot be deleted' })
-    return
-  }
   await db.transaction(async (tx) => {
     await tx.query('DELETE FROM messages WHERE sender_id = $1', [userId])
     await tx.query('DELETE FROM calls WHERE initiator_id = $1 OR recipient_id = $1', [userId])
@@ -127,8 +117,7 @@ router.delete('/api/admin/users/:userId', requireAdmin, async (request, response
 router.post('/api/admin/purge-test-users', requireAdmin, async (_request, response) => {
   const junk = await db.query(
     `SELECT id, login FROM users
-     WHERE login ~ '^(alice_media_|bob_media_|profile_[ab]_|sessions_|test_[a-z0-9]{6})'
-       AND login NOT IN ('test_one', 'test_two')`,
+     WHERE login ~ '^(alice_media_|bob_media_|profile_[ab]_|sessions_|test_[a-z0-9]{6}|e2e_[0-9]+_[0-9]+)'`,
   )
   for (const row of junk.rows) {
     await db.transaction(async (tx) => {
