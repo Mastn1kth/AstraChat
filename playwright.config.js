@@ -43,7 +43,7 @@ export default defineConfig({
         SESSION_COOKIE_SAME_SITE: 'lax',
         SESSION_COOKIE_SECURE: 'false',
         TRUST_PROXY: '',
-        NODE_ENV: 'development',
+        NODE_ENV: 'test',
       },
     },
     {

@@ -1,6 +1,9 @@
 import { apiLogin, expect, test } from './fixtures.js'
 
 async function openSavedMessages(page) {
+  // Dismiss permission onboarding if present
+  const later = page.locator('button', { hasText: /later/i })
+  if (await later.isVisible({ timeout: 2_000 }).catch(() => false)) await later.click()
   await page.locator('.chat-item').first().click()
   await expect(page.locator('.composer, footer.composer')).toBeVisible({ timeout: 5000 })
 }

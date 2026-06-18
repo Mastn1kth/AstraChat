@@ -1570,10 +1570,39 @@ function AppInner() {
       .sort(byPinnedThenRecent)
   }, [presence, state.chats, state.contacts, state.messages, typingByChat])
 
-  // Reflect total unread count in the browser tab title (Telegram-style "(3) Onda").
+  // Reflect total unread count in the browser tab title and favicon badge.
   useEffect(() => {
     const totalUnread = chatSummaries.reduce((sum, chat) => sum + (chat.unread || 0), 0)
     document.title = totalUnread > 0 ? `(${totalUnread}) ${APP_TITLE}` : APP_TITLE
+
+    const link = document.querySelector("link[rel~='icon']")
+    if (!link) return
+    if (totalUnread === 0) {
+      link.href = '/favicon.svg'
+      return
+    }
+    const canvas = document.createElement('canvas')
+    canvas.width = 32
+    canvas.height = 32
+    const ctx = canvas.getContext('2d')
+    const img = new Image()
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0, 32, 32)
+      // Red badge circle
+      const label = totalUnread > 99 ? '99+' : String(totalUnread)
+      const r = label.length > 1 ? 10 : 8
+      ctx.beginPath()
+      ctx.arc(26, 6, r, 0, Math.PI * 2)
+      ctx.fillStyle = '#ef4444'
+      ctx.fill()
+      ctx.fillStyle = '#fff'
+      ctx.font = `bold ${label.length > 1 ? 9 : 11}px sans-serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(label, 26, 6)
+      link.href = canvas.toDataURL()
+    }
+    img.src = '/favicon.svg'
   }, [chatSummaries])
 
   // Open a chat from an invite link (?add=username) once the workspace has loaded.
