@@ -9,6 +9,7 @@ import {
   QrCode,
   RefreshCw,
   ShieldCheck,
+  Smartphone,
   UserCircle2,
   Waves,
 } from 'lucide-react'
@@ -38,7 +39,7 @@ function QrLoginPanel({ onBack, onSuccess }) {
         const { token: t } = await startQrLogin()
         if (cancelled) return
         const url = `${window.location.origin}/qr-login?token=${encodeURIComponent(t)}`
-        const dataUrl = await QRCodeLib.toDataURL(url, { width: 200, margin: 2, color: { dark: '#1a1a2e', light: '#ffffff' } })
+        const dataUrl = await QRCodeLib.toDataURL(url, { width: 220, margin: 2, color: { dark: '#1a1a2e', light: '#ffffff' } })
         if (cancelled) return
         setToken(t)
         setQrDataUrl(dataUrl)
@@ -75,34 +76,68 @@ function QrLoginPanel({ onBack, onSuccess }) {
   }, [status, token, onSuccess])
 
   return (
-    <main className="astra-auth">
-      <div className="astra-left">
-        <div className="astra-logo"><div className="astra-logo-icon"><Waves size={18} /></div><span>Onda</span></div>
-        <div className="astra-form">
-          <button type="button" className="astra-link" onClick={onBack} style={{ alignSelf: 'flex-start' }}>
-            <ArrowLeft size={14} /> {t('auth.back')}
-          </button>
-          <div className="astra-form-title"><QrCode size={20} /> {t('auth.qrScanTitle')}</div>
-          <p className="astra-hint">{t('auth.qrScanHint')}</p>
+    <main className="astra-auth astra-qr-screen">
+      <button type="button" className="astra-qr-back" onClick={onBack}>
+        <ArrowLeft size={16} />
+        <span>{t('auth.back')}</span>
+      </button>
 
-          <div className="qr-box">
-            {status === 'loading' && <div className="qr-placeholder">{t('auth.qrGenerating')}</div>}
-            {status === 'error' && <div className="qr-placeholder qr-error">{t('auth.qrFailed')}</div>}
-            {status === 'expired' && <div className="qr-placeholder qr-error">{t('auth.qrExpired')}</div>}
-            {status === 'confirmed' && <div className="qr-placeholder qr-ok">{t('auth.qrConfirmed')}</div>}
-            {status === 'pending' && qrDataUrl && (
-              <img src={qrDataUrl} alt="QR code" className="qr-image" />
-            )}
+      <div className="astra-qr-wrap">
+        <div className="astra-logo" style={{ justifyContent: 'center', marginBottom: 20 }}>
+          <div className="astra-logo-icon"><Waves size={18} /></div>
+          <span>Onda</span>
+        </div>
+
+        <h2 className="astra-qr-title">{t('auth.qrScanTitle')}</h2>
+        <p className="astra-qr-desc">{t('auth.qrScanHint')}</p>
+
+        <div className={`astra-qr-card${status === 'confirmed' ? ' astra-qr-card--ok' : ''}`}>
+          {status === 'loading' && (
+            <div className="astra-qr-state">
+              <div className="astra-qr-spinner" />
+              <span className="astra-qr-state-text">{t('auth.qrGenerating')}</span>
+            </div>
+          )}
+          {(status === 'error' || status === 'expired') && (
+            <div className="astra-qr-state">
+              <RefreshCw size={28} style={{ color: '#c0392b', marginBottom: 8 }} />
+              <span className="astra-qr-state-text" style={{ color: '#c0392b' }}>
+                {status === 'expired' ? t('auth.qrExpired') : t('auth.qrFailed')}
+              </span>
+              <button type="button" className="astra-qr-retry" onClick={handleRetry}>
+                <RefreshCw size={14} /> {t('auth.qrRefresh')}
+              </button>
+            </div>
+          )}
+          {status === 'confirmed' && (
+            <div className="astra-qr-state">
+              <ShieldCheck size={40} style={{ color: '#27ae60', marginBottom: 8 }} />
+              <span className="astra-qr-state-text" style={{ color: '#27ae60', fontWeight: 700 }}>
+                {t('auth.qrConfirmed')}
+              </span>
+            </div>
+          )}
+          {status === 'pending' && qrDataUrl && (
+            <img src={qrDataUrl} alt="QR code" className="astra-qr-img" />
+          )}
+        </div>
+
+        {status === 'pending' && (
+          <div className="astra-qr-waiting">
+            <span className="astra-qr-dot" />
+            <span>{t('auth.qrWaiting')}</span>
           </div>
+        )}
 
-          {(status === 'expired' || status === 'error') && (
-            <button type="button" className="astra-link" onClick={handleRetry}>
-              <RefreshCw size={14} /> {t('auth.qrRefresh')}
-            </button>
-          )}
-          {status === 'pending' && (
-            <p className="astra-hint" style={{ textAlign: 'center' }}>{t('auth.qrWaiting')}</p>
-          )}
+        <div className="astra-qr-steps">
+          <div className="astra-qr-step">
+            <Smartphone size={16} />
+            <span>{t('auth.qrStep1')}</span>
+          </div>
+          <div className="astra-qr-step">
+            <QrCode size={16} />
+            <span>{t('auth.qrStep2')}</span>
+          </div>
         </div>
       </div>
     </main>
@@ -155,7 +190,7 @@ function CountryPicker({ value, onChange }) {
       >
         <span className="astra-country-flag">{selected.flag}</span>
         <span className="astra-country-code">{selected.code}</span>
-        <ChevronDown size={15} className={`astra-country-chev ${open ? 'open' : ''}`} />
+        <ChevronDown size={14} className={`astra-country-chev ${open ? 'open' : ''}`} />
       </button>
       {open && (
         <ul className="astra-country-menu" role="listbox">
@@ -224,7 +259,8 @@ export default function AuthScreen({
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [formError, setFormError] = useState('')
-  const [legacyOpen, setLegacyOpen] = useState(!!prefillLogin)
+  // authMode: 'phone' | 'password' — toggles the full view on the phone step
+  const [authMode, setAuthMode] = useState(prefillLogin ? 'password' : 'phone')
   const [legacyLogin, setLegacyLogin] = useState(prefillLogin || '')
   const [legacyPassword, setLegacyPassword] = useState('')
   const [cloudPassword, setCloudPassword] = useState('')
@@ -267,6 +303,19 @@ export default function AuthScreen({
     }
     setFormError('')
     await onPhoneVerify({ countryCode, phone, code, name, username, password })
+  }
+
+  function handleFormSubmit(event) {
+    if (step === 'phone' && authMode === 'password') {
+      event.preventDefault()
+      onLogin({ login: legacyLogin, password: legacyPassword })
+    } else if (step === 'phone') {
+      submitPhone(event)
+    } else if (step === 'code') {
+      submitCode(event)
+    } else if (step === 'profile') {
+      submitProfile(event)
+    }
   }
 
   function goBackToPhone() {
@@ -330,6 +379,8 @@ export default function AuthScreen({
     )
   }
 
+  const isPasswordMode = step === 'phone' && authMode === 'password'
+
   return (
     <main className="astra-auth">
       <div className="astra-left">
@@ -345,12 +396,8 @@ export default function AuthScreen({
           <em className="astra-em">{t('auth.phoneEm')}</em><br />
           {t('auth.phoneNoun')}
         </h1>
-        <p className="astra-sub">{t('auth.phoneSub')}</p>
 
-        <form
-          className="astra-form"
-          onSubmit={step === 'phone' ? submitPhone : step === 'code' ? submitCode : submitProfile}
-        >
+        <form className="astra-form" onSubmit={handleFormSubmit}>
           <div className="astra-lang-section">
             <div className="astra-lang-label"><Globe size={14} /> {t('set.language')}</div>
             <div className="astra-lang-cards">
@@ -368,7 +415,8 @@ export default function AuthScreen({
             </div>
           </div>
 
-          {step === 'phone' && (
+          {/* Phone step — phone mode */}
+          {step === 'phone' && authMode === 'phone' && (
             <div className="astra-field astra-phone-field">
               <CountryPicker value={countryCode} onChange={setCountryCode} />
               <span className="astra-phone-sep" />
@@ -383,6 +431,32 @@ export default function AuthScreen({
                 autoFocus
               />
             </div>
+          )}
+
+          {/* Phone step — password mode (replaces phone field) */}
+          {step === 'phone' && authMode === 'password' && (
+            <>
+              <div className="astra-field">
+                <UserCircle2 size={18} className="astra-field-icon" />
+                <input
+                  value={legacyLogin}
+                  onChange={(event) => setLegacyLogin(event.target.value)}
+                  autoFocus
+                  autoComplete="username"
+                  placeholder={t('auth.loginOrUsername')}
+                />
+              </div>
+              <div className="astra-field">
+                <LockKeyhole size={18} className="astra-field-icon" />
+                <input
+                  value={legacyPassword}
+                  onChange={(event) => setLegacyPassword(event.target.value)}
+                  type="password"
+                  autoComplete="current-password"
+                  placeholder={t('auth.password')}
+                />
+              </div>
+            </>
           )}
 
           {step === 'code' && (
@@ -474,7 +548,8 @@ export default function AuthScreen({
             type="submit"
             disabled={
               pending ||
-              (step === 'phone' && phone.replace(/\D/g, '').length < 4) ||
+              (isPasswordMode && (!legacyLogin || !legacyPassword)) ||
+              (step === 'phone' && authMode === 'phone' && phone.replace(/\D/g, '').length < 4) ||
               (step === 'code' && code.length !== 6) ||
               (step === 'profile' && (
                 !name.trim() ||
@@ -488,46 +563,41 @@ export default function AuthScreen({
             <span>
               {pending
                 ? t('auth.wait')
-                : step === 'phone'
-                  ? t('auth.sendCode')
-                  : step === 'code'
-                    ? t('auth.continue')
-                    : t('auth.createAccount')}
+                : isPasswordMode
+                  ? t('auth.passwordLogin')
+                  : step === 'phone'
+                    ? t('auth.sendCode')
+                    : step === 'code'
+                      ? t('auth.continue')
+                      : t('auth.createAccount')}
             </span>
             <ArrowRight size={18} />
           </button>
 
-          <button type="button" className="astra-link" onClick={() => setLegacyOpen((value) => !value)}>
-            {t('auth.loginWithPassword')}
-          </button>
-
-          {legacyOpen && (
-            <div className="astra-legacy-login">
-              <div className="astra-field">
-                <UserCircle2 size={18} className="astra-field-icon" />
-                <input value={legacyLogin} onChange={(event) => setLegacyLogin(event.target.value)} placeholder={t('auth.loginOrUsername')} />
-              </div>
-              <div className="astra-field">
-                <LockKeyhole size={18} className="astra-field-icon" />
-                <input value={legacyPassword} onChange={(event) => setLegacyPassword(event.target.value)} type="password" placeholder={t('auth.password')} />
-              </div>
-              <button
-                type="button"
-                className="astra-link"
-                disabled={pending || !legacyLogin || !legacyPassword}
-                onClick={() => onLogin({ login: legacyLogin, password: legacyPassword })}
-              >
-                {t('auth.passwordLogin')}
-              </button>
-            </div>
+          {/* Toggle between phone and password modes */}
+          {step === 'phone' && (
+            <button
+              type="button"
+              className="astra-link"
+              onClick={() => setAuthMode(authMode === 'phone' ? 'password' : 'phone')}
+            >
+              {authMode === 'phone'
+                ? t('auth.loginWithPassword')
+                : <><ArrowLeft size={12} style={{ verticalAlign: 'middle' }} /> {t('auth.loginWithPhone')}</>
+              }
+            </button>
           )}
 
-          <div className="astra-divider"><span>{t('auth.or')}</span></div>
-
-          <button type="button" className="astra-qr-row" onClick={() => setStep('qr')} disabled={pending}>
-            <QrCode size={20} className="astra-qr-icon" />
-            <span>{t('auth.qrLogin')}</span>
-          </button>
+          {/* QR login — only shown in phone mode */}
+          {step === 'phone' && authMode === 'phone' && (
+            <>
+              <div className="astra-divider"><span>{t('auth.or')}</span></div>
+              <button type="button" className="astra-qr-row" onClick={() => setStep('qr')} disabled={pending}>
+                <QrCode size={20} className="astra-qr-icon" />
+                <span>{t('auth.qrLogin')}</span>
+              </button>
+            </>
+          )}
         </form>
       </div>
 
