@@ -4274,6 +4274,29 @@ textarea::placeholder {
   padding: 0 12px 18px;
 }
 
+/* ── Per-chat wallpaper row in ProfilePanel ──────────────────────────────── */
+.panel-wallpaper-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: var(--bubble-bg);
+  flex-wrap: wrap;
+}
+.panel-wallpaper-row > span {
+  font-size: 13px;
+  color: var(--text);
+  flex-shrink: 0;
+}
+.panel-wallpaper-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1;
+  justify-content: flex-end;
+}
+
 /* ── Invite Links section ─────────────────────────────────────────────────── */
 .invite-links-section {
   padding: 8px 12px 12px;

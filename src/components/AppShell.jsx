@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { getChatWallpaper } from '../utils/chatWallpapers'
 import { Pin, X } from 'lucide-react'
 import Sidebar from './Sidebar'
 import GlobalSearchPanel from './GlobalSearchPanel'
@@ -186,6 +187,14 @@ export default function AppShell({
     }, 0)
     return () => window.clearTimeout(timer)
   }, [selectedChat?.id])
+
+  // Apply per-chat wallpaper when switching chats
+  useEffect(() => {
+    const main = document.querySelector('.chat-area')
+    if (!main) return
+    const perChat = selectedChat?.id ? getChatWallpaper(selectedChat.id) : null
+    main.dataset.chatBg = perChat || settings?.chatBackground || 'default'
+  }, [selectedChat?.id, settings?.chatBackground])
 
   const pinnedMessageId = selectedChat?.pinnedMessageId || null
   const pinnedMessage = pinnedMessageId
@@ -434,7 +443,7 @@ export default function AppShell({
         onOpenStoryViewer={(groups, idx, onDeleted) => setStoryViewer({ groups, idx, onDeleted })}
       />
 
-      <main className="chat-area" data-chat-bg={settings.chatBackground || 'default'}>
+      <main className="chat-area" data-chat-bg={(selectedChat?.id && getChatWallpaper(selectedChat.id)) || settings.chatBackground || 'default'}>
         {hasChat ? (
           <>
             <ChatHeader

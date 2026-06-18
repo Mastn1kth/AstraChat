@@ -28,6 +28,9 @@ import FocusSchedule from './FocusSchedule'
 import { formatMessageTime } from '../utils/formatters'
 import { t } from '../i18n'
 import { getChannelStats, getChatAdminLog, getChatBans, unbanChatMember, getChatInvites, createChatInvite, revokeChatInvite, getChatJoinRequests, reviewChatJoinRequest, getChatMedia, getChatDiscussion, setChatDiscussion } from '../api/client'
+import { getChatWallpaper, setChatWallpaper } from '../utils/chatWallpapers'
+
+const WALLPAPERS = ['default', 'plain', 'lavender', 'mint', 'peach', 'night']
 
 const linkPattern = /\bhttps?:\/\/[^\s<>"']+/gi
 const roleOptions = ['owner', 'admin', 'moderator', 'member']
@@ -106,7 +109,15 @@ export default function ProfilePanel({
   const [copiedInviteId, setCopiedInviteId] = useState('')
   const [joinRequests, setJoinRequests] = useState(null)
   const [joinRequestsLoading, setJoinRequestsLoading] = useState(false)
+  const [chatWallpaper, setChatWallpaperState] = useState(() => getChatWallpaper(chat?.id) || 'default')
   const { confirm, dialog } = useConfirm()
+
+  function handleWallpaperChange(preset) {
+    setChatWallpaperState(preset)
+    setChatWallpaper(chat?.id, preset === 'default' ? null : preset)
+    const main = document.querySelector('.chat-area')
+    if (main) main.dataset.chatBg = preset
+  }
 
   const isBackendGroup = chat.backend && (contact.type === 'group' || contact.type === 'channel')
   const canModeratePrivateContact = chat.backend && contact.type === 'private' && contact.id !== currentUserId
@@ -681,6 +692,22 @@ export default function ProfilePanel({
         <button onClick={onArchive}>
           <Archive size={17} /> {chat.archived ? t('chat.unarchive') : t('chat.archive')}
         </button>
+        <div className="panel-wallpaper-row">
+          <Image size={15} />
+          <span>{t('appearance.wallpaper')}</span>
+          <div className="panel-wallpaper-grid">
+            {WALLPAPERS.map((bg) => (
+              <button
+                key={bg}
+                type="button"
+                className={`wallpaper-swatch wallpaper-${bg} ${chatWallpaper === bg ? 'active' : ''}`}
+                onClick={() => handleWallpaperChange(bg)}
+                aria-label={bg}
+                title={bg}
+              />
+            ))}
+          </div>
+        </div>
         {isBackendGroup && contact.type === 'group' && isOwnerOrAdmin && (
           <button onClick={toggleAdminPanel} className={adminPanel ? 'active' : ''}>
             <Shield size={17} /> {t('pp.adminSettings')}
