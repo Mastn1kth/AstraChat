@@ -60,6 +60,10 @@ if (isProduction && (!vapidPublicKey || !vapidPrivateKey || !vapidSubject)) {
   throw new Error('VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT are required in production')
 }
 
+if (isProduction && !process.env.FCM_SERVICE_ACCOUNT_JSON && !process.env.FCM_SERVICE_ACCOUNT_FILE) {
+  throw new Error('FCM_SERVICE_ACCOUNT_JSON or FCM_SERVICE_ACCOUNT_FILE is required in production')
+}
+
 if (vapidSubject && !vapidSubject.startsWith('mailto:') && !vapidSubject.startsWith('https://')) {
   throw new Error('VAPID_SUBJECT must start with mailto: or https://')
 }

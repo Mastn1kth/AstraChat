@@ -2,14 +2,13 @@ import { useEffect, useRef, useState } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
-  FlaskConical,
+  ChevronDown,
   Globe,
   Hash,
   LockKeyhole,
   QrCode,
   RefreshCw,
   ShieldCheck,
-  Smartphone,
   UserCircle2,
   Waves,
 } from 'lucide-react'
@@ -18,6 +17,7 @@ import { useT, useLang, setLang, LANGUAGES } from '../i18n'
 import { startQrLogin, pollQrStatus } from '../api/client'
 
 function QrLoginPanel({ onBack, onSuccess }) {
+  const t = useT()
   const [qrDataUrl, setQrDataUrl] = useState('')
   const [token, setToken] = useState('')
   const [status, setStatus] = useState('loading')
@@ -80,16 +80,16 @@ function QrLoginPanel({ onBack, onSuccess }) {
         <div className="astra-logo"><div className="astra-logo-icon"><Waves size={18} /></div><span>Onda</span></div>
         <div className="astra-form">
           <button type="button" className="astra-link" onClick={onBack} style={{ alignSelf: 'flex-start' }}>
-            <ArrowLeft size={14} /> Back
+            <ArrowLeft size={14} /> {t('auth.back')}
           </button>
-          <div className="astra-form-title"><QrCode size={20} /> Scan QR code</div>
-          <p className="astra-hint">Open Onda on another device, go to Settings → Devices and scan this code.</p>
+          <div className="astra-form-title"><QrCode size={20} /> {t('auth.qrScanTitle')}</div>
+          <p className="astra-hint">{t('auth.qrScanHint')}</p>
 
           <div className="qr-box">
-            {status === 'loading' && <div className="qr-placeholder">Generating…</div>}
-            {status === 'error' && <div className="qr-placeholder qr-error">Failed to generate QR</div>}
-            {status === 'expired' && <div className="qr-placeholder qr-error">QR expired</div>}
-            {status === 'confirmed' && <div className="qr-placeholder qr-ok">✓ Confirmed</div>}
+            {status === 'loading' && <div className="qr-placeholder">{t('auth.qrGenerating')}</div>}
+            {status === 'error' && <div className="qr-placeholder qr-error">{t('auth.qrFailed')}</div>}
+            {status === 'expired' && <div className="qr-placeholder qr-error">{t('auth.qrExpired')}</div>}
+            {status === 'confirmed' && <div className="qr-placeholder qr-ok">{t('auth.qrConfirmed')}</div>}
             {status === 'pending' && qrDataUrl && (
               <img src={qrDataUrl} alt="QR code" className="qr-image" />
             )}
@@ -97,11 +97,11 @@ function QrLoginPanel({ onBack, onSuccess }) {
 
           {(status === 'expired' || status === 'error') && (
             <button type="button" className="astra-link" onClick={handleRetry}>
-              <RefreshCw size={14} /> Refresh QR
+              <RefreshCw size={14} /> {t('auth.qrRefresh')}
             </button>
           )}
           {status === 'pending' && (
-            <p className="astra-hint" style={{ textAlign: 'center' }}>Waiting for scan…</p>
+            <p className="astra-hint" style={{ textAlign: 'center' }}>{t('auth.qrWaiting')}</p>
           )}
         </div>
       </div>
@@ -110,23 +110,86 @@ function QrLoginPanel({ onBack, onSuccess }) {
 }
 
 const COUNTRIES = [
-  { code: '+7', label: 'Russia / Kazakhstan' },
-  { code: '+1', label: 'United States' },
-  { code: '+44', label: 'United Kingdom' },
-  { code: '+49', label: 'Germany' },
-  { code: '+33', label: 'France' },
-  { code: '+90', label: 'Turkey' },
-  { code: '+971', label: 'UAE' },
+  { code: '+7', label: 'Russia / Kazakhstan', labelRu: 'Россия / Казахстан', flag: '🇷🇺' },
+  { code: '+1', label: 'United States', labelRu: 'США', flag: '🇺🇸' },
+  { code: '+44', label: 'United Kingdom', labelRu: 'Великобритания', flag: '🇬🇧' },
+  { code: '+49', label: 'Germany', labelRu: 'Германия', flag: '🇩🇪' },
+  { code: '+33', label: 'France', labelRu: 'Франция', flag: '🇫🇷' },
+  { code: '+90', label: 'Turkey', labelRu: 'Турция', flag: '🇹🇷' },
+  { code: '+971', label: 'UAE', labelRu: 'ОАЭ', flag: '🇦🇪' },
 ]
 
+function countryLabel(country, lang) {
+  return lang === 'ru' ? country.labelRu : country.label
+}
+
 const PREVIEW_BUBBLES = [
-  { own: false, name: 'Nina Park', color: '#7C5CBF', text: 'Profile is ready. Check it?' },
-  { own: true, name: 'You', color: '#8B4035', text: 'Already here. Quiet and clean.' },
-  { own: false, name: 'Design guild', color: '#3A7D8B', text: 'New thread is live.' },
+  { own: false, nameKey: 'auth.previewName1', textKey: 'auth.previewText1', color: '#7C5CBF' },
+  { own: true, nameKey: 'auth.previewName2', textKey: 'auth.previewText2', color: '#8B4035' },
+  { own: false, nameKey: 'auth.previewName3', textKey: 'auth.previewText3', color: '#3A7D8B' },
 ]
+
+function CountryPicker({ value, onChange }) {
+  const lang = useLang()
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  const selected = COUNTRIES.find((country) => country.code === value) || COUNTRIES[0]
+
+  useEffect(() => {
+    if (!open) return undefined
+    function handleClick(event) {
+      if (ref.current && !ref.current.contains(event.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [open])
+
+  return (
+    <div className="astra-country" ref={ref}>
+      <button
+        type="button"
+        className="astra-country-btn"
+        onClick={() => setOpen((value) => !value)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span className="astra-country-flag">{selected.flag}</span>
+        <span className="astra-country-code">{selected.code}</span>
+        <ChevronDown size={15} className={`astra-country-chev ${open ? 'open' : ''}`} />
+      </button>
+      {open && (
+        <ul className="astra-country-menu" role="listbox">
+          {COUNTRIES.map((country) => (
+            <li key={country.code}>
+              <button
+                type="button"
+                role="option"
+                aria-selected={country.code === value}
+                className={`astra-country-item ${country.code === value ? 'active' : ''}`}
+                onClick={() => { onChange(country.code); setOpen(false) }}
+              >
+                <span className="astra-country-flag">{country.flag}</span>
+                <span className="astra-country-name">{countryLabel(country, lang)}</span>
+                <span className="astra-country-dial">{country.code}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
 
 function cleanPhone(value) {
   return value.replace(/[^\d\s()-]/g, '').slice(0, 24)
+}
+
+function matchDialCode(value) {
+  const normalized = String(value || '').replace(/[^\d+]/g, '')
+  if (!normalized.startsWith('+')) return null
+  return [...COUNTRIES]
+    .sort((a, b) => b.code.length - a.code.length)
+    .find((country) => normalized.startsWith(country.code)) || null
 }
 
 function cleanUsername(value) {
@@ -145,7 +208,6 @@ export default function AuthScreen({
   onCancelTotp,
   onPhoneStart,
   onPhoneVerify,
-  onTestLogin,
   onQrSuccess,
   prefillLogin,
 }) {
@@ -159,6 +221,9 @@ export default function AuthScreen({
   const [codeDelivery, setCodeDelivery] = useState('')
   const [name, setName] = useState('')
   const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [formError, setFormError] = useState('')
   const [legacyOpen, setLegacyOpen] = useState(!!prefillLogin)
   const [legacyLogin, setLegacyLogin] = useState(prefillLogin || '')
   const [legacyPassword, setLegacyPassword] = useState('')
@@ -174,6 +239,16 @@ export default function AuthScreen({
     setStep('code')
   }
 
+  function handlePhoneChange(value) {
+    const country = matchDialCode(value)
+    if (country) {
+      setCountryCode(country.code)
+      setPhone(cleanPhone(value.slice(country.code.length)))
+      return
+    }
+    setPhone(cleanPhone(value))
+  }
+
   async function submitCode(event) {
     event.preventDefault()
     const result = await onPhoneVerify({ countryCode, phone, code })
@@ -182,7 +257,16 @@ export default function AuthScreen({
 
   async function submitProfile(event) {
     event.preventDefault()
-    await onPhoneVerify({ countryCode, phone, code, name, username })
+    if (password.length < 10) {
+      setFormError(t('auth.passwordMin'))
+      return
+    }
+    if (password !== confirmPassword) {
+      setFormError(t('auth.passwordMismatch'))
+      return
+    }
+    setFormError('')
+    await onPhoneVerify({ countryCode, phone, code, name, username, password })
   }
 
   function goBackToPhone() {
@@ -192,6 +276,9 @@ export default function AuthScreen({
     setCodeDelivery('')
     setName('')
     setUsername('')
+    setPassword('')
+    setConfirmPassword('')
+    setFormError('')
   }
 
   if (step === 'qr') {
@@ -204,17 +291,17 @@ export default function AuthScreen({
         <div className="astra-left">
           <div className="astra-logo"><div className="astra-logo-icon"><Waves size={18} /></div><span>Onda</span></div>
           <form className="astra-form" onSubmit={(event) => { event.preventDefault(); onCloudPasswordLogin({ cloudPassword }) }}>
-            <div className="astra-form-title"><LockKeyhole size={20} /> Two-step verification</div>
-            {cloudPasswordHint && <p className="astra-hint">Hint: <em>{cloudPasswordHint}</em></p>}
+            <div className="astra-form-title"><LockKeyhole size={20} /> {t('auth.cloudTitle')}</div>
+            {cloudPasswordHint && <p className="astra-hint">{t('auth.cloudHint')} <em>{cloudPasswordHint}</em></p>}
             <div className="astra-field">
               <LockKeyhole size={18} className="astra-field-icon" />
-              <input value={cloudPassword} onChange={(event) => setCloudPassword(event.target.value)} type="password" autoFocus placeholder="Cloud password" />
+              <input value={cloudPassword} onChange={(event) => setCloudPassword(event.target.value)} type="password" autoFocus placeholder={t('auth.cloudPlaceholder')} />
             </div>
             {error && <p className="astra-error">{error}</p>}
             <button className="astra-cta" type="submit" disabled={pending || !cloudPassword}>
               <span>{pending ? t('auth.checking') : t('auth.verify')}</span><ArrowRight size={18} />
             </button>
-            <button type="button" className="astra-link" onClick={onCancelTotp}>Back</button>
+            <button type="button" className="astra-link" onClick={onCancelTotp}>{t('auth.back')}</button>
           </form>
         </div>
       </main>
@@ -236,7 +323,7 @@ export default function AuthScreen({
             <button className="astra-cta" type="submit" disabled={pending || totpCode.length !== 6}>
               <span>{pending ? t('auth.checking') : t('auth.verify')}</span><ArrowRight size={18} />
             </button>
-            <button type="button" className="astra-link" onClick={onCancelTotp}>Back</button>
+            <button type="button" className="astra-link" onClick={onCancelTotp}>{t('auth.back')}</button>
           </form>
         </div>
       </main>
@@ -255,10 +342,10 @@ export default function AuthScreen({
 
         <h1 className="astra-headline">
           Onda<br />
-          <em className="astra-em">phone-first</em><br />
-          messenger.
+          <em className="astra-em">{t('auth.phoneEm')}</em><br />
+          {t('auth.phoneNoun')}
         </h1>
-        <p className="astra-sub">Enter your phone number. Onda will give you a login code.</p>
+        <p className="astra-sub">{t('auth.phoneSub')}</p>
 
         <form
           className="astra-form"
@@ -282,42 +369,33 @@ export default function AuthScreen({
           </div>
 
           {step === 'phone' && (
-            <>
-              <div className="astra-field">
-                <Smartphone size={18} className="astra-field-icon" />
-                <select value={countryCode} onChange={(event) => setCountryCode(event.target.value)} aria-label="Country code">
-                  {COUNTRIES.map((country) => (
-                    <option key={country.code} value={country.code}>{country.code} {country.label}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="astra-field">
-                <Smartphone size={18} className="astra-field-icon" />
-                <input
-                  value={phone}
-                  onChange={(event) => setPhone(cleanPhone(event.target.value))}
-                  inputMode="tel"
-                  autoComplete="tel"
-                  placeholder="Phone number"
-                  minLength={4}
-                  required
-                  autoFocus
-                />
-              </div>
-            </>
+            <div className="astra-field astra-phone-field">
+              <CountryPicker value={countryCode} onChange={setCountryCode} />
+              <span className="astra-phone-sep" />
+              <input
+                value={phone}
+                onChange={(event) => handlePhoneChange(event.target.value)}
+                inputMode="tel"
+                autoComplete="tel"
+                placeholder={t('auth.phonePlaceholder')}
+                minLength={4}
+                required
+                autoFocus
+              />
+            </div>
           )}
 
           {step === 'code' && (
             <>
               <button type="button" className="astra-link" onClick={goBackToPhone}>
-                <ArrowLeft size={14} /> Change phone
+                <ArrowLeft size={14} /> {t('auth.changePhone')}
               </button>
-              <div className="astra-form-title"><ShieldCheck size={20} /> Enter code</div>
+              <div className="astra-form-title"><ShieldCheck size={20} /> {t('auth.enterCode')}</div>
               {codeDelivery === 'push'
-                ? <p className="astra-hint">A notification with your code was sent to this device.</p>
-                : <p className="astra-hint">Code for {countryCode} {phone}</p>
+                ? <p className="astra-hint">{t('auth.codePush')}</p>
+                : <p className="astra-hint">{t('auth.codeForPhone', { phone: `${countryCode} ${phone}` })}</p>
               }
-              {devCode && <p className="astra-hint">Local dev code: <strong>{devCode}</strong></p>}
+              {devCode && <p className="astra-hint">{t('auth.devCode')} <strong>{devCode}</strong></p>}
               <div className="astra-field">
                 <ShieldCheck size={18} className="astra-field-icon" />
                 <input
@@ -337,16 +415,16 @@ export default function AuthScreen({
           {step === 'profile' && (
             <>
               <button type="button" className="astra-link" onClick={() => setStep('code')}>
-                <ArrowLeft size={14} /> Back to code
+                <ArrowLeft size={14} /> {t('auth.backToCode')}
               </button>
-              <div className="astra-form-title"><UserCircle2 size={20} /> Create profile</div>
+              <div className="astra-form-title"><UserCircle2 size={20} /> {t('auth.profileTitle')}</div>
               <div className="astra-field">
                 <UserCircle2 size={18} className="astra-field-icon" />
                 <input
                   value={name}
                   onChange={(event) => setName(event.target.value.slice(0, 64))}
                   autoComplete="name"
-                  placeholder="Nickname"
+                  placeholder={t('auth.nickname')}
                   required
                   autoFocus
                 />
@@ -357,15 +435,39 @@ export default function AuthScreen({
                   value={username}
                   onChange={(event) => setUsername(cleanUsername(event.target.value))}
                   autoComplete="username"
-                  placeholder="username"
+                  placeholder={t('auth.usernamePlaceholder')}
                   minLength={3}
+                  required
+                />
+              </div>
+              <div className="astra-field">
+                <LockKeyhole size={18} className="astra-field-icon" />
+                <input
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder={t('auth.password')}
+                  minLength={10}
+                  required
+                />
+              </div>
+              <div className="astra-field">
+                <LockKeyhole size={18} className="astra-field-icon" />
+                <input
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder={t('auth.confirmPassword')}
+                  minLength={10}
                   required
                 />
               </div>
             </>
           )}
 
-          {error && <p className="astra-error">{error}</p>}
+          {(formError || error) && <p className="astra-error">{formError || error}</p>}
 
           <button
             className="astra-cta"
@@ -374,34 +476,40 @@ export default function AuthScreen({
               pending ||
               (step === 'phone' && phone.replace(/\D/g, '').length < 4) ||
               (step === 'code' && code.length !== 6) ||
-              (step === 'profile' && (!name.trim() || username.length < 3))
+              (step === 'profile' && (
+                !name.trim() ||
+                username.length < 3 ||
+                password.length < 10 ||
+                confirmPassword.length < 10 ||
+                password !== confirmPassword
+              ))
             }
           >
             <span>
               {pending
                 ? t('auth.wait')
                 : step === 'phone'
-                  ? 'Send code'
+                  ? t('auth.sendCode')
                   : step === 'code'
-                    ? 'Continue'
-                    : 'Create account'}
+                    ? t('auth.continue')
+                    : t('auth.createAccount')}
             </span>
             <ArrowRight size={18} />
           </button>
 
           <button type="button" className="astra-link" onClick={() => setLegacyOpen((value) => !value)}>
-            Login with password
+            {t('auth.loginWithPassword')}
           </button>
 
           {legacyOpen && (
             <div className="astra-legacy-login">
               <div className="astra-field">
                 <UserCircle2 size={18} className="astra-field-icon" />
-                <input value={legacyLogin} onChange={(event) => setLegacyLogin(event.target.value)} placeholder="login or username" />
+                <input value={legacyLogin} onChange={(event) => setLegacyLogin(event.target.value)} placeholder={t('auth.loginOrUsername')} />
               </div>
               <div className="astra-field">
                 <LockKeyhole size={18} className="astra-field-icon" />
-                <input value={legacyPassword} onChange={(event) => setLegacyPassword(event.target.value)} type="password" placeholder="password" />
+                <input value={legacyPassword} onChange={(event) => setLegacyPassword(event.target.value)} type="password" placeholder={t('auth.password')} />
               </div>
               <button
                 type="button"
@@ -409,7 +517,7 @@ export default function AuthScreen({
                 disabled={pending || !legacyLogin || !legacyPassword}
                 onClick={() => onLogin({ login: legacyLogin, password: legacyPassword })}
               >
-                Password login
+                {t('auth.passwordLogin')}
               </button>
             </div>
           )}
@@ -418,34 +526,30 @@ export default function AuthScreen({
 
           <button type="button" className="astra-qr-row" onClick={() => setStep('qr')} disabled={pending}>
             <QrCode size={20} className="astra-qr-icon" />
-            <span>Login via QR code</span>
-          </button>
-          <button type="button" className="astra-qr-row" onClick={() => onTestLogin(1)} disabled={pending}>
-            <FlaskConical size={20} className="astra-qr-icon" />
-            <span>{t('auth.testLogin')}</span>
-          </button>
-          <button type="button" className="astra-qr-row" onClick={() => onTestLogin(2)} disabled={pending}>
-            <FlaskConical size={20} className="astra-qr-icon" />
-            <span>{t('auth.testLogin2')}</span>
+            <span>{t('auth.qrLogin')}</span>
           </button>
         </form>
       </div>
 
       <div className="astra-right">
         <div className="astra-preview">
-          {PREVIEW_BUBBLES.map((bubble, index) => (
+          {PREVIEW_BUBBLES.map((bubble, index) => {
+            const name = t(bubble.nameKey)
+            const text = t(bubble.textKey)
+            return (
             <div key={index} className={`astra-bubble ${bubble.own ? 'own' : ''}`}>
               {!bubble.own && (
                 <div className="astra-bubble-avatar" style={{ background: bubble.color }}>
-                  {bubble.name[0]}
+                  {name[0] || '?'}
                 </div>
               )}
               <div className="astra-bubble-body" style={bubble.own ? { background: bubble.color } : {}}>
-                {!bubble.own && <span className="astra-bubble-name" style={{ color: bubble.color }}>{bubble.name}</span>}
-                <span className="astra-bubble-text">{bubble.text}</span>
+                {!bubble.own && <span className="astra-bubble-name" style={{ color: bubble.color }}>{name}</span>}
+                <span className="astra-bubble-text">{text}</span>
               </div>
             </div>
-          ))}
+            )
+          })}
         </div>
       </div>
     </main>

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Onda — Политика конфиденциальности / Privacy Policy</title>
+  <title>Onda - Политика конфиденциальности / Privacy Policy</title>
   <style>
     body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; max-width: 760px; margin: 0 auto; padding: 32px 20px 64px; color: #2C1810; background: #FAF6F1; line-height: 1.6; }
     h1 { font-size: 26px; } h2 { font-size: 19px; margin-top: 36px; } h3 { font-size: 16px; }
@@ -18,36 +18,33 @@
 
   <section id="ru">
     <h1>Политика конфиденциальности Onda</h1>
-    <small>Обновлено: 11 июня 2026 г.</small>
+    <small>Обновлено: 18 июня 2026 г.</small>
 
     <h2>Кратко</h2>
-    <p>Onda — мессенджер со сквозным шифрованием. Содержимое ваших личных сообщений и файлов
-    шифруется на вашем устройстве, и сервер не может его прочитать.</p>
+    <p>Onda - мессенджер с приватностью по умолчанию. Личные сообщения и медиа шифруются перед хранением и передачей через сервер. Это не является заявлением о полном аудированном end-to-end протоколе: независимая верификация устройств, safety numbers, полноценная ротация ключей и восстановление ключей еще требуют отдельного аудита и доработки.</p>
 
     <h2>Какие данные мы храним</h2>
     <ul>
-      <li><strong>Аккаунт:</strong> логин, имя, имя пользователя, хеш пароля (сам пароль не хранится).</li>
-      <li><strong>Сообщения:</strong> только в зашифрованном виде (E2EE). Расшифровать их можем только вы и собеседник.</li>
-      <li><strong>Файлы и медиа:</strong> в зашифрованном виде.</li>
-      <li><strong>Метаданные:</strong> время отправки, участники чатов, время последнего визита — необходимы для доставки сообщений.</li>
-      <li><strong>Живая стена:</strong> анонимные публичные послания; они не связаны с вашим аккаунтом и видны всем пользователям.</li>
-      <li><strong>Технические данные сессий:</strong> IP-адрес и браузер активных сеансов — для безопасности аккаунта (раздел «Активные сеансы»).</li>
+      <li><strong>Аккаунт:</strong> логин, имя, username, телефон при телефонном входе, хеш пароля. Сам пароль не хранится.</li>
+      <li><strong>Сообщения:</strong> зашифрованные payload-данные сообщений и служебные данные доставки.</li>
+      <li><strong>Файлы и медиа:</strong> хранятся в зашифрованном виде и доступны через проверку прав доступа.</li>
+      <li><strong>Метаданные:</strong> время отправки, участники чатов, статусы прочтения, время последней активности.</li>
+      <li><strong>Сессии:</strong> IP-адрес, браузер или устройство активной сессии для безопасности аккаунта.</li>
+      <li><strong>Живая стена:</strong> анонимные публичные сообщения, если пользователь сам их отправляет.</li>
     </ul>
 
     <h2>Чего мы не делаем</h2>
     <ul>
-      <li>Не читаем и не можем читать ваши переписки.</li>
-      <li>Не продаём и не передаём данные третьим лицам.</li>
-      <li>Не показываем рекламу и не профилируем вас.</li>
+      <li>Не продаем пользовательские данные.</li>
+      <li>Не используем рекламное профилирование.</li>
+      <li>Не обещаем аудированную защиту уровня secret chats, пока такой протокол не внедрен и не проверен.</li>
     </ul>
 
     <h2>Уведомления</h2>
-    <p>Для push-уведомлений используются сервисы платформы (Google FCM / Apple APNs).
-    В уведомлении не передаётся текст сообщения в открытом виде.</p>
+    <p>Push-уведомления используют сервисы платформы, например Google FCM или Apple APNs. Текст личных сообщений не должен отправляться в уведомлениях в открытом виде.</p>
 
     <h2>Удаление данных</h2>
-    <p>Вы можете удалить аккаунт в настройках («Удалить аккаунт») — при этом удаляются профиль,
-    сообщения и файлы. Анонимные послания на стене не связаны с аккаунтом и остаются до плановой очистки.</p>
+    <p>Аккаунт можно удалить в настройках. При удалении удаляются профиль, сообщения и файлы, связанные с аккаунтом. Анонимные публичные записи не связаны с аккаунтом напрямую и могут оставаться до плановой очистки.</p>
 
     <h2>Контакты</h2>
     <p>Вопросы о конфиденциальности: support@onda.example.com</p>
@@ -57,36 +54,33 @@
 
   <section id="en">
     <h1>Onda Privacy Policy</h1>
-    <small>Last updated: June 11, 2026</small>
+    <small>Last updated: June 18, 2026</small>
 
     <h2>In short</h2>
-    <p>Onda is an end-to-end encrypted messenger. The content of your private messages and files
-    is encrypted on your device; the server cannot read it.</p>
+    <p>Onda is a privacy-focused messenger. Private messages and media are encrypted before they are stored and relayed through the server. This is not a claim of a complete audited end-to-end protocol: independent device verification, safety numbers, key rotation and hardened key recovery still require separate implementation and review.</p>
 
     <h2>Data we store</h2>
     <ul>
-      <li><strong>Account:</strong> login, name, username, password hash (we never store the password itself).</li>
-      <li><strong>Messages:</strong> encrypted only (E2EE). Only you and your recipients can decrypt them.</li>
-      <li><strong>Files and media:</strong> stored encrypted.</li>
-      <li><strong>Metadata:</strong> timestamps, chat membership, last-seen time — required to deliver messages.</li>
-      <li><strong>Live wall:</strong> anonymous public notes; they are not linked to your account and are visible to all users.</li>
-      <li><strong>Session data:</strong> IP address and browser of active sessions, for account security.</li>
+      <li><strong>Account:</strong> login, name, username, phone number for phone login, and password hash. We do not store the password itself.</li>
+      <li><strong>Messages:</strong> encrypted message payloads and delivery metadata.</li>
+      <li><strong>Files and media:</strong> stored encrypted and served through access checks.</li>
+      <li><strong>Metadata:</strong> timestamps, chat membership, read state and last-seen time.</li>
+      <li><strong>Sessions:</strong> IP address and browser or device information for account security.</li>
+      <li><strong>Live wall:</strong> anonymous public notes if the user posts them.</li>
     </ul>
 
     <h2>What we don't do</h2>
     <ul>
-      <li>We do not and cannot read your conversations.</li>
-      <li>We do not sell or share your data with third parties.</li>
-      <li>No ads, no profiling.</li>
+      <li>We do not sell user data.</li>
+      <li>We do not use ad profiling.</li>
+      <li>We do not claim audited secret-chat-grade protection until that protocol is implemented and reviewed.</li>
     </ul>
 
     <h2>Notifications</h2>
-    <p>Push notifications use platform services (Google FCM / Apple APNs).
-    Message text is never sent in plain form inside a notification.</p>
+    <p>Push notifications use platform services such as Google FCM or Apple APNs. Private message text should not be sent in plain form inside notifications.</p>
 
     <h2>Data deletion</h2>
-    <p>You can delete your account in Settings ("Delete account") — this removes your profile,
-    messages and files. Anonymous wall notes are not linked to accounts and remain until scheduled cleanup.</p>
+    <p>You can delete your account in Settings. This removes the profile, messages and files linked to the account. Anonymous public wall notes are not directly linked to accounts and may remain until scheduled cleanup.</p>
 
     <h2>Contact</h2>
     <p>Privacy questions: support@onda.example.com</p>

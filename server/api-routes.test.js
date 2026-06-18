@@ -144,6 +144,7 @@ describe('API routes', () => {
       code: started.body.devCode,
       username: 'phone_route_user',
       name: 'Phone Route',
+      password: 'phone-route-password-123',
     })
     assert.equal(created.response.status, 201)
     assert.equal(created.body.user.phone, '+79001112233')
@@ -162,9 +163,15 @@ describe('API routes', () => {
       phone: '9001112233',
       code: restarted.body.devCode,
     })
-    assert.equal(existing.response.status, 200)
-    assert.equal(existing.body.existing, true)
-    assert.equal(existing.body.user.id, created.body.user.id)
+    assert.equal(existing.response.status, 409)
+    assert.equal(existing.body.code, 'account_exists')
+
+    const passwordLogin = await postJson(baseUrl, '/api/auth/login', '', {
+      login: 'phone_route_user',
+      password: 'phone-route-password-123',
+    })
+    assert.equal(passwordLogin.response.status, 200)
+    assert.equal(passwordLogin.body.user.id, created.body.user.id)
   })
 
   it('rejects invalid login credentials', async () => {

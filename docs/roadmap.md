@@ -43,7 +43,7 @@ Goal: make the existing messenger core reliable locally.
 
 Goal: replace remaining mock surfaces with real server-backed behavior.
 
-- [x] Phone-number login flow (SMS code + profile creation, backend + AuthScreen).
+- [x] Phone-number login flow (push-delivered code + profile creation, backend + AuthScreen).
 - [x] QR login.
 - [x] Two-factor password (cloud password — scrypt-hashed, hint, three-step login, settings in Sidebar).
 - [x] Saved contact list: backend model, API and UI add/remove flow.

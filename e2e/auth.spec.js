@@ -1,19 +1,17 @@
 import { apiLogin, expect, test } from './fixtures.js'
 
 test.describe('Authentication', () => {
-  test('test login 1 lands on the chat list', async ({ page }) => {
-    await page.goto('/')
-    // nth(1) skips QR button, clicks first test-login slot (language-agnostic)
-    await page.locator('button.astra-qr-row').nth(1).click()
+  test('registration lands on the chat list', async ({ page }) => {
+    await apiLogin(page)
     await expect(page.locator('.sidebar')).toBeVisible({ timeout: 10_000 })
   })
 
   test('legacy login with wrong password shows error', async ({ page }) => {
     await page.goto('/')
-    await page.locator('button.astra-link', { hasText: 'Login with password' }).click()
-    await page.locator('input[placeholder="login or username"]').fill('nonexistent_user_xyz')
-    await page.locator('input[placeholder="password"]').fill('wrongpassword')
-    await page.locator('button.astra-link', { hasText: 'Password login' }).click()
+    await page.locator('button.astra-link').filter({ hasText: /Login with password|Вход по паролю/i }).click()
+    await page.locator('.astra-legacy-login input').nth(0).fill('nonexistent_user_xyz')
+    await page.locator('.astra-legacy-login input').nth(1).fill('wrongpassword')
+    await page.locator('.astra-legacy-login button.astra-link').filter({ hasText: /Password login|Войти по паролю/i }).click()
     await expect(page.locator('.astra-error, .toast, [class*="error"]').first()).toBeVisible({ timeout: 6000 })
   })
 

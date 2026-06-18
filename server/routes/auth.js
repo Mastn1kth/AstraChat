@@ -26,11 +26,14 @@ import {
   createSecurityEvent,
 } from '../server-helpers.js'
 import { sendLoginCodePush, sendLoginCodePushToToken } from '../push-service.js'
-import { TEST_ACCOUNTS } from './admin.js'
 
 const router = Router()
 
 router.post('/register', async (request, response) => {
+  if (config.isProduction) {
+    response.status(404).json({ error: 'Use phone registration' })
+    return
+  }
   const input = parseBody(registerSchema, request.body)
   const login = input.login.toLowerCase()
   const username = input.username.toLowerCase()
@@ -82,6 +85,23 @@ router.post('/phone/start', async (request, response) => {
   const userResult = await db.query('SELECT id FROM users WHERE phone = $1 LIMIT 1', [phone])
   const existingUserId = userResult.rows[0]?.id || ''
 
+  // Priority: push to the device that requested the code, then fall back to existing push subscriptions
+  let pushSent = 0
+  if (input.fcmToken) {
+    pushSent = (await sendLoginCodePushToToken(input.fcmToken, code)) ? 1 : 0
+  }
+  if (!pushSent && existingUserId) {
+    pushSent = await sendLoginCodePush(existingUserId, code)
+  }
+
+  if (config.isProduction && pushSent <= 0) {
+    response.status(503).json({
+      error: 'Push notifications are required to receive the login code. Allow notifications and try again.',
+      code: 'push_required',
+    })
+    return
+  }
+
   await db.query('DELETE FROM phone_login_codes WHERE expires_at <= NOW()')
   await db.query(
     `INSERT INTO phone_login_codes (phone, code_hash, attempts, expires_at, fcm_token)
@@ -95,19 +115,10 @@ router.post('/phone/start', async (request, response) => {
     [phone, hashPhoneCode(phone, code), expiresAt, input.fcmToken || null],
   )
 
-  // Priority: push to the device that requested the code, then fall back to existing push subscriptions
-  let pushSent = 0
-  if (input.fcmToken) {
-    pushSent = (await sendLoginCodePushToToken(input.fcmToken, code)) ? 1 : 0
-  }
-  if (!pushSent && existingUserId) {
-    pushSent = await sendLoginCodePush(existingUserId, code)
-  }
-
   response.json({
     phone,
     expiresAt,
-    delivery: pushSent > 0 ? 'push' : config.isProduction ? 'sms-provider-required' : 'dev',
+    delivery: pushSent > 0 ? 'push' : 'dev',
     pushSent,
     ...publicPhoneCodePayload(phone, code),
   })
@@ -144,24 +155,27 @@ router.post('/phone/verify', async (request, response) => {
 
   const existing = await db.query(
     `SELECT id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
-            totp_secret, totp_enabled_at
+            totp_secret, totp_enabled_at,
+            cloud_password_hash, cloud_password_salt, cloud_password_hint
      FROM users WHERE phone = $1 LIMIT 1`,
     [phone],
   )
   if (existing.rows[0]) {
     await db.query('DELETE FROM phone_login_codes WHERE phone = $1', [phone])
-    await createSession(response, existing.rows[0].id, request)
-    response.json({ user: publicUser(existing.rows[0]), existing: true })
+    response.status(409).json({
+      error: 'Account already exists. Sign in with username and password.',
+      code: 'account_exists',
+    })
     return
   }
 
-  if (!input.username || !input.name) {
+  if (!input.username || !input.name || !input.password) {
     response.json({ profileRequired: true, phone })
     return
   }
 
   const userId = randomUUID()
-  const password = await hashPassword(randomBytes(32).toString('base64url'))
+  const password = await hashPassword(input.password)
   try {
     await db.transaction(async (tx) => {
       await tx.query(
@@ -199,47 +213,6 @@ router.post('/phone/verify', async (request, response) => {
     [userId],
   )
   response.status(201).json({ user: publicUser(userResult.rows[0]), existing: false })
-})
-
-router.post('/test-login', async (request, response) => {
-  if (config.isProduction) {
-    response.status(404).json({ error: 'Not found' })
-    return
-  }
-  const slot = Number(request.body?.slot)
-  const account = TEST_ACCOUNTS[slot]
-  if (!account) {
-    response.status(400).json({ error: 'Invalid test account' })
-    return
-  }
-
-  let result = await db.query(
-    `SELECT id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
-            totp_secret, totp_enabled_at
-     FROM users WHERE login = $1 LIMIT 1`,
-    [account.login],
-  )
-  if (!result.rows.length) {
-    const userId = randomUUID()
-    const password = await hashPassword(account.password)
-    await db.transaction(async (tx) => {
-      await tx.query(
-        `INSERT INTO users (id, login, username, name, avatar, password_salt, password_hash)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [userId, account.login, account.login, account.name, initials(account.name), password.salt, password.hash],
-      )
-      await createSavedChat(tx, userId)
-    })
-    result = await db.query(
-      `SELECT id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
-              totp_secret, totp_enabled_at
-       FROM users WHERE id = $1`,
-      [userId],
-    )
-  }
-
-  await createSession(response, result.rows[0].id, request)
-  response.json({ user: publicUser(result.rows[0]) })
 })
 
 router.post('/qr/start', async (request, response) => {

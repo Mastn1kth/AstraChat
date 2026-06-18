@@ -13,7 +13,6 @@ import {
   publicUser,
   initials,
   stringifyPublicKey,
-  hasBlockBetween,
   createSecurityEvent,
   sharedUserIdsForKeyWarnings,
 } from '../server-helpers.js'

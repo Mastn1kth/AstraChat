@@ -52,8 +52,9 @@ Assumptions:
 Auth and sessions:
 
 - Attackers can attempt credential stuffing and password guessing. Auth rate
-  limits and password hashing reduce risk, but suspicious-login alerts and 2FA
-  are not implemented.
+  limits, password hashing, suspicious-login alerts, TOTP and cloud-password
+  flows reduce risk, but they do not replace phishing-resistant device
+  verification or hardened account recovery.
 - Session theft is partially mitigated by `HttpOnly` cookies and server-side
   token hashes. A stolen browser profile can still expose active cookies and
   local encryption keys.

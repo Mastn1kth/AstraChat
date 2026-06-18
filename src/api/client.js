@@ -81,13 +81,6 @@ export function verifyPhoneAuth(input) {
   })
 }
 
-export function testLogin(slot) {
-  return request('/api/auth/test-login', {
-    method: 'POST',
-    body: JSON.stringify({ slot }),
-  })
-}
-
 export function logoutAccount() {
   return request('/api/auth/logout', { method: 'POST' })
 }

@@ -18,6 +18,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=build /app/dist ./dist
 COPY server ./server
+RUN mkdir -p server-data-v5 backups && chown -R node:node server-data-v5 backups
 
 USER node
 EXPOSE 3001
