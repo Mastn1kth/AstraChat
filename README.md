@@ -1,102 +1,132 @@
-# AstraChat
+# AstraChat (Onda)
 
-AstraChat is a modern, privacy-focused messenger built as a real app — not a landing page. It ships a full-stack chat platform with end-to-end encryption helpers, WebRTC calls, groups, channels, media sharing and a clean purple UI designed to feel native and intuitive from the first second.
+AstraChat — современный мессенджер с акцентом на приватность, построенный как полноценное приложение. Полный стек: React 19 + Vite фронтенд, Express 5 бэкенд, WebSocket, сквозное шифрование, WebRTC звонки, группы, каналы, медиа и чистый UI.
 
-The goal: a messenger you actually want to use.
+Цель: мессенджер, которым реально хочется пользоваться.
 
-## Current State
+## Текущее состояние
 
-This repository already contains a working web messenger MVP:
+Рабочий веб-мессенджер с полным функциональным ядром:
 
-- React + Vite frontend.
-- Express backend with REST API.
-- WebSocket realtime transport.
-- VAPID Web Push for offline/browser push delivery.
-- PGlite/PostgreSQL-compatible local storage.
-- Registration, login, logout, sessions and password change.
-- User profiles, avatars and account deletion.
-- Private chats, groups, channels and saved-message chat model.
-- Text messages, replies, editing, deletion, reactions and read status.
-- Online presence, last seen and typing status.
-- Image, video, voice and file upload.
-- Server-side encryption at rest for messages/media.
-- Client-side encryption helpers for text/media envelopes. This is not a full audited E2EE or secret-chat protocol.
-- Audio/video calls through WebRTC signaling.
-- Desktop notifications and incoming-message sound.
-- Per-chat mute and push modes with mention-aware notification filtering.
+- React 19 + Vite фронтенд, Express 5 бэкенд.
+- WebSocket realtime (сообщения, присутствие, набор текста, реакции, звонки).
+- PGlite (встроенная БД для локальной разработки) / PostgreSQL в продакшне.
+- Регистрация, вход по паролю, телефону (push-код) и QR-коду.
+- Сессии, двухфакторная аутентификация (cloud password + TOTP), смена пароля.
+- Профили, аватары, username.
+- Личные чаты, группы, каналы, «Сохранённые сообщения».
+- Текст, ответы, редактирование, удаление, реакции, статус прочтения.
+- Онлайн-присутствие и «был(а) N минут назад».
+- Статус набора текста.
+- Загрузка фото, видео, голосовых, файлов; альбомы; прогресс загрузки.
+- Шифрование медиа и сообщений на сервере.
+- Клиентские E2EE-хелперы (не аудированный протокол).
+- Аудио/видео звонки через WebRTC (1:1 + групповые mesh).
+- Рабочий стол-уведомления, VAPID Web Push, входящий звук.
+- Мьютирование на время, архив, закреплённые чаты.
+- Закреплённые сообщения в чате.
+- Папки чатов (Все, Непрочитанные, Личные, Группы, Каналы, Архив + кастомные).
+- Глобальный поиск (пользователи, чаты, сообщения) + поиск внутри чата с переходом.
+- Пересылка сообщений (одиночная и мультивыбор), массовое удаление.
+- Форматирование сообщений: жирный, курсив, код, цитата, спойлер.
+- Опросы и квиз-опросы.
+- Кастомные emoji, стикеры, GIF (Tenor), форматированные сообщения.
+- Live Wall — матрица слов из всех чатов в реальном времени.
+- Роли в группах (владелец, администратор, модератор, участник), права, бан/кик.
+- Темы: светлая и тёмная.
+- PWA: офлайн кэш, устанавливается на устройство, push при закрытом браузере.
+- Admin panel (требует аутентификации).
+- Структурированные логи (pino), метрики (prom-client), health check.
+- Docker + docker-compose, nginx HTTPS/WSS пример.
+- E2E тесты (Playwright): авторизация, сообщения, чаты, профиль — 18 сценариев.
 
-Some features are intentionally still UI-only or mock states. They are tracked in the roadmap instead of being presented as production-ready.
+## Документация
 
-## Documentation
+- [Source prompt](docs/source-prompt.md) — оригинальный продуктовый промпт.
+- [Roadmap](docs/roadmap.md) — план от MVP до продакшн-мессенджера.
+- [Data model](docs/data-model.md) — модель данных и границы безопасности.
+- [Security posture](docs/security.md) — честные утверждения о безопасности.
+- [Threat model](docs/threat-model.md) — модель угроз.
+- [Production infrastructure](docs/production.md) — PostgreSQL, Redis, S3, Docker.
+- [GitHub page copy](docs/github-page.md) — краткое описание репозитория.
 
-- [Source prompt](docs/source-prompt.md) - original product prompt added to the project.
-- [Roadmap](docs/roadmap.md) - staged plan from current MVP to production-grade messenger.
-- [Data model](docs/data-model.md) - current durable entities and security boundaries.
-- [Security posture](docs/security.md) - honest security claims, current controls and missing flows.
-- [Threat model](docs/threat-model.md) - repository-scoped security model for future review.
-- [Production infrastructure](docs/production.md) - PostgreSQL, Redis, S3-compatible storage, Docker, health checks, metrics and backup notes.
-- [GitHub page copy](docs/github-page.md) - short public repository description.
+## Что реально работает
 
-## Real vs Mock
+- Регистрация/вход (пароль, телефон/push-код, QR);
+- Профиль, аватар;
+- Сервер-backed загрузка и создание чатов;
+- Отправка, редактирование, удаление, реакции, прочтение;
+- Загрузка медиа;
+- Realtime через WebSocket;
+- Звонки 1:1 и групповые (mesh WebRTC, история звонков, screen share);
+- Локальная тема, настройки;
+- Push-уведомления (браузер через VAPID, нативные через FCM/APNs на мобильных);
+- Админ-панель (требует cookie-сессии).
 
-Actually working now:
+## Макеты / неполная реализация
 
-- account registration/login with cookie sessions;
-- profile and avatar changes;
-- server-backed chat loading and creation;
-- message send/edit/delete/reaction/read flows;
-- media upload/download;
-- realtime events over WebSocket;
-- 1:1 and small-group WebRTC call signaling with call history, participant
-  state, screen sharing and reconnect handling;
-- local theme/settings state.
+- Полный аудированный E2EE-протокол (secret chats);
+- Верификация устройств и ротация ключей;
+- SFU/MCU медиа-сервер для больших групповых звонков;
+- Истории (UI есть, но ограниченный backend);
+- Боты и мини-приложения;
+- Нативный push через магазины приложений (App Store, Google Play);
+- Продакшн-инфраструктура: managed PostgreSQL, Redis, S3/CDN, очереди;
+- Бэкапы и процедура восстановления;
+- Безопасные настройки приватности профиля (кто видит телефон, последний визит);
+- Исчезающие сообщения (таймер автоудаления);
+- Реакции на сообщения в каналах с агрегацией по типу.
 
-Mock or incomplete:
-
-- phone/SMS/QR login;
-- full group roles, permissions, bans and admin logs;
-- full channel publishing workflow, stats, discussions and scheduling;
-- chat folders/archive persisted on backend;
-- stickers, GIF search, custom emoji packs;
-- bots, mini apps and payments;
-- stories;
-- native iOS/Android push through app stores;
-- production-scale storage, CDN, Redis and queues;
-- audited E2EE/secret-chat protocol;
-- device verification, key rotation, hardened recovery, suspicious-login alerts and report/block moderation flows.
-
-## Run Locally
-
-Install dependencies:
+## Быстрый старт
 
 ```bash
 npm install
 ```
 
-Start the backend:
-
+Запустить бэкенд (загружает `.env`):
 ```bash
 npm run server
 ```
 
-Start the frontend:
-
+Запустить фронтенд:
 ```bash
 npm run dev
 ```
 
-Build:
+Открыть: **http://localhost:5173**
 
-```bash
-npm run build
+### .env (локальная разработка)
+
+Создаётся автоматически при первом запуске или скопируйте из шаблона:
+
+```env
+PORT=3099
+HOST=127.0.0.1
+DATA_DIR=data
+NODE_ENV=development
+VITE_BACKEND_PORT=3099
+
+# Web Push (генерируются один раз)
+VAPID_PUBLIC_KEY=...
+VAPID_PRIVATE_KEY=...
+VAPID_SUBJECT=mailto:admin@onda.local
 ```
 
-Check lint:
-
+Сгенерировать VAPID ключи:
 ```bash
-npm run lint
+node -e "const wp=require('web-push'); const k=wp.generateVAPIDKeys(); console.log(JSON.stringify(k,null,2))"
 ```
 
-## Production Notes
+### Прочее
 
-Production mode requires `MESSAGE_ENCRYPTION_KEY`, `DATABASE_URL`, `REDIS_URL`, VAPID Web Push keys, S3-compatible storage settings and TURN/TURNS WebRTC ICE config. Web Push and real WebRTC calls also require HTTPS in real browsers. The repository includes a Dockerfile, `docker-compose.yml`, nginx HTTPS/WSS example, health/readiness endpoints and Prometheus metrics. Real public usage should still use managed PostgreSQL backups, object-storage versioning, centralized logs/alerts, SFU media infrastructure for large group calls and a security review. Do not claim that all chats are end-to-end encrypted until the full audited protocol, device verification, recovery, key rotation and abuse-handling flows are implemented.
+```bash
+npm run build      # сборка фронтенда
+npm run lint       # проверка стиля
+npm run test:e2e   # запуск Playwright e2e тестов
+```
+
+## Продакшн
+
+Продакшн-режим требует: `MESSAGE_ENCRYPTION_KEY`, `DATABASE_URL`, `REDIS_URL`, VAPID-ключи, S3-совместимое хранилище, TURN/TURNS конфигурацию для WebRTC. Web Push и WebRTC требуют HTTPS в реальных браузерах. Репозиторий включает Dockerfile, `docker-compose.yml`, nginx HTTPS/WSS пример, health/readiness эндпоинты и Prometheus метрики.
+
+**Не заявляйте, что все чаты end-to-end зашифрованы** — полный аудированный E2EE-протокол с верификацией устройств, ротацией ключей и восстановлением не реализован.

@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "server": "node --watch server/index.js",
-    "server:start": "node server/index.js",
+    "server": "node --env-file=.env --watch server/index.js",
+    "server:start": "node --env-file=.env server/index.js",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
