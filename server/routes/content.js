@@ -5,7 +5,7 @@ import { requireAuth } from '../auth.js'
 import { encryptMessage } from '../crypto.js'
 import { storiesLimiter } from '../limiters.js'
 import { sendToChatExcept, sendToUser } from '../socket-manager.js'
-import { sendOfflineMessagePushes } from '../push-service.js'
+import { enqueueOfflineMessagePushes } from '../push-service.js'
 import { parseBody, storyReplySchema } from '../validation.js'
 import {
   ensureChatSettings,
@@ -580,7 +580,7 @@ router.post('/api/stories/:storyId/reply', requireAuth, async (request, response
     messageId,
     delivered: recipientDeliveries > 0,
   })
-  await sendOfflineMessagePushes({
+  await enqueueOfflineMessagePushes({
     chatId,
     sender: request.user,
     message: publicMessage,

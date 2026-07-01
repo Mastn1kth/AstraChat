@@ -38,6 +38,8 @@ import {
 } from './socket-manager.js'
 import { formatByteSize, isChatMember, getCallParticipants } from './server-helpers.js'
 import { publishDueScheduledMessages, deleteExpiredMessages } from './scheduled.js'
+import { startJobQueuePolling, stopJobQueuePolling } from './job-queue.js'
+import './push-service.js' // registers the push:deliver job handler as a side effect
 import { authLimiter } from './limiters.js'
 // Route modules
 import adminRouter from './routes/admin.js'
@@ -595,10 +597,19 @@ function startBackgroundJobs() {
     })()
   }, 30000)
 
+  // Scheduled-message publishing and disappearing-message expiry are
+  // idempotent SELECT+UPDATE sweeps against Postgres (safe to run from
+  // multiple replicas, nothing to lose if a tick is skipped), so they stay
+  // as simple interval loops rather than moving into the job_queue table.
   scheduledPublisher = setInterval(() => {
     void publishDueScheduledMessages()
     void deleteExpiredMessages()
   }, 15000)
+
+  // Durable job outbox poller: claims due rows from job_queue (push:deliver
+  // jobs enqueued by the message-send routes, plus any future job types)
+  // and executes their handler with retry/backoff on failure. See job-queue.js.
+  startJobQueuePolling()
 }
 
 function stopBackgroundJobs() {
@@ -608,6 +619,7 @@ function stopBackgroundJobs() {
   heartbeat = null
   presenceRefresh = null
   scheduledPublisher = null
+  stopJobQueuePolling()
 }
 
 if (config.isProduction && existsSync(resolve(config.rootDir, 'dist'))) {

@@ -1000,6 +1000,34 @@ export const migrations = [
       ALTER TABLE messages ALTER COLUMN auth_tag SET NOT NULL;
     `,
   },
+  {
+    id: '20260702_job_queue',
+    sql: `
+      CREATE TABLE IF NOT EXISTS job_queue (
+        id UUID PRIMARY KEY,
+        type TEXT NOT NULL,
+        payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        max_attempts INTEGER NOT NULL DEFAULT 5,
+        run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_error TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CHECK (status IN ('pending', 'processing', 'done', 'dead'))
+      );
+
+      CREATE INDEX IF NOT EXISTS job_queue_claim_idx
+        ON job_queue(run_at)
+        WHERE status = 'pending';
+
+      CREATE INDEX IF NOT EXISTS job_queue_status_idx
+        ON job_queue(status, updated_at DESC);
+    `,
+    downSql: `
+      DROP TABLE IF EXISTS job_queue;
+    `,
+  },
 ]
 
 async function getAppliedMigrationIds(database) {

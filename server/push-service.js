@@ -6,6 +6,9 @@ import { isUserOnline } from './redis.js'
 import { socketsByUserId } from './socket-manager.js'
 import logger from './logger.js'
 import { isFutureTimestamp } from './server-helpers.js'
+import { enqueueJob, registerJobHandler } from './job-queue.js'
+
+export const PUSH_DELIVER_JOB_TYPE = 'push:deliver'
 
 export function normalizePushExpiration(value) {
   if (!value) return null
@@ -153,6 +156,9 @@ export async function sendLoginCodePush(userId, code) {
   return sent
 }
 
+// Executes the actual push fan-out for a message. This does real network
+// calls to FCM/APNs/web-push, so callers on the request path should prefer
+// `enqueueOfflineMessagePushes` (durable, retried) over calling this directly.
 export async function sendOfflineMessagePushes({ chatId, sender, message, searchText }) {
   if (!config.vapid.enabled && !isFcmEnabled()) return 0
 
@@ -205,3 +211,25 @@ export async function sendOfflineMessagePushes({ chatId, sender, message, search
   }
   return sent
 }
+
+// Enqueues push delivery as a durable job instead of sending inline on the
+// request path. A slow/failing push provider can no longer block or fail the
+// message-send request, and delivery is retried with backoff on failure.
+export async function enqueueOfflineMessagePushes({ chatId, sender, message, searchText }) {
+  if (!config.vapid.enabled && !isFcmEnabled()) return null
+  return enqueueJob(PUSH_DELIVER_JOB_TYPE, {
+    chatId,
+    sender: { id: sender.id, name: sender.name },
+    message,
+    searchText: searchText || '',
+  })
+}
+
+registerJobHandler(PUSH_DELIVER_JOB_TYPE, async (payload) => {
+  await sendOfflineMessagePushes({
+    chatId: payload.chatId,
+    sender: payload.sender,
+    message: payload.message,
+    searchText: payload.searchText,
+  })
+})

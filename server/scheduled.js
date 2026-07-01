@@ -2,7 +2,7 @@ import { db } from './db.js'
 import logger from './logger.js'
 import { MESSAGE_SELECT_COLUMNS, publicMessagesFromRows } from './server-helpers.js'
 import { sendToChat, sendToChatExcept, sendToUser } from './socket-manager.js'
-import { sendOfflineMessagePushes } from './push-service.js'
+import { enqueueOfflineMessagePushes } from './push-service.js'
 
 let publishingScheduled = false
 let deletingExpired = false
@@ -111,7 +111,7 @@ export async function publishScheduledMessage(messageId) {
   })
   const senderResult = await db.query('SELECT * FROM users WHERE id = $1 LIMIT 1', [scheduled.sender_id])
   if (senderResult.rows[0] && !publicMessage.silent) {
-    await sendOfflineMessagePushes({
+    await enqueueOfflineMessagePushes({
       chatId: scheduled.chat_id,
       sender: senderResult.rows[0],
       message: publicMessage,

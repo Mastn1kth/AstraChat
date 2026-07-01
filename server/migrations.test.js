@@ -88,7 +88,7 @@ describe('database migrations', () => {
     }
   })
 
-  it('applies migrations and rolls back the latest migration marker and schema', async () => {
+  it('applies migrations and rolls back the target migration marker and schema', async () => {
     const db = new PGlite()
     try {
       await createBaseSchema(db)
@@ -97,14 +97,22 @@ describe('database migrations', () => {
       const applied = await getMigrationStatus(db)
       assert.equal(applied.every((migration) => migration.applied), true)
 
-      const rolledBack = await rollbackMigrations(db, 1)
-      assert.deepEqual(rolledBack, [migrations.at(-1).id])
+      // Roll back to (and including) the migration that made sender_id
+      // nullable for system messages, whichever position it's in — later
+      // migrations may be appended after it, so don't assume it's last.
+      const targetId = '20260701_system_message_columns_nullable'
+      const targetIndex = migrations.findIndex((migration) => migration.id === targetId)
+      assert.notEqual(targetIndex, -1)
+      const stepsToRollback = migrations.length - targetIndex
+
+      const rolledBack = await rollbackMigrations(db, stepsToRollback)
+      assert.deepEqual(rolledBack, migrations.slice(targetIndex).map((migration) => migration.id).reverse())
 
       const afterRollback = await getMigrationStatus(db)
-      assert.equal(afterRollback.at(-1).applied, false)
-      assert.equal(afterRollback.slice(0, -1).every((migration) => migration.applied), true)
+      assert.equal(afterRollback.slice(targetIndex).every((migration) => !migration.applied), true)
+      assert.equal(afterRollback.slice(0, targetIndex).every((migration) => migration.applied), true)
 
-      // The latest migration's downSql must actually revert its schema change,
+      // The target migration's downSql must actually revert its schema change,
       // not just flip the applied marker: sender_id should be NOT NULL again.
       await db.query(
         `INSERT INTO users (id, login, username, name) VALUES (gen_random_uuid(), 'rb_user', 'rb_user', 'RB User') RETURNING id`,

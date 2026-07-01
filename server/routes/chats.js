@@ -40,7 +40,7 @@ import {
   publicMessagesFromRows,
 } from '../server-helpers.js'
 import { sendToUser, sendToChat, sendToChatExcept } from '../socket-manager.js'
-import { sendOfflineMessagePushes } from '../push-service.js'
+import { enqueueOfflineMessagePushes } from '../push-service.js'
 import { publishScheduledMessage } from '../scheduled.js'
 import { messageLimiter, apiLimiter } from '../limiters.js'
 
@@ -1862,7 +1862,7 @@ router.post('/api/chats/:chatId/messages', requireAuth, messageLimiter, async (r
     message: publicMessage,
   })
   if (!input.silent) {
-    await sendOfflineMessagePushes({
+    await enqueueOfflineMessagePushes({
       chatId: request.params.chatId,
       sender: request.user,
       message: publicMessage,
