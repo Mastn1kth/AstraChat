@@ -271,6 +271,10 @@ router.patch('/api/chats/:chatId/settings', requireAuth, async (request, respons
       chatId: request.params.chatId,
       autoDeleteSeconds: seconds,
     })
+    await insertSystemMessage(request.params.chatId, 'auto_delete_changed', {
+      autoDeleteSeconds: seconds,
+      changedBy: request.user.id,
+    })
   }
 
   const result = await db.query(
@@ -592,6 +596,11 @@ router.post('/api/chats/:chatId/members', requireAuth, async (request, response)
   })
   const payload = { type: 'chat:member-added', chatId: request.params.chatId, userId }
   await sendToChat(request.params.chatId, payload)
+  await insertSystemMessage(request.params.chatId, 'member_added', {
+    userId,
+    name: userResult.rows[0].name,
+    addedBy: request.user.id,
+  })
   response.json({ member: { id: userId, name: userResult.rows[0].name, username: userResult.rows[0].username } })
 })
 
@@ -609,6 +618,7 @@ router.delete('/api/chats/:chatId/members/:userId', requireAuth, async (request,
     response.status(403).json({ error: 'Owner cannot be kicked' })
     return
   }
+  const targetUserResult = await db.query('SELECT name FROM users WHERE id = $1', [request.params.userId])
   await db.transaction(async (tx) => {
     await tx.query(
       'DELETE FROM chat_members WHERE chat_id = $1 AND user_id = $2',
@@ -623,6 +633,12 @@ router.delete('/api/chats/:chatId/members/:userId', requireAuth, async (request,
   })
   const payload = { type: 'chat:member-removed', chatId: request.params.chatId, userId: request.params.userId }
   await sendToChat(request.params.chatId, payload)
+  await insertSystemMessage(request.params.chatId, 'member_removed', {
+    userId: request.params.userId,
+    name: targetUserResult.rows[0]?.name || '',
+    removedBy: request.user.id,
+    isSelf,
+  })
   response.json({ ok: true })
 })
 

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { AlertCircle, Check, CheckCheck, CheckSquare, Copy, Download, Edit3, ExternalLink, FileText, Flag, Forward, Pin, Play, RefreshCw, Reply, SmilePlus, Square, Timer, Trash2 } from 'lucide-react'
+import { AlertCircle, Check, CheckCheck, CheckSquare, Copy, Download, Edit3, ExternalLink, FileText, Flag, Forward, Languages, Loader2, Pin, Play, RefreshCw, Reply, SmilePlus, Square, Timer, Trash2 } from 'lucide-react'
 import { formatMessageTime } from '../utils/formatters'
-import { t } from '../i18n'
+import { t, getLang } from '../i18n'
 import FormattedText from '../utils/textFormat'
 import { getLinkPreview } from '../api/client'
+import { translateText } from '../utils/translate'
 import AudioMessagePlayer from './AudioMessagePlayer'
 import VideoNotePlayer from './VideoNotePlayer'
 import RichMessage from './RichMessage'
@@ -168,6 +169,30 @@ export default function MessageBubble({
   const fetchedPreview = useLinkPreview(firstUrl)
   const linkPreview = message.linkPreview || fetchedPreview
 
+  const [translation, setTranslation] = useState(null)
+  const [translating, setTranslating] = useState(false)
+  const [translateError, setTranslateError] = useState(false)
+
+  const handleToggleTranslate = async () => {
+    if (translating) return
+    if (translation) {
+      setTranslation(null)
+      return
+    }
+    setTranslateError(false)
+    setTranslating(true)
+    try {
+      const targetLang = getLang()
+      const translated = await translateText(message.text, targetLang)
+      setTranslation({ text: translated, targetLang })
+    } catch {
+      setTranslateError(true)
+      setTimeout(() => setTranslateError(false), 3000)
+    } finally {
+      setTranslating(false)
+    }
+  }
+
   // Live countdown ticker for disappearing messages
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
@@ -316,6 +341,17 @@ export default function MessageBubble({
             <span className="message-text">
               <FormattedText text={message.text} currentUsername={currentUser?.username} />
             </span>
+            {translation && (
+              <div className="translated-text-box">
+                <span className="translated-text-label">{t('msg.translatedFrom')}</span>
+                <span className="translated-text-body">{translation.text}</span>
+              </div>
+            )}
+            {translateError && (
+              <div className="translated-text-box translated-text-error">
+                {t('msg.translateFailed')}
+              </div>
+            )}
           </>
         ) : null}
 
@@ -374,6 +410,13 @@ export default function MessageBubble({
           <button onClick={onForward}>
             <Forward size={15} /> {t('msg.forward')}
           </button>
+          {message.text && (
+            <button onClick={handleToggleTranslate} disabled={translating}>
+              {translating ? <Loader2 size={15} className="spin-icon" /> : <Languages size={15} />}
+              {' '}
+              {translating ? t('msg.translating') : t('msg.translate')}
+            </button>
+          )}
           <button onClick={onToggleSelect}>
             <CheckSquare size={15} /> {t('msg.select')}
           </button>

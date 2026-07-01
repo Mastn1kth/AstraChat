@@ -367,6 +367,10 @@ const DICT = {
     'msg.report': 'Пожаловаться',
     'msg.delete': 'Удалить',
     'msg.edited': 'изменено',
+    'msg.translate': 'Перевести',
+    'msg.translating': 'Перевод...',
+    'msg.translatedFrom': 'Переведено',
+    'msg.translateFailed': 'Не удалось перевести',
 
     // --- Cloud key backup ---
     'cloudKey.save': 'Сохранить ключ в облако',
@@ -705,6 +709,10 @@ const DICT = {
     'msg.report': 'Report',
     'msg.delete': 'Delete',
     'msg.edited': 'edited',
+    'msg.translate': 'Translate',
+    'msg.translating': 'Translating...',
+    'msg.translatedFrom': 'Translated',
+    'msg.translateFailed': 'Translation failed',
 
     // --- Cloud key backup ---
     'cloudKey.save': 'Save key to cloud',

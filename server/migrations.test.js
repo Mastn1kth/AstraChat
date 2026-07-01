@@ -105,10 +105,23 @@ describe('database migrations', () => {
       assert.equal(afterRollback.slice(0, -1).every((migration) => migration.applied), true)
 
       // The latest migration's downSql must actually revert its schema change,
-      // not just flip the applied marker.
+      // not just flip the applied marker: sender_id should be NOT NULL again.
+      await db.query(
+        `INSERT INTO users (id, login, username, name) VALUES (gen_random_uuid(), 'rb_user', 'rb_user', 'RB User') RETURNING id`,
+      )
+      const { rows: [{ id: rbUserId }] } = await db.query(`SELECT id FROM users WHERE login = 'rb_user'`)
+      await db.query(
+        `INSERT INTO chats (id, type, title, created_by) VALUES (gen_random_uuid(), 'private', '', $1) RETURNING id`,
+        [rbUserId],
+      )
+      const { rows: [{ id: rbChatId }] } = await db.query(`SELECT id FROM chats WHERE created_by = $1`, [rbUserId])
       await assert.rejects(
-        () => db.query('SELECT imported_from_name FROM messages LIMIT 1'),
-        /imported_from_name|column/i,
+        () => db.query(
+          `INSERT INTO messages (id, chat_id, sender_id, is_system, ciphertext, iv, auth_tag)
+           VALUES (gen_random_uuid(), $1, NULL, TRUE, NULL, NULL, NULL)`,
+          [rbChatId],
+        ),
+        /null value|not-null|violates/i,
       )
     } finally {
       await db.close()

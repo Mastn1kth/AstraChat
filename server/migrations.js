@@ -947,6 +947,25 @@ export const migrations = [
     sql: `ALTER TABLE messages ADD COLUMN IF NOT EXISTS imported_from_name TEXT;`,
     downSql: `ALTER TABLE messages DROP COLUMN IF EXISTS imported_from_name;`,
   },
+  {
+    id: '20260701_system_message_columns_nullable',
+    sql: `
+      ALTER TABLE messages ALTER COLUMN sender_id DROP NOT NULL;
+      ALTER TABLE messages ALTER COLUMN ciphertext DROP NOT NULL;
+      ALTER TABLE messages ALTER COLUMN iv DROP NOT NULL;
+      ALTER TABLE messages ALTER COLUMN auth_tag DROP NOT NULL;
+      ALTER TABLE messages DROP CONSTRAINT IF EXISTS messages_system_or_content_check;
+      ALTER TABLE messages ADD CONSTRAINT messages_system_or_content_check
+        CHECK (is_system = TRUE OR (sender_id IS NOT NULL AND ciphertext IS NOT NULL AND iv IS NOT NULL AND auth_tag IS NOT NULL));
+    `,
+    downSql: `
+      ALTER TABLE messages DROP CONSTRAINT IF EXISTS messages_system_or_content_check;
+      ALTER TABLE messages ALTER COLUMN sender_id SET NOT NULL;
+      ALTER TABLE messages ALTER COLUMN ciphertext SET NOT NULL;
+      ALTER TABLE messages ALTER COLUMN iv SET NOT NULL;
+      ALTER TABLE messages ALTER COLUMN auth_tag SET NOT NULL;
+    `,
+  },
 ]
 
 async function getAppliedMigrationIds(database) {

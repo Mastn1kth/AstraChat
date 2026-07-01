@@ -64,9 +64,14 @@ Goal: replace remaining mock surfaces with real server-backed behavior.
 - [x] Unread message separator.
 - [x] Shared media/files/links gallery (server-backed, paginated).
 - [x] Favicon unread badge (canvas-drawn red circle with count).
-- [ ] Disappearing messages (auto-delete timer, per-chat setting).
-- [ ] Message scheduling (send at specific time, scheduled list panel — UI partially exists).
-- [ ] Profile privacy settings (who sees phone / last seen / avatar).
+- [x] Disappearing messages (per-message `disappearsAt`, per-chat auto-delete timer, background cleanup job, live countdown badge).
+- [x] Message scheduling (send at specific time, scheduled list panel).
+- [x] Profile privacy settings (who sees phone / last seen — everyone/contacts/nobody). Avatar visibility not yet gated.
+- [x] Read receipts (per-recipient `message_reads`, ✓/✓✓ checkmarks, persistent unread counts survive reload via `chat_members.last_read_message_id`).
+- [x] Message drafts (localStorage-backed per-chat draft save/restore in Composer).
+- [x] Round video messages ("video notes" — record via camera + `MediaRecorder`, circular playback, reuses the voice-message upload pipeline).
+- [x] Telegram chat history import (parse Telegram JSON export, encrypt and insert as regular messages with `imported_from_name` label).
+- [x] Inline message translation (client-side only via MyMemory API — preserves E2EE, no plaintext sent to any Onda backend).
 
 ## Phase 3 — Groups and Channels
 
@@ -91,7 +96,7 @@ Goal: make group/channel workflows real, not only UI states.
 - [x] Channel discussion groups.
 - [x] Channel stats.
 - [x] Reaction aggregation in channel posts (emoji breakdown by type — already via publicMessagesFromRows).
-- [ ] Join/leave event messages in group history.
+- [x] Join/leave event messages in group history (system messages: `member_added`/`member_removed`/`auto_delete_changed`, rendered as centered pills).
 
 ## Phase 4 — Media, Stickers and Rich Messages
 
@@ -170,7 +175,7 @@ Goal: ecosystem features that turn the messenger into a platform.
 - [ ] Emoji status (custom animated status with per-chat visibility).
 - [x] Animated stickers (Lottie JSON render for sticker messages and picker; TGS import pipeline still separate).
 - [ ] Voice-to-text transcription for voice messages.
-- [ ] Message translation (inline, per-message).
+- [x] Message translation (inline, per-message — see Phase 2).
 - [ ] Cross-device clipboard and URL sync (Saved Messages → device integration).
 
 ---

@@ -220,6 +220,18 @@ function normalizeChatFolders(payload = EMPTY_CHAT_FOLDERS) {
 }
 
 async function normalizeServerMessage(message, currentUserId) {
+  if (message.isSystem) {
+    return {
+      id: message.id,
+      senderId: message.senderId,
+      isSystem: true,
+      systemType: message.systemType,
+      systemData: message.systemData,
+      time: message.sentAt || message.createdAt,
+      text: '',
+      backend: true,
+    }
+  }
   const decrypted = await decryptTextForUser(message.text || '', currentUserId)
   const decoded = decodeRichMessage(decrypted.text)
   const media = await normalizeServerMedia(message.media, currentUserId)
@@ -243,6 +255,8 @@ async function normalizeServerMessage(message, currentUserId) {
     topicId: message.topicId || null,
     media,
     readBy: message.readBy || [],
+    disappearsAt: message.disappearsAt || null,
+    importedFromName: message.importedFromName || null,
     backend: true,
     encrypted: decrypted.encrypted,
     decryptFailed: decrypted.failed,
@@ -1634,7 +1648,21 @@ function AppInner() {
           : typingByChat[chat.id]
             ? [typingByChat[chat.id]]
             : []
-        const isTyping = typingUserIds.includes(chat.contactId)
+        const isGroupLike = baseContact?.type === 'group' || baseContact?.type === 'channel'
+        const isTyping = isGroupLike
+          ? typingUserIds.some((userId) => userId !== state.user.id)
+          : typingUserIds.includes(chat.contactId)
+        const typingNames = isGroupLike
+          ? typingUserIds
+              .filter((userId) => userId !== state.user.id)
+              .map((userId) => state.contacts.find((c) => c.id === userId)?.name)
+              .filter(Boolean)
+          : []
+        const groupTypingLabel = typingNames.length
+          ? typingNames.length === 1
+            ? `${typingNames[0]} ${t('status.typing')}`
+            : `${typingNames.length} ${t('status.typing')}`
+          : ''
         const contact =
           baseContact?.backend && baseContact.type === 'private' && baseContact.status !== 'saved'
             ? {
@@ -1646,7 +1674,13 @@ function AppInner() {
                     ? t('status.online')
                     : formatLastSeen(live?.lastSeenAt || baseContact.lastSeenAt),
               }
-            : baseContact
+            : baseContact?.backend && isGroupLike
+              ? {
+                  ...baseContact,
+                  status: isTyping ? 'typing' : baseContact.status,
+                  lastSeen: isTyping ? groupTypingLabel : baseContact.lastSeen,
+                }
+              : baseContact
         const chatMessages = state.messages[chat.id] || []
         const lastMessage = getLastMessage(chatMessages)
         return {
