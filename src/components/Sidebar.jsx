@@ -1498,7 +1498,11 @@ export default function Sidebar({
             onChange={(event) => {
               const file = event.target.files?.[0]
               event.target.value = ''
-              if (file) onImportEncryptionKey(file)
+              if (!file) return
+              // Newer .astrakey backups are passphrase-encrypted; older plaintext
+              // backups ignore this value, so it is safe to always ask.
+              const passphrase = window.prompt(t('privacy.importKeyAskPassphrase'))
+              onImportEncryptionKey(file, passphrase || undefined)
             }}
           />
           <button onClick={toggleEncryptionInfo}>
@@ -1538,8 +1542,10 @@ export default function Sidebar({
           </button>
         </div>
         <p className="appearance-privacy-note">
-          Keep this key private. It restores access to encrypted messages and media
-          for this account on another browser.
+          Keep this key file and its passphrase private. Together they restore access
+          to encrypted messages and media for this account on another browser. There is
+          no way to recover the passphrase if you lose it — write it down somewhere safe,
+          like a wallet seed phrase.
         </p>
       </>
     )

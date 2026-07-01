@@ -13,6 +13,12 @@ MVP-level.
   `MESSAGE_ENCRYPTION_KEY`.
 - Browser helpers encrypt text and media envelopes with AES-GCM content keys
   wrapped to recipient public keys with RSA-OAEP.
+- Client-side private keys are stored in IndexedDB (migrated automatically
+  from the older localStorage-only store) instead of localStorage alone.
+  Exported key backups (`exportUserKeyBackup`) are always passphrase-
+  protected (PBKDF2-SHA256, 210k+ iterations, AES-256-GCM); legacy plaintext
+  backups from older app versions can still be imported for compatibility,
+  but new exports are never plaintext.
 - Active sessions can be listed and terminated.
 - Suspicious-login alerts are stored as security events when a new session uses
   a device/network combination not seen in recent active sessions.
@@ -48,7 +54,9 @@ warning flow and no audited messaging protocol.
 - Device verification with fingerprint/safety-number UX.
 - Full key rotation. Basic key-change warning events exist, but verified key
   ceremonies do not.
-- Recovery/backup that does not casually export raw private keys.
+- Recovery/backup no longer casually exports raw private keys (exports are
+  passphrase-encrypted), but there is still no device-verified, ratchet-based
+  recovery ceremony.
 - Admin/moderator report review UI.
 - Moderator/admin review queues and audit logs.
 - Broader rate limits for messages, media uploads, search, invites and reports.
@@ -58,6 +66,8 @@ warning flow and no audited messaging protocol.
 
 1. Add admin/moderator review for the existing report records.
 2. Add device verification and safety-number UX.
-3. Replace raw private-key export with hardened recovery.
+3. Replace raw private-key export with hardened recovery. (Done: exports are
+   passphrase-encrypted and storage moved to IndexedDB; a full verified-
+   recovery ceremony is still open.)
 4. Add focused tests for key-change warnings, media encryption fallback and
    recovery flows.

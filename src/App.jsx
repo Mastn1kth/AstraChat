@@ -4,6 +4,8 @@ import { useConfirm } from './hooks/useConfirm'
 import AuthScreen from './components/AuthScreen'
 import PermissionOnboarding from './components/PermissionOnboarding'
 import useWebRTCCall from './hooks/useWebRTCCall'
+import useChatFolders, { EMPTY_CHAT_FOLDERS, normalizeChatFolders } from './hooks/useChatFolders'
+import useAccountSecurity from './hooks/useAccountSecurity'
 import { contacts as seedContacts, currentUser, initialChats, initialMessages } from './data/sampleData'
 import { byPinnedThenRecent, getLastMessage } from './utils/formatters'
 import { loadMessengerState, resetMessengerState, saveMessengerState } from './utils/storage'
@@ -13,19 +15,15 @@ import { bumpAvatarCache } from './utils/avatarCache'
 import {
   changePassword,
   blockUser,
-  createChatFolder,
   createChat as createServerChat,
   deleteAccount,
   deleteAvatar,
-  deleteChatFolder,
   deleteChatMessage,
   deleteChatMessageForMe,
-  disableTotp,
   editChatMessage,
   getCallHistory,
   getChatFolders,
   getChatMessageContext,
-  getSessions,
   getChatMessages,
   getChatMembers,
   addChatMember,
@@ -36,24 +34,16 @@ import {
   getContacts,
   getChats,
   pinChatMessage,
-  getBlockedUsers,
   getCurrentSession,
   getSecurityEvents,
   getCloudPasswordStatus,
-  getTotpStatus,
   loginAccount,
   logoutAccount,
-  markAllSecurityEventsRead,
-  markSecurityEventRead,
   registerAccount,
   reportAbuse,
   searchUsers,
   sendChatMessage,
-  startTotpSetup,
-  terminateOtherSessions,
   terminateSession,
-  updateChatFolder,
-  updateChatFolderChat,
   updateChatMemberPermissions,
   updateChatMemberRole,
   toggleMessageReaction,
@@ -65,7 +55,6 @@ import {
   unblockUser,
   uploadAvatar,
   uploadMedia,
-  verifyTotpSetup,
   setCloudPassword,
   removeCloudPassword,
   startPhoneAuth,
@@ -73,6 +62,7 @@ import {
   getInstalledCustomEmojiPacks,
 } from './api/client'
 import {
+  buildUserKeyMaterial,
   decryptBlobForUser,
   decryptKeyBackupWithPassphrase,
   decryptTextForUser,
@@ -94,11 +84,9 @@ import {
   API_BASE,
   confirmQrLogin,
   getCloudKeyBackup,
-  getPrivacySettings,
   getWallMessages,
   putCloudKeyBackup,
   sendWallMessage,
-  updatePrivacySettings,
 } from './api/client'
 import { ensureNotificationPermission, playIncomingSound, showDesktopNotification } from './utils/notify'
 import { hasCompletedPermissionOnboarding } from './utils/permissions'
@@ -125,20 +113,6 @@ async function disableWebPushNotifications() {
 async function requestFcmTokenForAuth() {
   const push = await import('./utils/push')
   return push.requestFcmTokenForAuth()
-}
-
-const SYSTEM_CHAT_FOLDERS = [
-  { id: 'all', title: 'All', filter: 'all' },
-  { id: 'unread', title: 'Unread', filter: 'unread' },
-  { id: 'personal', title: 'Personal', filter: 'private' },
-  { id: 'groups', title: 'Groups', filter: 'group' },
-  { id: 'channels', title: 'Channels', filter: 'channel' },
-  { id: 'archived', title: 'Archived', filter: 'archived' },
-]
-
-const EMPTY_CHAT_FOLDERS = {
-  systemFolders: SYSTEM_CHAT_FOLDERS,
-  folders: [],
 }
 
 const fallbackState = {
@@ -211,26 +185,6 @@ function extractInviteUsernameFromLocation() {
     window.history.replaceState({}, '', `/${query ? `?${query}` : ''}`)
   }
   return username
-}
-
-function normalizeChatFolders(payload = EMPTY_CHAT_FOLDERS) {
-  return {
-    systemFolders: payload.systemFolders?.length ? payload.systemFolders : SYSTEM_CHAT_FOLDERS,
-    folders: (payload.folders || []).map((folder) => ({
-      id: folder.id,
-      title: folder.title,
-      icon: folder.icon || '',
-      sortOrder: folder.sortOrder || 0,
-      createdAt: folder.createdAt || new Date().toISOString(),
-      updatedAt: folder.updatedAt || folder.createdAt || new Date().toISOString(),
-      chats: (folder.chats || []).map((chat) => ({
-        chatId: chat.chatId,
-        pinned: Boolean(chat.pinned),
-        pinnedAt: chat.pinnedAt || null,
-        addedAt: chat.addedAt || new Date().toISOString(),
-      })),
-    })),
-  }
 }
 
 async function normalizeServerMessage(message, currentUserId) {
@@ -591,7 +545,6 @@ function AppInner() {
   })
   const [prefillLogin, setPrefillLogin] = useState(null)
   const [selectedChatId, setSelectedChatId] = useState(() => state.chats.find((chat) => !chat.archived)?.id || '')
-  const [selectedFolderId, setSelectedFolderId] = useState('all')
   const [hasMoreMessages, setHasMoreMessages] = useState({})
   const [unreadFromId, setUnreadFromId] = useState({}) // chatId → first unread message id
   const [selectedMessageIds, setSelectedMessageIds] = useState(new Set())
@@ -641,6 +594,43 @@ function AppInner() {
     window.clearTimeout(toastTimerRef.current)
     toastTimerRef.current = window.setTimeout(() => setToast(''), 2200)
   }, [])
+
+  const setChatFolders = useCallback((update) => {
+    setState((current) => ({
+      ...current,
+      chatFolders:
+        typeof update === 'function'
+          ? update(current.chatFolders || EMPTY_CHAT_FOLDERS)
+          : update,
+    }))
+  }, [])
+
+  const {
+    selectedFolderId,
+    setSelectedFolderId,
+    createFolder,
+    saveFolder,
+    removeFolder,
+    toggleFolderChatPin,
+  } = useChatFolders({ chatFolders: state.chatFolders, setChatFolders, showToast })
+
+  const {
+    loadSessions,
+    loadTotpStatus,
+    beginTotpSetup,
+    confirmTotpSetup,
+    turnOffTotp,
+    loadSecurityAlerts,
+    markSecurityAlertRead,
+    markAllSecurityAlertsRead,
+    loadBlockedContacts,
+    loadPrivacySettings,
+    savePrivacySettings,
+    endOtherSessions,
+  } = useAccountSecurity({
+    applyServerUser: (user) => applyServerUser(user),
+    showToast,
+  })
 
   useEffect(() => {
     if (auth.status !== 'authenticated' || !state.user?.id) return
@@ -2918,125 +2908,6 @@ function AppInner() {
     }
   }
 
-  function upsertChatFolder(folder) {
-    setState((current) => {
-      const normalized = normalizeChatFolders({ ...current.chatFolders, folders: [folder] }).folders[0]
-      return {
-        ...current,
-        chatFolders: {
-          ...(current.chatFolders || EMPTY_CHAT_FOLDERS),
-          folders: (current.chatFolders?.folders || []).some((item) => item.id === normalized.id)
-            ? current.chatFolders.folders.map((item) => (item.id === normalized.id ? normalized : item))
-            : [...(current.chatFolders?.folders || []), normalized],
-        },
-      }
-    })
-  }
-
-  async function createFolder(input) {
-    const { folder } = await createChatFolder(input)
-    upsertChatFolder(folder)
-    showToast('Folder created.')
-    return folder
-  }
-
-  async function saveFolder(folderId, input) {
-    const snapshot = state.chatFolders
-    try {
-      const { folder } = await updateChatFolder(folderId, input)
-      setState((current) => {
-        const existing = current.chatFolders?.folders?.find((item) => item.id === folderId)
-        const nextFolder = {
-          ...existing,
-          ...folder,
-          chats: folder.chats || existing?.chats || [],
-        }
-        return {
-          ...current,
-          chatFolders: {
-            ...(current.chatFolders || EMPTY_CHAT_FOLDERS),
-            folders: (current.chatFolders?.folders || []).map((item) =>
-              item.id === folderId ? normalizeChatFolders({ folders: [nextFolder] }).folders[0] : item,
-            ),
-          },
-        }
-      })
-      showToast('Folder saved.')
-      return folder
-    } catch (error) {
-      setState((current) => ({ ...current, chatFolders: snapshot }))
-      throw error
-    }
-  }
-
-  async function removeFolder(folderId) {
-    const snapshot = state.chatFolders
-    setState((current) => ({
-      ...current,
-      chatFolders: {
-        ...(current.chatFolders || EMPTY_CHAT_FOLDERS),
-        folders: (current.chatFolders?.folders || []).filter((folder) => folder.id !== folderId),
-      },
-    }))
-    if (selectedFolderId === folderId) setSelectedFolderId('all')
-    try {
-      await deleteChatFolder(folderId)
-      showToast('Folder deleted.')
-    } catch (error) {
-      setState((current) => ({ ...current, chatFolders: snapshot }))
-      throw error
-    }
-  }
-
-  async function toggleFolderChatPin(folderId, chatId) {
-    const folder = state.chatFolders?.folders?.find((item) => item.id === folderId)
-    const folderChat = folder?.chats?.find((item) => item.chatId === chatId)
-    if (!folder || !folderChat) return
-    const nextPinned = !folderChat.pinned
-    const now = new Date().toISOString()
-    const snapshot = state.chatFolders
-    setState((current) => ({
-      ...current,
-      chatFolders: {
-        ...(current.chatFolders || EMPTY_CHAT_FOLDERS),
-        folders: (current.chatFolders?.folders || []).map((item) =>
-          item.id === folderId
-            ? {
-                ...item,
-                chats: item.chats.map((chat) =>
-                  chat.chatId === chatId
-                    ? { ...chat, pinned: nextPinned, pinnedAt: nextPinned ? now : null }
-                    : chat,
-                ),
-              }
-            : item,
-        ),
-      },
-    }))
-    try {
-      const { chat } = await updateChatFolderChat(folderId, chatId, { pinned: nextPinned })
-      setState((current) => ({
-        ...current,
-        chatFolders: {
-          ...(current.chatFolders || EMPTY_CHAT_FOLDERS),
-          folders: (current.chatFolders?.folders || []).map((item) =>
-            item.id === folderId
-              ? {
-                  ...item,
-                  chats: item.chats.map((folderChat) =>
-                    folderChat.chatId === chatId ? { ...folderChat, ...chat } : folderChat,
-                  ),
-                }
-              : item,
-          ),
-        },
-      }))
-    } catch (error) {
-      setState((current) => ({ ...current, chatFolders: snapshot }))
-      showToast(error.message || 'Folder pin was not saved.')
-    }
-  }
-
   async function createChat(contactId) {
     const existing = state.chats.find((chat) => chat.contactId === contactId)
     if (existing) {
@@ -3343,7 +3214,18 @@ function AppInner() {
 
   async function exportEncryptionKey() {
     try {
-      const backup = await exportUserKeyBackup(state.user.id)
+      const passphrase = window.prompt(t('privacy.exportKeyAskPassphrase'))
+      if (!passphrase) return
+      if (passphrase.length < 8) {
+        showToast(t('cloudKey.tooShort'))
+        return
+      }
+      const confirmPhrase = window.prompt(t('cloudKey.repeatPassphrase'))
+      if (confirmPhrase !== passphrase) {
+        showToast(t('cloudKey.mismatch'))
+        return
+      }
+      const backup = await exportUserKeyBackup(state.user.id, passphrase)
       const url = URL.createObjectURL(new Blob([backup], { type: 'application/json' }))
       const link = document.createElement('a')
       link.href = url
@@ -3352,15 +3234,15 @@ function AppInner() {
       link.click()
       link.remove()
       window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-      showToast('Encryption key exported.')
+      showToast(t('privacy.exportKeyDone'))
     } catch (error) {
       showToast(error.message || 'Encryption key was not exported.')
     }
   }
 
-  async function importEncryptionKey(file) {
+  async function importEncryptionKey(file, passphrase) {
     try {
-      const keyRecord = await importUserKeyBackup(state.user.id, await file.text())
+      const keyRecord = await importUserKeyBackup(state.user.id, await file.text(), passphrase)
       const { user } = await updateEncryptionPublicKey(keyRecord.publicKey)
       const encryptionPublicKey = user.encryptionPublicKey || keyRecord.publicKey
       const updatedUser = {
@@ -3393,9 +3275,11 @@ function AppInner() {
 
   // Cloud key backup: passphrase-encrypted blob synced via the server so a
   // second device can pick up the local encryption key without manual file transfer.
+  // Uses buildUserKeyMaterial (plain key JSON) rather than exportUserKeyBackup so the
+  // key is only wrapped once, with the passphrase the user enters for this flow.
   async function cloudKeyBackup(passphrase) {
     try {
-      const backup = await exportUserKeyBackup(state.user.id)
+      const backup = await buildUserKeyMaterial(state.user.id)
       const payload = await encryptKeyBackupWithPassphrase(backup, passphrase)
       await putCloudKeyBackup(payload)
       showToast(t('cloudKey.saved'))
@@ -3410,66 +3294,14 @@ function AppInner() {
     try {
       const { payload } = await getCloudKeyBackup()
       const backup = await decryptKeyBackupWithPassphrase(payload, passphrase)
+      // backup is the plain (v1-shaped) key JSON produced by buildUserKeyMaterial,
+      // already decrypted by the cloud passphrase above, so no second passphrase here.
       await importEncryptionKey(new Blob([backup], { type: 'application/json' }))
       return true
     } catch (error) {
       showToast(error.message || t('cloudKey.restoreFailed'))
       return false
     }
-  }
-
-  async function loadSessions() {
-    const { sessions } = await getSessions()
-    return sessions
-  }
-
-  async function loadTotpStatus() {
-    return getTotpStatus()
-  }
-
-  async function beginTotpSetup() {
-    return startTotpSetup()
-  }
-
-  async function confirmTotpSetup(code) {
-    const { user } = await verifyTotpSetup(code)
-    applyServerUser(user)
-    showToast('Two-factor authentication enabled.')
-    return user
-  }
-
-  async function turnOffTotp(code) {
-    const { user } = await disableTotp(code)
-    applyServerUser(user)
-    showToast('Two-factor authentication disabled.')
-    return user
-  }
-
-  async function loadSecurityAlerts(unread = false) {
-    const { events } = await getSecurityEvents({ unread })
-    return events
-  }
-
-  async function markSecurityAlertRead(eventId) {
-    await markSecurityEventRead(eventId)
-  }
-
-  async function markAllSecurityAlertsRead() {
-    await markAllSecurityEventsRead()
-    showToast('Security alerts marked as read.')
-  }
-
-  async function loadBlockedContacts() {
-    const { users } = await getBlockedUsers()
-    return users
-  }
-
-  async function loadPrivacySettings() {
-    return getPrivacySettings()
-  }
-
-  async function savePrivacySettings(updates) {
-    return updatePrivacySettings(updates)
   }
 
   function applyBlockedState(userId, blockedByMe) {
@@ -3611,11 +3443,6 @@ function AppInner() {
     } else {
       showToast('Session terminated.')
     }
-  }
-
-  async function endOtherSessions() {
-    await terminateOtherSessions()
-    showToast('Other sessions terminated.')
   }
 
   function resetState() {

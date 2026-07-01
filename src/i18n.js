@@ -178,6 +178,9 @@ const DICT = {
     // --- Privacy menu ---
     'privacy.exportKey': 'Экспорт ключа шифрования',
     'privacy.importKey': 'Импорт ключа шифрования',
+    'privacy.exportKeyAskPassphrase': 'Придумайте парольную фразу для файла ключа (минимум 8 символов). Она нужна для восстановления — если вы её потеряете, восстановить ключ будет невозможно.',
+    'privacy.exportKeyDone': 'Ключ экспортирован и зашифрован парольной фразой.',
+    'privacy.importKeyAskPassphrase': 'Введите парольную фразу для файла ключа (для старых незашифрованных файлов оставьте поле пустым).',
     'privacy.changePassword': 'Сменить пароль',
     'privacy.twoFactor': 'Двухфакторная аутентификация',
     'privacy.encryptionStatus': 'Статус шифрования',
@@ -521,6 +524,9 @@ const DICT = {
     // --- Privacy menu ---
     'privacy.exportKey': 'Export encryption key',
     'privacy.importKey': 'Import encryption key',
+    'privacy.exportKeyAskPassphrase': 'Choose a passphrase for the key file (at least 8 characters). You will need it to restore this key — if you lose it, the backup cannot be recovered.',
+    'privacy.exportKeyDone': 'Key exported and encrypted with your passphrase.',
+    'privacy.importKeyAskPassphrase': 'Enter the passphrase for this key file (leave blank for older unencrypted files).',
     'privacy.changePassword': 'Change password',
     'privacy.twoFactor': 'Two-factor authentication',
     'privacy.encryptionStatus': 'Encryption status',
