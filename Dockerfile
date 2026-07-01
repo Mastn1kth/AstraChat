@@ -13,6 +13,14 @@ FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
+# postgresql-client provides pg_dump/pg_restore/psql, used by the admin
+# backup route (server/routes/admin.js) and deploy/restore-postgres.sh when
+# DATABASE_URL points at Postgres. --no-install-recommends + apt cache
+# cleanup keeps this from meaningfully growing the runtime image.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends postgresql-client \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 

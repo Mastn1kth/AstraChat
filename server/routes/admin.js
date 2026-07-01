@@ -1,15 +1,20 @@
 import { Router } from 'express'
 import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { resolve } from 'node:path'
+import { spawn } from 'node:child_process'
+import { createGzip } from 'node:zlib'
 import {
   cpSync,
+  createWriteStream,
   existsSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs'
+import { pipeline } from 'node:stream/promises'
 import { config } from '../config.js'
 import { db, cleanupExpiredSessions } from '../db.js'
 import { requireAuth } from '../auth.js'
@@ -18,6 +23,7 @@ import { metricsContentType, metricsText } from '../metrics.js'
 import { parseBody, pushSubscriptionSchema, deletePushSubscriptionSchema, fcmTokenSchema } from '../validation.js'
 import { publicWallMessage } from '../server-helpers.js'
 import { normalizePushExpiration } from '../push-service.js'
+import logger from '../logger.js'
 
 function safeEqual(a, b) {
   const ab = Buffer.from(String(a || ''))
@@ -44,6 +50,58 @@ function directorySize(path) {
     total += entry.isDirectory() ? directorySize(entryPath) : statSync(entryPath).size
   }
   return total
+}
+
+// Runs `pg_dump` against `config.databaseUrl` and streams the (gzip
+// compressed) output straight to `outputPath`. Using spawn + stdout piping
+// (rather than execFileSync with output buffering) keeps memory flat for
+// large databases and lets us gzip in-process without shelling out to `gzip`.
+//
+// The connection string is passed as a single argv element, not interpolated
+// into a shell string, so there is no shell-injection risk here even though
+// it may contain special characters (password, query params).
+async function runPgDump(databaseUrl, outputPath) {
+  let child
+  try {
+    child = spawn('pg_dump', ['--no-owner', '--format=plain', databaseUrl], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+  } catch (error) {
+    throw new PgDumpUnavailableError(error.message)
+  }
+
+  let stderr = ''
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk.toString('utf8').slice(0, 4000)
+  })
+
+  const exitCodePromise = new Promise((resolvePromise, rejectPromise) => {
+    child.on('error', (error) => {
+      if (error.code === 'ENOENT') {
+        rejectPromise(new PgDumpUnavailableError('pg_dump binary not found on PATH'))
+        return
+      }
+      rejectPromise(error)
+    })
+    child.on('close', (code) => resolvePromise(code))
+  })
+
+  await pipeline(child.stdout, createGzip(), createWriteStream(outputPath))
+  const exitCode = await exitCodePromise
+  if (exitCode !== 0) {
+    throw new Error(`pg_dump exited with code ${exitCode}: ${stderr || '(no stderr output)'}`)
+  }
+}
+
+class PgDumpUnavailableError extends Error {
+  constructor(detail) {
+    super(
+      'pg_dump is not available in this runtime. Install the postgresql-client package ' +
+        `(e.g. "apt-get install -y postgresql-client" in the Docker image) or run backups ` +
+        `from a host that has pg_dump on PATH. Detail: ${detail}`,
+    )
+    this.name = 'PgDumpUnavailableError'
+  }
 }
 
 async function adminCount(sql, params = []) {
@@ -185,13 +243,31 @@ router.patch('/api/admin/reports/:id', requireAdmin, async (request, response) =
   response.json({ report: result.rows[0] })
 })
 
+function readBackupManifest(name) {
+  const manifestPath = resolve(adminBackupsDir, name, 'manifest.json')
+  if (!existsSync(manifestPath)) return null
+  try {
+    return JSON.parse(readFileSync(manifestPath, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
 router.get('/api/admin/backups', requireAdmin, (_request, response) => {
   const backups = existsSync(adminBackupsDir)
     ? readdirSync(adminBackupsDir)
         .filter((name) => name.startsWith('onda-'))
         .sort()
         .reverse()
-        .map((name) => ({ name, sizeBytes: directorySize(resolve(adminBackupsDir, name)) }))
+        .map((name) => {
+          const manifest = readBackupManifest(name)
+          return {
+            name,
+            sizeBytes: directorySize(resolve(adminBackupsDir, name)),
+            database: manifest?.database || null,
+            method: manifest?.method || null,
+          }
+        })
     : []
   response.json({ backups })
 })
@@ -201,12 +277,37 @@ router.post('/api/admin/backup', requireAdmin, async (_request, response) => {
   const name = `onda-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`
   const target = resolve(adminBackupsDir, name)
   mkdirSync(target, { recursive: true })
-  cpSync(config.dataDir, resolve(target, 'data'), { recursive: true })
-  writeFileSync(
-    resolve(target, 'manifest.json'),
-    JSON.stringify({ createdAt: new Date().toISOString(), database: config.databaseUrl ? 'postgres' : 'pglite' }, null, 2),
-  )
-  response.json({ ok: true, name, sizeBytes: directorySize(target) })
+
+  const manifest = {
+    createdAt: new Date().toISOString(),
+    database: config.databaseUrl ? 'postgres' : 'pglite',
+  }
+
+  if (config.databaseUrl) {
+    // Real production mode: the durable data lives in Postgres, not on local
+    // disk, so back up Postgres itself via pg_dump rather than copying
+    // config.dataDir (which would silently produce an empty/meaningless
+    // backup of message/user data in this mode).
+    manifest.method = 'pg_dump'
+    manifest.file = 'database.sql.gz'
+    try {
+      await runPgDump(config.databaseUrl, resolve(target, 'database.sql.gz'))
+    } catch (error) {
+      rmSync(target, { recursive: true, force: true })
+      logger.error({ err: error.message }, '[admin] pg_dump backup failed')
+      const status = error instanceof PgDumpUnavailableError ? 503 : 500
+      response.status(status).json({ error: error.message })
+      return
+    }
+  } else {
+    // PGlite/local mode: the data genuinely lives on local disk under
+    // config.dataDir, so copying it is a legitimate backup here.
+    manifest.method = 'copy-data-dir'
+    cpSync(config.dataDir, resolve(target, 'data'), { recursive: true })
+  }
+
+  writeFileSync(resolve(target, 'manifest.json'), JSON.stringify(manifest, null, 2))
+  response.json({ ok: true, name, sizeBytes: directorySize(target), database: manifest.database, method: manifest.method })
 })
 
 router.delete('/api/admin/backups/:name', requireAdmin, (request, response) => {

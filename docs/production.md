@@ -129,7 +129,102 @@ Self-hosted compose backup helpers:
 .\deploy\backup-postgres.ps1
 ```
 
+Restore counterparts (destructive — they drop and recreate the target
+database, so both prompt for confirmation unless run with an explicit
+skip-confirmation flag):
+
+```bash
+./deploy/restore-postgres.sh backups/astrachat-postgres-20260702-101500.sql.gz
+```
+
+```powershell
+.\deploy\restore-postgres.ps1 -BackupFile .\backups\astrachat-postgres-20260702-101500.sql.gz
+```
+
 Store those backups outside the host that runs the app. A local backup folder on the same disk is only a recovery convenience, not disaster recovery.
+
+The in-app admin backup button (`/admin` → Backups, `POST /api/admin/backup`)
+follows the same split: when `DATABASE_URL` is set it runs `pg_dump` against
+that connection string and writes a gzip-compressed `database.sql.gz` into
+`backups/<timestamp>/`; when running in local PGlite mode (no `DATABASE_URL`)
+it copies `config.dataDir` instead, which is only meaningful in that mode
+since PGlite's data genuinely lives on local disk. If `pg_dump` isn't on
+`PATH` (e.g. a minimal image missing `postgresql-client`), the endpoint
+returns a clear `503` error instead of silently producing an empty backup;
+the `Dockerfile` runtime stage installs `postgresql-client` for this reason.
+
+## Horizontal scaling
+
+This app is already stateless-ready: WebSocket fan-out, presence, session
+lookups and rate limiting all go through Redis (`server/redis.js`,
+`server/limiters.js`) rather than in-process memory, so any app replica can
+serve any client's HTTP requests and WebSocket connection. Concretely:
+
+- `server/redis.js` publishes every outgoing WS message to a
+  `astrachat:ws` Redis pub/sub channel and every replica subscribes to it, so
+  a message delivered to a client connected to replica B still reaches a
+  recipient connected to replica A.
+- Online presence is tracked as Redis keys per `(user, app instance)` with a
+  TTL and refreshed on an interval, not as an in-memory `Set` local to one
+  process.
+- Session lookups are cached in Redis (`cacheSession`/`getCachedSessionUserId`)
+  so any replica can authenticate a cookie without a local in-memory session
+  store.
+- Auth/message/upload/API rate limits use `rate-limit-redis`
+  (`server/limiters.js`) backed by the same Redis instance, so limits are
+  enforced across all replicas combined, not per-process.
+
+Because of this, **sticky sessions are not required** at the load balancer —
+do not add IP-hash or cookie-based session affinity in `deploy/nginx.conf`
+when scaling; it isn't needed here and would just make load distribution
+worse.
+
+### Running N replicas
+
+This is a plain `docker compose` file (no swarm `deploy:` keys), so replicas
+are created with `--scale`, not `deploy.replicas` (that key only takes
+effect under `docker stack deploy` / swarm mode). The default `app` service
+publishes a fixed host port (`3001:3001`) so the single-replica documented
+flow above keeps working unmodified; running more than one replica requires
+dropping that fixed port mapping (two containers can't both bind host port
+3001) and routing traffic through the `nginx` edge profile instead, whose
+`upstream`/resolver config in `deploy/nginx.conf` re-resolves the `app`
+service name to every running replica via Docker's embedded DNS
+(`127.0.0.11`). The simplest way to do this without editing the checked-in
+compose file is a small override:
+
+```yaml
+# docker-compose.scale.yml
+services:
+  app:
+    ports: []
+```
+
+```bash
+docker compose --env-file .env.production --profile edge \
+  -f docker-compose.yml -f docker-compose.scale.yml \
+  up --build --scale app=3
+```
+
+### Hard requirements for correctness
+
+- **Redis is mandatory**, not optional, once you run more than one replica.
+  `NODE_ENV=production` already refuses to start without `REDIS_URL` (see
+  `server/config.js`), so this is enforced, but it's worth stating
+  explicitly here: without Redis, presence/session/WS fan-out silently
+  degrade to per-process state and different replicas will disagree about
+  who's online and drop cross-replica messages.
+- **PostgreSQL must be a real, shared Postgres instance** — a managed
+  service (RDS, Cloud SQL, a dedicated `postgres` container/VM other
+  replicas connect to over the network) — not per-replica PGlite. PGlite is
+  an embedded, single-process, single-writer database with its data on that
+  one process's local disk; running it in more than one replica means each
+  replica has its own disjoint copy of "the database," which is a
+  correctness bug, not a performance tradeoff. The included `docker-compose.yml`
+  already points `DATABASE_URL` at a single shared `postgres` service for
+  exactly this reason — keep it that way when scaling `app`.
+- Object storage (`STORAGE_DRIVER=s3`) and the media CDN are already
+  replica-agnostic since they're external services, not local disk.
 
 ## CDN
 
