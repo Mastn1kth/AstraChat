@@ -24,10 +24,11 @@ export async function apiLogin(page) {
   await page.reload()
   await expect(page.locator('.sidebar')).toBeVisible({ timeout: 10_000 })
 
-  // Dismiss permission onboarding dialog if it appears
-  const later = page.locator('button', { hasText: /later/i })
-  if (await later.isVisible({ timeout: 3_000 }).catch(() => false)) {
-    await later.click()
+  // Dismiss permission onboarding dialog if it appears.
+  const onboarding = page.locator('.permission-onboarding')
+  if (await onboarding.isVisible({ timeout: 5_000 }).catch(() => false)) {
+    await onboarding.getByRole('button', { name: /later|close permissions/i }).first().click()
+    await expect(onboarding).toBeHidden({ timeout: 5_000 })
   }
 }
 

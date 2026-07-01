@@ -3,6 +3,7 @@ import { t } from '../i18n'
 import {
   BarChart3,
   Bold,
+  Camera,
   ChevronDown,
   Clock,
   Code,
@@ -32,6 +33,7 @@ import StickerPicker from './StickerPicker'
 import CustomEmojiPicker from './CustomEmojiPicker'
 import { getMessagePlainText } from '../utils/richMessages'
 import { extractFirstUrl, fetchLinkPreview } from '../utils/linkPreview'
+import { saveDraft, loadDraft, clearDraft as clearDraftUtil } from '../utils/drafts'
 
 const DRAFT_PREFIX = 'astrachat.draft.'
 
@@ -42,6 +44,18 @@ function getSupportedAudioMimeType() {
     'audio/webm',
     'audio/ogg;codecs=opus',
     'audio/mp4',
+  ].find((type) => window.MediaRecorder.isTypeSupported(type)) || ''
+}
+
+const VIDEO_NOTE_MAX_SECONDS = 60
+
+function getSupportedVideoNoteMimeType() {
+  if (!window.MediaRecorder) return ''
+  return [
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm',
+    'video/mp4',
   ].find((type) => window.MediaRecorder.isTypeSupported(type)) || ''
 }
 
@@ -94,6 +108,8 @@ export default function Composer({
   const [recording, setRecording] = useState(false)
   const [recordSeconds, setRecordSeconds] = useState(0)
   const [liveWaveform, setLiveWaveform] = useState([])
+  const [videoNoteRecording, setVideoNoteRecording] = useState(false)
+  const [videoNoteSeconds, setVideoNoteSeconds] = useState(0)
   const [formatBarOpen, setFormatBarOpen] = useState(false)
   const [linkPreview, setLinkPreview] = useState(null)
   const [suppressPreview, setSuppressPreview] = useState(false)
@@ -110,6 +126,12 @@ export default function Composer({
   const recordChunksRef = useRef([])
   const recordTimerRef = useRef(null)
   const recordSendRef = useRef(true)
+  const videoNoteRecorderRef = useRef(null)
+  const videoNoteStreamRef = useRef(null)
+  const videoNoteChunksRef = useRef([])
+  const videoNoteTimerRef = useRef(null)
+  const videoNoteSendRef = useRef(true)
+  const videoNotePreviewRef = useRef(null)
   const analyserRef = useRef(null)
   const audioCtxRef = useRef(null)
   const waveAnimRef = useRef(null)
@@ -136,18 +158,17 @@ export default function Composer({
 
   useEffect(() => () => onTyping(false), [onTyping])
 
+  // Restore draft when switching chats
   useEffect(() => {
-    if (!draftKey || editingMessage) return
-    try {
-      if (value.trim()) {
-        globalThis.localStorage?.setItem(draftKey, value)
-      } else {
-        globalThis.localStorage?.removeItem(draftKey)
-      }
-    } catch {
-      // Ignore storage failures.
-    }
-  }, [value, draftKey, editingMessage])
+    if (editingMessage) return
+    setValue(loadDraft(chatId))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatId])
+
+  useEffect(() => {
+    if (!chatId || editingMessage) return
+    saveDraft(chatId, value)
+  }, [value, chatId, editingMessage])
 
   useEffect(() => {
     if (suppressPreview) return undefined
@@ -214,6 +235,25 @@ export default function Composer({
     setLiveWaveform([])
   }, [clearRecordingTimer, stopWaveformAnimation])
 
+  const clearVideoNoteTimer = useCallback(() => {
+    if (!videoNoteTimerRef.current) return
+    window.clearInterval(videoNoteTimerRef.current)
+    videoNoteTimerRef.current = null
+  }, [])
+
+  const stopVideoNoteStream = useCallback((stream = videoNoteStreamRef.current) => {
+    stream?.getTracks().forEach((track) => track.stop())
+    if (!stream || videoNoteStreamRef.current === stream) videoNoteStreamRef.current = null
+  }, [])
+
+  const resetVideoNoteState = useCallback(() => {
+    clearVideoNoteTimer()
+    if (videoNotePreviewRef.current) videoNotePreviewRef.current.srcObject = null
+    if (!mountedRef.current) return
+    setVideoNoteRecording(false)
+    setVideoNoteSeconds(0)
+  }, [clearVideoNoteTimer])
+
   useEffect(() => {
     return () => {
       mountedRef.current = false
@@ -227,9 +267,19 @@ export default function Composer({
         stopRecordStream()
       }
       recordChunksRef.current = []
+      videoNoteSendRef.current = false
+      clearVideoNoteTimer()
+      const videoRecorder = videoNoteRecorderRef.current
+      if (videoRecorder && videoRecorder.state !== 'inactive') {
+        videoRecorder.stop()
+      } else {
+        videoNoteRecorderRef.current = null
+        stopVideoNoteStream()
+      }
+      videoNoteChunksRef.current = []
       sendAbortRef.current?.abort()
     }
-  }, [clearRecordingTimer, stopRecordStream])
+  }, [clearRecordingTimer, stopRecordStream, clearVideoNoteTimer, stopVideoNoteStream])
 
   const wrapSelection = useCallback((prefix, suffix) => {
     const el = inputRef.current
@@ -248,12 +298,7 @@ export default function Composer({
   }, [value])
 
   function clearDraft() {
-    if (!draftKey) return
-    try {
-      globalThis.localStorage?.removeItem(draftKey)
-    } catch {
-      // Ignore.
-    }
+    clearDraftUtil(chatId)
   }
 
   function clearAttachment() {
@@ -552,6 +597,87 @@ export default function Composer({
     resetRecordingState()
   }
 
+  async function startVideoNoteRecording() {
+    if (videoNoteRecording || recording || sending) return
+    const mimeType = getSupportedVideoNoteMimeType()
+    if (!mimeType || !navigator.mediaDevices?.getUserMedia) {
+      onAttach(t('err.noCamera'))
+      return
+    }
+    let stream
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 240, height: 240, facingMode: 'user' },
+        audio: true,
+      })
+    } catch {
+      onAttach(t('err.cameraDenied'))
+      return
+    }
+    videoNoteStreamRef.current = stream
+    videoNoteChunksRef.current = []
+    videoNoteSendRef.current = true
+
+    if (videoNotePreviewRef.current) {
+      videoNotePreviewRef.current.srcObject = stream
+    }
+
+    let recorder
+    try {
+      recorder = new MediaRecorder(stream, { mimeType })
+    } catch {
+      stopVideoNoteStream(stream)
+      onAttach(t('err.noCamera'))
+      return
+    }
+    videoNoteRecorderRef.current = recorder
+
+    recorder.addEventListener('dataavailable', (event) => {
+      if (event.data.size > 0) videoNoteChunksRef.current.push(event.data)
+    })
+    recorder.addEventListener('stop', () => {
+      videoNoteRecorderRef.current = null
+      stopVideoNoteStream(stream)
+      const shouldSend = videoNoteSendRef.current
+      resetVideoNoteState()
+      if (!shouldSend) {
+        videoNoteChunksRef.current = []
+        return
+      }
+      const baseType = mimeType.split(';')[0]
+      const blob = new Blob(videoNoteChunksRef.current, { type: baseType })
+      videoNoteChunksRef.current = []
+      if (!blob.size) return
+      const extension = baseType.includes('mp4') ? 'mp4' : 'webm'
+      const file = new File([blob], `video-note-${Date.now()}.${extension}`, { type: baseType })
+      if (mountedRef.current) void onSendAttachment(file, '')
+    })
+
+    recorder.start()
+    setVideoNoteRecording(true)
+    setVideoNoteSeconds(0)
+    videoNoteTimerRef.current = window.setInterval(() => {
+      setVideoNoteSeconds((current) => {
+        if (current >= VIDEO_NOTE_MAX_SECONDS) {
+          stopVideoNoteRecording(true)
+          return current
+        }
+        return current + 1
+      })
+    }, 1000)
+  }
+
+  function stopVideoNoteRecording(send) {
+    videoNoteSendRef.current = send
+    const recorder = videoNoteRecorderRef.current
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.stop()
+      return
+    }
+    stopVideoNoteStream()
+    resetVideoNoteState()
+  }
+
   const mode = editingMessage ? t('composer.editing') : replyTo ? t('composer.replying') : forwardSource ? t('composer.forwarding') : ''
   const preview = editingMessage || replyTo || forwardSource
   const previewText = forwardSource ? getMessagePlainText(forwardSource) : preview?.text
@@ -805,6 +931,22 @@ export default function Composer({
             <Send size={20} />
           </button>
         </div>
+      ) : videoNoteRecording ? (
+        <div className="composer-row video-note-row">
+          <button className="recording-cancel" onClick={() => stopVideoNoteRecording(false)} aria-label="Cancel video message">
+            <Trash2 size={20} />
+          </button>
+          <div className="video-note-record-preview">
+            <video ref={videoNotePreviewRef} autoPlay muted playsInline />
+            <span className="video-note-recording-indicator">
+              <span className="recording-dot" />
+              {formatRecordTime(videoNoteSeconds)}
+            </span>
+          </div>
+          <button className="send-button" onClick={() => stopVideoNoteRecording(true)} aria-label="Send video message">
+            <Send size={20} />
+          </button>
+        </div>
       ) : (
         <div className="composer-row">
           <IconButton label="Emoji, stickers and GIF" onClick={() => setEmojiOpen((open) => !open)}>
@@ -914,9 +1056,14 @@ export default function Composer({
               )}
             </div>
           ) : (
-            <IconButton label="Record voice message" onClick={startRecording}>
-              <Mic size={21} />
-            </IconButton>
+            <>
+              <IconButton label="Record video message" onClick={startVideoNoteRecording}>
+                <Camera size={21} />
+              </IconButton>
+              <IconButton label="Record voice message" onClick={startRecording}>
+                <Mic size={21} />
+              </IconButton>
+            </>
           )}
         </div>
       )}

@@ -72,6 +72,7 @@ export const messageSchema = z.object({
   topicId: z.string().uuid().optional(),
   silent: z.boolean().default(false),
   scheduledAt: z.string().datetime({ offset: true }).optional(),
+  disappearsAt: z.string().datetime({ offset: true }).optional(),
   linkPreview: linkPreviewSchema,
   poll: pollSchema,
 }).refine((message) => message.text.trim().length > 0 || message.mediaId || message.poll, {
@@ -88,6 +89,12 @@ export const chatSettingsSchema = z.object({
   muted: z.boolean().optional(),
   mutedUntil: z.string().datetime().nullable().optional(),
   archived: z.boolean().optional(),
+  autoDeleteSeconds: z.number().int().min(0).nullable().optional(),
+})
+
+export const privacySchema = z.object({
+  privacyPhone: z.enum(['everyone', 'contacts', 'nobody']).optional(),
+  privacyLastSeen: z.enum(['everyone', 'contacts', 'nobody']).optional(),
 })
 
 export const chatFolderSchema = z.object({
@@ -125,6 +132,10 @@ export const reactionSchema = z.object({
   emoji: z.string().trim().min(1).max(16),
 })
 
+export const storyReplySchema = z.object({
+  text: z.string().trim().min(1).max(2000),
+})
+
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1).max(128),
   newPassword: z.string().min(10).max(128),
@@ -156,7 +167,10 @@ export const fcmTokenSchema = z.object({
 })
 
 export const deletePushSubscriptionSchema = z.object({
-  endpoint: z.string().url().max(2048).optional(),
+  endpoint: z.string().trim().max(4096).refine(
+    (value) => value.startsWith('fcm:') || z.string().url().safeParse(value).success,
+    'Endpoint must be a URL or fcm token endpoint',
+  ).optional(),
 })
 
 export const reportSchema = z.object({
@@ -213,6 +227,18 @@ export const updateTopicSchema = z.object({
 
 export const pollVoteSchema = z.object({
   optionIds: z.array(z.string().uuid()).min(0).max(10).default([]),
+})
+
+export const markReadSchema = z.object({
+  upToMessageId: z.string().uuid(),
+})
+
+export const telegramImportSchema = z.object({
+  messages: z.array(z.object({
+    date: z.string(),
+    from: z.string().optional(),
+    text: z.string().max(4000),
+  })).min(1).max(5000),
 })
 
 export function parseBody(schema, body) {

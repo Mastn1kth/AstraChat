@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { randomUUID } from 'node:crypto'
 import { config } from '../config.js'
+import { createCallMediaServerSession } from '../call-media-server.js'
 import { db } from '../db.js'
 import { requireAuth } from '../auth.js'
 import { parseBody, callSchema } from '../validation.js'
@@ -165,6 +166,7 @@ router.post('/', requireAuth, async (request, response) => {
   })
 
   const participants = await getCallParticipants(callId, request.user.id)
+  const usesExternalMediaServer = chat?.type === 'group' && config.webrtc.groupMediaMode !== 'mesh'
   const onlineParticipantIds = []
   for (const recipientId of recipientIds) {
     const delivered = await sendToUser(recipientId, {
@@ -175,6 +177,9 @@ router.post('/', requireAuth, async (request, response) => {
       from: publicUser(request.user),
       participants,
       iceServers: config.webrtc.iceServers,
+      mediaServer: usesExternalMediaServer
+        ? createCallMediaServerSession({ callId, userId: recipientId })
+        : null,
     })
     if (delivered) {
       onlineParticipantIds.push(recipientId)
@@ -207,6 +212,9 @@ router.post('/', requireAuth, async (request, response) => {
       online: onlineParticipantIds.length > 0,
       onlineParticipantIds,
       iceServers: config.webrtc.iceServers,
+      mediaServer: usesExternalMediaServer
+        ? createCallMediaServerSession({ callId, userId: request.user.id })
+        : null,
     },
   })
 })

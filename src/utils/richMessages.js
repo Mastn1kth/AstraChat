@@ -21,7 +21,7 @@ export const stickerPacks = [
     title: 'Vibes',
     icon: '🌊',
     stickers: [
-      { id: 'wave', emoji: '🌊', title: 'Wave' },
+      { id: 'wave', emoji: '🌊', title: 'Wave', lottieUrl: '/stickers/wave.json' },
       { id: 'sun', emoji: '☀️', title: 'Sunny' },
       { id: 'moon', emoji: '🌙', title: 'Night' },
       { id: 'star', emoji: '⭐', title: 'Star' },

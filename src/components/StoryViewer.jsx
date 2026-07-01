@@ -1,19 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, Trash2, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Send, Trash2, X } from 'lucide-react'
 import Avatar from './Avatar'
-import { deleteStory, viewStory, reactToStory } from '../api/client'
+import { deleteStory, viewStory, reactToStory, replyToStory } from '../api/client'
 import { formatChatTime } from '../utils/formatters'
 
 const STORY_REACTIONS = ['❤️', '🔥', '😂', '😮', '👍', '🎉']
 
 const STORY_DURATION = 5000
 
-export default function StoryViewer({ groups, initialGroupIndex = 0, currentUserId, onClose, onDeleted }) {
+export default function StoryViewer({
+  groups,
+  initialGroupIndex = 0,
+  currentUserId,
+  onClose,
+  onDeleted,
+  onReplySent,
+}) {
   const [groupIndex, setGroupIndex] = useState(initialGroupIndex)
   const [storyIndex, setStoryIndex] = useState(0)
   const [progress, setProgress] = useState(0)
   // Overrides after user reacts (keyed by storyId); falls back to story.reactions from server
   const [reactOverrides, setReactOverrides] = useState({})
+  const [replyDraft, setReplyDraft] = useState({ storyId: null, text: '', status: '' })
+  const [sendingReply, setSendingReply] = useState(false)
   const pausedRef = useRef(false)
   const timerRef = useRef(null)
   const startRef = useRef(null)
@@ -21,6 +30,8 @@ export default function StoryViewer({ groups, initialGroupIndex = 0, currentUser
 
   const group = groups[groupIndex]
   const story = group?.stories[storyIndex]
+  const replyText = replyDraft.storyId === story?.id ? replyDraft.text : ''
+  const replyStatus = replyDraft.storyId === story?.id ? replyDraft.status : ''
 
   const advance = useCallback(() => {
     setGroupIndex((gi) => {
@@ -74,6 +85,24 @@ export default function StoryViewer({ groups, initialGroupIndex = 0, currentUser
         [story.id]: { reactions: result.reactions, myReaction: result.myReaction },
       }))
     } catch { /* ignore */ }
+  }
+
+  async function handleReply(event) {
+    event.preventDefault()
+    if (!story?.id || sendingReply) return
+    const text = replyText.trim()
+    if (!text) return
+    setSendingReply(true)
+    setReplyDraft({ storyId: story.id, text: replyText, status: '' })
+    try {
+      const result = await replyToStory(story.id, text)
+      onReplySent?.(result)
+      setReplyDraft({ storyId: story.id, text: '', status: 'Sent' })
+    } catch (error) {
+      setReplyDraft({ storyId: story.id, text: replyText, status: error?.message || 'Could not send' })
+    } finally {
+      setSendingReply(false)
+    }
   }
 
   function setPaused(next) {
@@ -163,22 +192,43 @@ export default function StoryViewer({ groups, initialGroupIndex = 0, currentUser
 
         {/* Reaction bar */}
         {!isOwn && (
-          <div className="story-reactions" onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
-            {STORY_REACTIONS.map((emoji) => {
-              const data = reactOverrides[story.id] || { reactions: story.reactions || {}, myReaction: story.myReaction || null }
-              const count = (data.reactions || {})[emoji] || 0
-              const active = data.myReaction === emoji
-              return (
-                <button
-                  key={emoji}
-                  className={`story-react-btn ${active ? 'active' : ''}`}
-                  onClick={(e) => { e.stopPropagation(); handleReact(emoji) }}
-                >
-                  {emoji}{count > 0 && <span>{count}</span>}
-                </button>
-              )
-            })}
-          </div>
+          <>
+            <div className="story-reactions" onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
+              {STORY_REACTIONS.map((emoji) => {
+                const data = reactOverrides[story.id] || { reactions: story.reactions || {}, myReaction: story.myReaction || null }
+                const count = (data.reactions || {})[emoji] || 0
+                const active = data.myReaction === emoji
+                return (
+                  <button
+                    key={emoji}
+                    className={`story-react-btn ${active ? 'active' : ''}`}
+                    onClick={(e) => { e.stopPropagation(); handleReact(emoji) }}
+                  >
+                    {emoji}{count > 0 && <span>{count}</span>}
+                  </button>
+                )
+              })}
+            </div>
+            <form
+              className="story-reply"
+              onSubmit={handleReply}
+              onMouseDown={(e) => e.stopPropagation()}
+              onTouchStart={(e) => e.stopPropagation()}
+            >
+              <input
+                value={replyText}
+                onChange={(e) => setReplyDraft({ storyId: story.id, text: e.target.value, status: '' })}
+                onFocus={() => setPaused(true)}
+                onBlur={() => setPaused(false)}
+                placeholder="Reply to story"
+                maxLength={2000}
+              />
+              <button type="submit" disabled={!replyText.trim() || sendingReply} title="Send reply">
+                <Send size={16} />
+              </button>
+              {replyStatus && <span>{replyStatus}</span>}
+            </form>
+          </>
         )}
         {isOwn && Object.keys((reactOverrides[story.id]?.reactions || story.reactions) || {}).length > 0 && (
           <div className="story-reactions story-reactions-owner">

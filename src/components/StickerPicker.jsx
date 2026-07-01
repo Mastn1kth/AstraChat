@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { PackagePlus, Search, Star, X } from 'lucide-react'
 import { getInstalledStickerPacks, getStickerPacks, installStickerPack, uninstallStickerPack } from '../api/client'
 import { stickerPacks as builtinPacks } from '../utils/richMessages'
+import LottieAnimation from './LottieAnimation'
 import {
   addRecentSticker,
   getFavoriteStickers,
@@ -158,7 +159,9 @@ export default function StickerPicker({ onSelect }) {
               title={sticker.title}
               onClick={() => pickSticker(sticker)}
             >
-              {sticker.emoji}
+              {sticker.lottieUrl ? (
+                <LottieAnimation src={sticker.lottieUrl} label={sticker.title || 'Animated sticker'} />
+              ) : sticker.emoji}
               <button
                 className={`sticker-fav-btn ${isFav ? 'active' : ''}`}
                 aria-label={isFav ? 'Remove from favorites' : 'Add to favorites'}

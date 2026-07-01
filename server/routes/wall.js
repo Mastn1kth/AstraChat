@@ -12,6 +12,13 @@ const router = Router()
 // wall message back to its author — by design, neither in the DB nor in the API.
 const WALL_MESSAGE_MAX_LENGTH = 120
 
+function stripControlCharacters(value) {
+  return Array.from(value, (char) => {
+    const code = char.codePointAt(0)
+    return code <= 0x1f || code === 0x7f ? ' ' : char
+  }).join('')
+}
+
 router.get('/api/wall', requireAuth, async (_request, response) => {
   const result = await db.query(
     `SELECT id, text, hue, created_at
@@ -23,9 +30,7 @@ router.get('/api/wall', requireAuth, async (_request, response) => {
 })
 
 router.post('/api/wall', requireAuth, wallLimiter, async (request, response) => {
-  const text = String(request.body?.text || '')
-    // Strip C0 control chars (0x00-0x1F) and DEL (0x7F)
-    .replace(/[\x00-\x1f\x7f]/gu, ' ')
+  const text = stripControlCharacters(String(request.body?.text || ''))
     .replace(/\s+/gu, ' ')
     .trim()
   if (text.length < 2 || text.length > WALL_MESSAGE_MAX_LENGTH) {

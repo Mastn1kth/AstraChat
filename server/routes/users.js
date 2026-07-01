@@ -8,6 +8,7 @@ import {
   parseBody,
   profileSchema,
   encryptionKeySchema,
+  privacySchema,
 } from '../validation.js'
 import {
   publicUser,
@@ -33,6 +34,7 @@ router.get('/', requireAuth, apiLimiter, async (request, response) => {
   const search = String(request.query.search || '').trim()
   const result = await db.query(
     `SELECT id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
+            privacy_phone, privacy_last_seen,
             EXISTS (
               SELECT 1 FROM user_contacts uc
               WHERE uc.owner_id = $1 AND uc.contact_user_id = users.id
@@ -57,7 +59,11 @@ router.get('/', requireAuth, apiLimiter, async (request, response) => {
      LIMIT 50`,
     [request.user.id, search],
   )
-  response.json({ users: result.rows.map(publicUser) })
+  response.json({
+    users: result.rows.map((row) =>
+      publicUser(row, { viewerIsContact: row.is_contact === true || row.is_contact === 't' }),
+    ),
+  })
 })
 
 router.post('/by-phone', requireAuth, apiLimiter, async (request, response) => {
@@ -78,6 +84,7 @@ router.post('/by-phone', requireAuth, apiLimiter, async (request, response) => {
   const placeholders = normalized.map((_, i) => `$${i + 2}`).join(', ')
   const result = await db.query(
     `SELECT id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
+            privacy_phone, privacy_last_seen,
             EXISTS (
               SELECT 1 FROM user_contacts uc
               WHERE uc.owner_id = $1 AND uc.contact_user_id = users.id
@@ -88,7 +95,11 @@ router.post('/by-phone', requireAuth, apiLimiter, async (request, response) => {
      LIMIT 100`,
     [request.user.id, ...normalized],
   )
-  response.json({ users: result.rows.map(publicUser) })
+  response.json({
+    users: result.rows.map((row) =>
+      publicUser(row, { viewerIsContact: row.is_contact === true || row.is_contact === 't' }),
+    ),
+  })
 })
 
 router.patch('/me/encryption-key', requireAuth, async (request, response) => {
@@ -104,7 +115,7 @@ router.patch('/me/encryption-key', requireAuth, async (request, response) => {
      SET encryption_public_key = $1, updated_at = NOW()
      WHERE id = $2
      RETURNING id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
-               totp_secret, totp_enabled_at`,
+               totp_secret, totp_enabled_at, privacy_phone, privacy_last_seen`,
     [keyValue, request.user.id],
   )
   if (previousKey && previousKey !== keyValue) {
@@ -136,7 +147,7 @@ router.patch('/me/encryption-key', requireAuth, async (request, response) => {
       })
     }
   }
-  response.json({ user: publicUser(result.rows[0]) })
+  response.json({ user: publicUser(result.rows[0], { isSelf: true }) })
 })
 
 router.patch('/me/profile', requireAuth, async (request, response) => {
@@ -147,10 +158,10 @@ router.patch('/me/profile', requireAuth, async (request, response) => {
        SET name = $1, username = $2, bio = $3, status = $4, avatar = $5, updated_at = NOW()
        WHERE id = $6
        RETURNING id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
-                 totp_secret, totp_enabled_at`,
+                 totp_secret, totp_enabled_at, privacy_phone, privacy_last_seen`,
       [input.name, input.username.toLowerCase(), input.bio, input.status, initials(input.name), request.user.id],
     )
-    response.json({ user: publicUser(result.rows[0]) })
+    response.json({ user: publicUser(result.rows[0], { isSelf: true }) })
   } catch (error) {
     if (error.code === '23505') {
       response.status(409).json({ error: 'Username is already taken' })
@@ -293,6 +304,49 @@ router.delete('/:userId/block', requireAuth, async (request, response) => {
     blockedByMe: false,
   })
   response.status(204).end()
+})
+
+router.get('/me/privacy', requireAuth, async (request, response) => {
+  const result = await db.query(
+    'SELECT privacy_phone, privacy_last_seen FROM users WHERE id = $1 LIMIT 1',
+    [request.user.id],
+  )
+  const row = result.rows[0] || {}
+  response.json({
+    privacyPhone: row.privacy_phone || 'contacts',
+    privacyLastSeen: row.privacy_last_seen || 'contacts',
+  })
+})
+
+router.patch('/me/privacy', requireAuth, async (request, response) => {
+  const input = parseBody(privacySchema, request.body)
+  const fields = []
+  const values = []
+  if (input.privacyPhone !== undefined) {
+    values.push(input.privacyPhone)
+    fields.push(`privacy_phone = $${values.length}`)
+  }
+  if (input.privacyLastSeen !== undefined) {
+    values.push(input.privacyLastSeen)
+    fields.push(`privacy_last_seen = $${values.length}`)
+  }
+  if (!fields.length) {
+    response.status(400).json({ error: 'No privacy fields to update' })
+    return
+  }
+  values.push(request.user.id)
+  const result = await db.query(
+    `UPDATE users
+     SET ${fields.join(', ')}, updated_at = NOW()
+     WHERE id = $${values.length}
+     RETURNING privacy_phone, privacy_last_seen`,
+    values,
+  )
+  const row = result.rows[0] || {}
+  response.json({
+    privacyPhone: row.privacy_phone || 'contacts',
+    privacyLastSeen: row.privacy_last_seen || 'contacts',
+  })
 })
 
 router.delete('/me', requireAuth, async (request, response) => {

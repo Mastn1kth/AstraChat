@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { setLang, t } from './i18n'
 import { useConfirm } from './hooks/useConfirm'
-import AppShell from './components/AppShell'
 import AuthScreen from './components/AuthScreen'
 import PermissionOnboarding from './components/PermissionOnboarding'
 import useWebRTCCall from './hooks/useWebRTCCall'
@@ -59,6 +58,7 @@ import {
   updateChatMemberRole,
   toggleMessageReaction,
   votePoll,
+  markMessagesRead,
   updateChatSettings,
   updateProfile,
   updateEncryptionPublicKey,
@@ -83,7 +83,7 @@ import {
   exportUserKeyBackup,
   importUserKeyBackup,
   publicKeyEquals,
-} from './utils/e2ee'
+} from './utils/clientEncryption'
 import {
   DEFAULT_WORD_STREAM_SETTINGS,
   extractPrivateWordStream,
@@ -94,12 +94,13 @@ import {
   API_BASE,
   confirmQrLogin,
   getCloudKeyBackup,
+  getPrivacySettings,
   getWallMessages,
   putCloudKeyBackup,
   sendWallMessage,
+  updatePrivacySettings,
 } from './api/client'
 import { ensureNotificationPermission, playIncomingSound, showDesktopNotification } from './utils/notify'
-import { disableWebPushNotifications, enableWebPushNotifications, requestFcmTokenForAuth } from './utils/push'
 import { hasCompletedPermissionOnboarding } from './utils/permissions'
 import {
   decodeRichMessage,
@@ -109,6 +110,22 @@ import {
 } from './utils/richMessages'
 
 const APP_TITLE = 'Onda'
+const AppShell = lazy(() => import('./components/AppShell'))
+
+async function enableWebPushNotifications() {
+  const push = await import('./utils/push')
+  return push.enableWebPushNotifications()
+}
+
+async function disableWebPushNotifications() {
+  const push = await import('./utils/push')
+  return push.disableWebPushNotifications()
+}
+
+async function requestFcmTokenForAuth() {
+  const push = await import('./utils/push')
+  return push.requestFcmTokenForAuth()
+}
 
 const SYSTEM_CHAT_FOLDERS = [
   { id: 'all', title: 'All', filter: 'all' },
@@ -236,7 +253,8 @@ async function normalizeServerMedia(media, currentUserId) {
   if (!media || !media.encrypted) return media || null
 
   try {
-    const response = await fetch(media.url, { credentials: 'same-origin' })
+    const sourceUrl = media.cdnUrl || media.url
+    const response = await fetch(sourceUrl, { credentials: media.cdnUrl ? 'omit' : 'same-origin' })
     if (!response.ok) throw new Error('Media download failed')
     const decrypted = await decryptBlobForUser(await response.blob(), media.envelope, currentUserId, media.mimeType)
     if (decrypted.failed || !decrypted.blob) throw new Error('Media decrypt failed')
@@ -428,6 +446,22 @@ async function getAudioDurationMs(file) {
   }
 }
 
+async function getVideoDurationMs(file) {
+  const url = URL.createObjectURL(file)
+  const video = document.createElement('video')
+  video.preload = 'metadata'
+  video.src = url
+  try {
+    await waitForMediaEvent(video, 'loadedmetadata', 6000)
+    const seconds = Number.isFinite(video.duration) ? video.duration : 0
+    return Math.max(0, Math.round(seconds * 1000))
+  } catch {
+    return 0
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
 async function prepareClientMediaFile(file) {
   if (file.type.startsWith('audio/')) {
     const isVoiceRecording = /^voice-\d+\.(webm|ogg|m4a)$/i.test(file.name)
@@ -444,10 +478,23 @@ async function prepareClientMediaFile(file) {
   }
 
   if (file.type.startsWith('video/')) {
+    const isVideoNote = /^video-note-\d+\.(webm|mp4)$/i.test(file.name)
+    if (isVideoNote) {
+      return {
+        blob: file,
+        kind: 'video_note',
+        mimeType: file.type || 'video/webm',
+        width: null,
+        height: null,
+        durationMs: await getVideoDurationMs(file),
+        originalSize: file.size,
+        compressed: false,
+      }
+    }
     try {
       return await compressVideoInBrowser(file)
     } catch {
-      // Keep end-to-end encryption even when browser-side video compression is unavailable.
+      // Keep client-side media encryption even when browser-side video compression is unavailable.
     }
     return {
       blob: file,
@@ -831,6 +878,18 @@ function AppInner() {
         return
       }
 
+      if (payload.type === 'chat:auto-delete-changed' && payload.chatId) {
+        setState((current) => ({
+          ...current,
+          chats: current.chats.map((chat) =>
+            chat.id === payload.chatId
+              ? { ...chat, autoDeleteSeconds: payload.autoDeleteSeconds ?? null }
+              : chat,
+          ),
+        }))
+        return
+      }
+
       if (payload.type === 'security:event' && payload.event) {
         showToast(payload.event.title || 'Security alert')
         return
@@ -863,6 +922,31 @@ function AppInner() {
             chat.id === payload.chatId ? { ...chat, pinnedMessageId: payload.messageId } : chat,
           ),
         }))
+        return
+      }
+
+      if (payload.type === 'chat:read' && payload.chatId && payload.userId) {
+        setState((current) => {
+          const msgs = current.messages[payload.chatId]
+          if (!msgs) return current
+          const upToSentAt = msgs.find((m) => m.id === payload.upToMessageId)?.time
+          return {
+            ...current,
+            messages: {
+              ...current.messages,
+              [payload.chatId]: msgs.map((msg) => {
+                if (
+                  msg.senderId === current.user?.id &&
+                  upToSentAt && msg.time <= upToSentAt &&
+                  !msg.readBy?.some((r) => (r.userId || r) === payload.userId)
+                ) {
+                  return { ...msg, readBy: [...(msg.readBy || []), { userId: payload.userId, name: payload.userName || '' }] }
+                }
+                return msg
+              }),
+            },
+          }
+        })
         return
       }
 
@@ -955,9 +1039,13 @@ function AppInner() {
       }
 
       if (payload.type === 'message:new' && payload.message?.chatId) {
+        const messageChatId = payload.message.chatId
+        if (!stateRef.current?.chats?.some((chat) => chat.id === messageChatId)) {
+          loadServerWorkspaceRef.current?.(state.user.id).catch(() => {})
+        }
         void normalizeServerMessage(payload.message, state.user.id).then((message) => {
           setState((current) => {
-            const chatId = payload.message.chatId
+            const chatId = messageChatId
             const currentMessages = current.messages[chatId] || []
             if (currentMessages.some((item) => item.id === message.id)) return current
 
@@ -998,6 +1086,7 @@ function AppInner() {
           selectedChatIdRef.current === payload.message.chatId
         ) {
           socket.send(JSON.stringify({ type: 'chat:read', chatId: payload.message.chatId }))
+          markMessagesRead(payload.message.chatId, payload.message.id).catch(() => {})
         }
         return
       }
@@ -1185,9 +1274,10 @@ function AppInner() {
           archived: Boolean(chatSettings.archived),
           archivedAt: chatSettings.archivedAt || null,
           pushMode: chatSettings.pushMode || 'default',
+          autoDeleteSeconds: chatSettings.autoDeleteSeconds ?? null,
           pinnedMessageId: chat.pinnedMessageId || null,
           linkedGroupId: chat.linkedGroupId || null,
-          unread: 0,
+          unread: chat.unreadCount ?? 0,
           createdAt: chat.created_at,
         }
       })
@@ -1754,7 +1844,14 @@ function AppInner() {
             : normalizedMessages,
         },
       }))
-      if (!append) sendSocketEvent({ type: 'chat:read', chatId })
+      if (!append) {
+        sendSocketEvent({ type: 'chat:read', chatId })
+        // Also mark as read via HTTP API so the server can update readBy on messages
+        if (normalizedMessages.length > 0) {
+          const lastMsg = normalizedMessages[normalizedMessages.length - 1]
+          markMessagesRead(chatId, lastMsg.id).catch(() => {})
+        }
+      }
     } catch (error) {
       showToast(error.message || 'Could not load messages.')
     }
@@ -2332,6 +2429,7 @@ function AppInner() {
               archived: Boolean(settings.archived),
               archivedAt: settings.archivedAt || null,
               pushMode: settings.pushMode || 'default',
+              autoDeleteSeconds: 'autoDeleteSeconds' in settings ? (settings.autoDeleteSeconds ?? null) : chat.autoDeleteSeconds,
             }
           : chat,
       ),
@@ -2460,6 +2558,22 @@ function AppInner() {
         ),
       }))
       showToast(error.message || 'Push setting was not saved.')
+    }
+  }
+
+  async function setChatAutoDelete(chatId, autoDeleteSeconds) {
+    const chat = state.chats.find((item) => item.id === chatId)
+    if (!chat?.backend) return
+    setState((current) => ({
+      ...current,
+      chats: current.chats.map((item) =>
+        item.id === chatId ? { ...item, autoDeleteSeconds: autoDeleteSeconds ?? null } : item,
+      ),
+    }))
+    try {
+      await updateChatSettings(chatId, { autoDeleteSeconds })
+    } catch (error) {
+      showToast(error.message || 'Could not update auto-delete setting.')
     }
   }
 
@@ -2923,6 +3037,7 @@ function AppInner() {
           archived: Boolean(chatSettings.archived),
           archivedAt: chatSettings.archivedAt || null,
           pushMode: chatSettings.pushMode || 'default',
+          autoDeleteSeconds: chatSettings.autoDeleteSeconds ?? null,
           unread: 0,
           createdAt: new Date().toISOString(),
         }
@@ -2992,7 +3107,9 @@ function AppInner() {
       const localKind = file.type.startsWith('image/')
         ? 'image'
         : file.type.startsWith('video/')
-          ? 'video'
+          ? /^video-note-\d+\.(webm|mp4)$/i.test(file.name)
+            ? 'video_note'
+            : 'video'
           : file.type.startsWith('audio/')
             ? /^voice-\d+\.(webm|ogg|m4a)$/i.test(file.name)
               ? 'voice'
@@ -3237,7 +3354,7 @@ function AppInner() {
   }
 
   // Cloud key backup: passphrase-encrypted blob synced via the server so a
-  // second device can pick up the E2EE key without manual file transfer.
+  // second device can pick up the local encryption key without manual file transfer.
   async function cloudKeyBackup(passphrase) {
     try {
       const backup = await exportUserKeyBackup(state.user.id)
@@ -3307,6 +3424,14 @@ function AppInner() {
   async function loadBlockedContacts() {
     const { users } = await getBlockedUsers()
     return users
+  }
+
+  async function loadPrivacySettings() {
+    return getPrivacySettings()
+  }
+
+  async function savePrivacySettings(updates) {
+    return updatePrivacySettings(updates)
   }
 
   function applyBlockedState(userId, blockedByMe) {
@@ -3507,8 +3632,28 @@ function AppInner() {
     }
   }
 
+  async function handleStoryReplySent(result) {
+    if (!result?.chatId) return
+    await loadServerWorkspace(state.user.id)
+    setSelectedChatId(result.chatId)
+    setUi((current) => ({
+      ...current,
+      mobilePane: 'chat',
+      contactsOpen: false,
+      menuOpen: false,
+    }))
+  }
+
   return (
     <>
+    <Suspense fallback={(
+      <main className="auth-screen">
+        <div className="auth-loading">
+          <div className="auth-loading-mark">A</div>
+          <span>Loading chats...</span>
+        </div>
+      </main>
+    )}>
     <AppShell
       chatSummaries={chatSummaries}
       chatFolders={state.chatFolders || EMPTY_CHAT_FOLDERS}
@@ -3567,6 +3712,7 @@ function AppInner() {
       onRetryMessage={retryMessage}
       onVotePoll={votePollOption}
       onScheduleSend={scheduleSendMessage}
+      onStoryReplySent={handleStoryReplySent}
       onLoadGroupMembers={loadGroupMembers}
       onLoadCallHistory={loadCallHistory}
       onAddGroupMember={addGroupMember}
@@ -3578,6 +3724,7 @@ function AppInner() {
       onMuteChat={muteChat}
       onToggleMute={(chatId) => toggleChatField(chatId, 'muted')}
       onSetChatPushMode={setChatPushMode}
+      onSetChatAutoDelete={setChatAutoDelete}
       onArchiveChat={archiveChat}
       onCreateFolder={createFolder}
       onUpdateFolder={saveFolder}
@@ -3641,6 +3788,8 @@ function AppInner() {
       onSwitchAccount={handleSwitchAccount}
       onAddAccount={handleAddAccount}
       onRemoveAccount={handleRemoveAccount}
+      onLoadPrivacy={loadPrivacySettings}
+      onUpdatePrivacy={savePrivacySettings}
       onBackToList={() => setUi((current) => ({ ...current, mobilePane: 'list' }))}
       onGlobalSearchSelectChat={(result) => {
         const chat = state.chats?.find((c) => c.id === result.id)
@@ -3652,6 +3801,7 @@ function AppInner() {
         window.setTimeout(() => jumpToMessage(messageId), 200)
       }}
     />
+    </Suspense>
     {permissionPromptOpen && (
       <PermissionOnboarding onClose={() => setPermissionPromptOpen(false)} />
     )}

@@ -93,7 +93,6 @@
 - scheduled messages;
 - silent messages;
 - disappearing messages как отдельная настройка;
-- secret chat как отдельный тип чата с пометкой, что он требует end-to-end encryption.
 
 Группы:
 - создание группы;
@@ -396,13 +395,10 @@ Mini Apps:
 - two-step verification;
 - passcode lock;
 - active sessions;
-- secret chats;
 - disappearing messages;
-- screenshot warning как UI для secret chat;
 - report spam;
 - rate limits;
 - suspicious login alert.
-Важно: не писать, что все чаты end-to-end encrypted, если это реально не реализовано. Cloud chats и secret chats должны быть описаны отдельно.
 
 Поиск:
 - глобальный поиск по чатам;
@@ -598,7 +594,6 @@ UI/UX требования:
 - bots;
 - mini apps;
 - push notifications;
-- secret chats;
 - stories;
 - импорт контактов.
 

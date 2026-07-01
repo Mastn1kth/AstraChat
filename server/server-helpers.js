@@ -6,6 +6,7 @@ import { db } from './db.js'
 import { config } from './config.js'
 import logger from './logger.js'
 import { decryptMessage, encryptMessage } from './crypto.js'
+import { createMediaCdnUrl } from './media-cdn.js'
 import { getMediaObjectStream, saveMediaObjectStream } from './storage.js'
 import { socketsByUserId, state, sendToUser } from './socket-manager.js'
 
@@ -175,24 +176,36 @@ export function stringifyPublicKey(publicKey) {
   return value
 }
 
-export function publicUser(user) {
+export function publicUser(user, { viewerIsContact = false, isSelf = false } = {}) {
+  const privacyPhone = user.privacy_phone || 'contacts'
+  const privacyLastSeen = user.privacy_last_seen || 'contacts'
+  const canSeePhone = isSelf
+    || privacyPhone === 'everyone'
+    || (privacyPhone === 'contacts' && viewerIsContact)
+  const canSeeLastSeen = isSelf
+    || privacyLastSeen === 'everyone'
+    || (privacyLastSeen === 'contacts' && viewerIsContact)
   return {
     id: user.id,
     login: user.login,
     username: user.username,
-    phone: user.phone || '',
+    phone: canSeePhone ? (user.phone || '') : '',
     name: user.name,
     bio: user.bio,
     status: user.status || '',
     avatar: user.avatar,
     encryptionPublicKey: parsePublicKey(user.encryption_public_key),
     totpEnabled: Boolean(user.totp_enabled_at || user.totp_secret),
-    lastSeenAt: user.last_seen_at || null,
-    online: socketsByUserId.has(user.id) || state.onlineUserIdCache.has(user.id),
+    lastSeenAt: canSeeLastSeen ? (user.last_seen_at || null) : null,
+    online: canSeeLastSeen
+      ? (socketsByUserId.has(user.id) || state.onlineUserIdCache.has(user.id))
+      : false,
     blockedByMe: isDatabaseTrue(user.blocked_by_me),
     blockedMe: isDatabaseTrue(user.blocked_me),
     isContact: isDatabaseTrue(user.is_contact),
     contactSince: user.contact_since || null,
+    privacyPhone: isSelf ? privacyPhone : undefined,
+    privacyLastSeen: isSelf ? privacyLastSeen : undefined,
   }
 }
 
@@ -206,6 +219,7 @@ export function publicChatSettings(row = {}) {
     archived: isDatabaseTrue(row.archived),
     archivedAt: row.archived_at || null,
     pushMode: row.push_mode || 'default',
+    autoDeleteSeconds: row.auto_delete_seconds ? Number(row.auto_delete_seconds) : null,
   }
 }
 
@@ -334,7 +348,7 @@ export async function isChatMember(chatId, userId) {
 
 export async function requireChatMemberRow(chatId, userId) {
   const result = await db.query(
-    `SELECT c.id, c.type, c.title, c.slow_mode_seconds, c.default_permissions,
+    `SELECT c.id, c.type, c.title, c.slow_mode_seconds, c.default_permissions, c.auto_delete_seconds,
             cm.role, cm.permissions, cm.last_message_at
      FROM chats c
      JOIN chat_members cm ON cm.chat_id = c.id
@@ -619,7 +633,7 @@ export const MESSAGE_SELECT_COLUMNS = `
   m.id, m.chat_id, m.sender_id, m.media_id, m.reply_to_id, m.topic_id, m.ciphertext, m.iv,
   m.auth_tag, m.encryption_version, m.created_at, m.edited_at, m.deleted_at,
   m.forwarded_from_message_id, m.forwarded_from_chat_id,
-  m.silent, m.scheduled_at, m.sent_at, m.link_preview,
+  m.silent, m.scheduled_at, m.sent_at, m.link_preview, m.disappears_at, m.imported_from_name,
   mf.kind AS media_kind, mf.original_name AS media_name,
   mf.mime_type AS media_mime_type, mf.plain_size AS media_size,
   mf.original_size AS media_original_size, mf.width AS media_width,
@@ -631,6 +645,7 @@ export function visibleMessageFilter(userParam = '$2') {
   return `
     AND (m.scheduled_at IS NULL OR m.scheduled_at <= NOW())
     AND m.sent_at IS NOT NULL
+    AND (m.disappears_at IS NULL OR m.disappears_at > NOW())
     AND (chc.cleared_at IS NULL OR m.created_at > chc.cleared_at)
     AND NOT EXISTS (
       SELECT 1 FROM message_user_deletions mud
@@ -762,6 +777,11 @@ export async function publicMessagesFromRows(chatId, rows, currentUserId = null)
           height: message.media_height,
           durationMs: message.media_duration ?? null,
           url: `/api/media/${message.media_id}`,
+          cdnUrl: createMediaCdnUrl({
+            mediaId: message.media_id,
+            userId: currentUserId,
+            clientEncrypted: isDatabaseTrue(message.media_client_encrypted),
+          }),
           encrypted: isDatabaseTrue(message.media_client_encrypted),
           envelope: message.media_envelope || '',
         }
@@ -769,6 +789,8 @@ export async function publicMessagesFromRows(chatId, rows, currentUserId = null)
     poll: pollsByMessage.get(message.id) || null,
     stats: statsByMessage.get(message.id) || null,
     linkPreview: message.link_preview || null,
+    disappearsAt: message.disappears_at || null,
+    importedFromName: message.imported_from_name || null,
   }))
 }
 
@@ -782,7 +804,7 @@ export function validateClientMediaMetadata(body) {
   const mimeType = String(body.mimeType || '')
   const envelope = String(body.envelope || '')
   const originalName = String(body.originalName || 'encrypted-media').slice(0, 255)
-  if (!['image', 'video', 'voice', 'audio', 'file'].includes(kind)) {
+  if (!['image', 'video', 'voice', 'audio', 'video_note', 'file'].includes(kind)) {
     const error = new Error('Encrypted media kind is invalid')
     error.status = 400
     throw error
@@ -790,7 +812,7 @@ export function validateClientMediaMetadata(body) {
   const mimeOk =
     kind === 'image'
       ? /^image\/[-+.\w]+$/.test(mimeType)
-      : kind === 'video'
+      : kind === 'video' || kind === 'video_note'
         ? /^video\/[-+.\w]+$/.test(mimeType)
         : kind === 'voice' || kind === 'audio'
           ? /^audio\/[-+.\w]+$/.test(mimeType)

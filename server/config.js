@@ -15,6 +15,11 @@ const vapidPublicKey = process.env.VAPID_PUBLIC_KEY || ''
 const vapidPrivateKey = process.env.VAPID_PRIVATE_KEY || ''
 const vapidSubject = process.env.VAPID_SUBJECT || ''
 const iceServersRaw = process.env.WEBRTC_ICE_SERVERS || ''
+const groupMediaMode = (process.env.WEBRTC_GROUP_MEDIA_MODE || 'mesh').toLowerCase()
+const mediaServerUrl = (process.env.WEBRTC_MEDIA_SERVER_URL || '').replace(/\/+$/g, '')
+const mediaServerTokenTtlSeconds = Number(process.env.WEBRTC_MEDIA_SERVER_TOKEN_TTL_SECONDS || 300)
+const mediaCdnUrl = (process.env.MEDIA_CDN_URL || '').replace(/\/+$/g, '')
+const mediaCdnTokenTtlSeconds = Number(process.env.MEDIA_CDN_TOKEN_TTL_SECONDS || 300)
 const sessionCookieSameSite = (process.env.SESSION_COOKIE_SAME_SITE || 'lax').toLowerCase()
 const sessionCookieSecure =
   process.env.SESSION_COOKIE_SECURE === 'true'
@@ -50,6 +55,14 @@ if (storageDriver === 's3') {
   for (const name of ['S3_BUCKET', 'S3_ENDPOINT', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY']) {
     if (!process.env[name]) throw new Error(`${name} is required when STORAGE_DRIVER=s3`)
   }
+}
+
+if (mediaCdnUrl && !/^https:\/\//.test(mediaCdnUrl)) {
+  throw new Error('MEDIA_CDN_URL must start with https://')
+}
+
+if (!Number.isFinite(mediaCdnTokenTtlSeconds) || mediaCdnTokenTtlSeconds < 30 || mediaCdnTokenTtlSeconds > 3600) {
+  throw new Error('MEDIA_CDN_TOKEN_TTL_SECONDS must be between 30 and 3600')
 }
 
 if ((vapidPublicKey || vapidPrivateKey) && (!vapidPublicKey || !vapidPrivateKey)) {
@@ -120,6 +133,22 @@ if (isProduction && !iceServers.some((server) => {
   throw new Error('Production WebRTC requires WEBRTC_TURN_URLS or WEBRTC_ICE_SERVERS with a TURN/TURNS server')
 }
 
+if (!['mesh', 'sfu', 'mcu'].includes(groupMediaMode)) {
+  throw new Error('WEBRTC_GROUP_MEDIA_MODE must be mesh, sfu or mcu')
+}
+
+if (groupMediaMode !== 'mesh' && !mediaServerUrl) {
+  throw new Error('WEBRTC_MEDIA_SERVER_URL is required when WEBRTC_GROUP_MEDIA_MODE is sfu or mcu')
+}
+
+if (mediaServerUrl && !/^https:\/\//.test(mediaServerUrl)) {
+  throw new Error('WEBRTC_MEDIA_SERVER_URL must start with https://')
+}
+
+if (!Number.isFinite(mediaServerTokenTtlSeconds) || mediaServerTokenTtlSeconds < 30 || mediaServerTokenTtlSeconds > 3600) {
+  throw new Error('WEBRTC_MEDIA_SERVER_TOKEN_TTL_SECONDS must be between 30 and 3600')
+}
+
 function loadMessageKey() {
   if (process.env.MESSAGE_ENCRYPTION_KEY) {
     const key = Buffer.from(process.env.MESSAGE_ENCRYPTION_KEY, 'base64')
@@ -174,6 +203,10 @@ export const config = {
     forcePathStyle: process.env.S3_FORCE_PATH_STYLE !== 'false',
     prefix: (process.env.S3_PREFIX || 'media').replace(/^\/+|\/+$/g, ''),
   },
+  mediaCdn: {
+    url: mediaCdnUrl,
+    tokenTtlSeconds: mediaCdnTokenTtlSeconds,
+  },
   redisUrl,
   trustProxy: process.env.TRUST_PROXY || (isProduction ? '1' : ''),
   allowedOrigins: (process.env.ALLOWED_ORIGINS || '')
@@ -196,5 +229,8 @@ export const config = {
   },
   webrtc: {
     iceServers,
+    groupMediaMode,
+    mediaServerUrl,
+    mediaServerTokenTtlSeconds,
   },
 }

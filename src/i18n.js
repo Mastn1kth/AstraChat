@@ -191,6 +191,27 @@ const DICT = {
     'privacy.blockedUsers': 'Заблокированные',
     'privacy.terminateOthers': 'Завершить другие сеансы',
     'privacy.markAllRead': 'Отметить все прочитанными',
+    'privacy.phone': 'Кто видит мой номер телефона',
+    'privacy.lastSeen': 'Кто видит время последнего входа',
+    'privacy.everyone': 'Все',
+    'privacy.contacts': 'Только контакты',
+    'privacy.nobody': 'Никто',
+    'privacy.visibilityHeader': 'Видимость профиля',
+
+    'autoDelete.title': 'Автоудаление сообщений',
+    'autoDelete.off': 'Выключено',
+    'autoDelete.30s': '30 секунд',
+    'autoDelete.5m': '5 минут',
+    'autoDelete.1h': '1 час',
+    'autoDelete.1d': '1 день',
+    'autoDelete.1w': '1 неделя',
+    'autoDelete.hint': 'Новые сообщения исчезнут через указанное время.',
+    'autoDelete.system.set': 'Автоудаление через {timer}',
+    'autoDelete.system.off': 'Автоудаление отключено',
+
+    // --- Read receipts ---
+    'read.sent': 'Отправлено',
+    'read.read': 'Прочитано',
 
     // --- Appearance ---
     'appearance.wallpaper': 'Обои чата',
@@ -363,6 +384,8 @@ const DICT = {
     'err.geoDenied': 'Доступ к геолокации запрещён.',
     'err.noMic': 'Запись голоса не поддерживается этим браузером.',
     'err.micDenied': 'Доступ к микрофону запрещён.',
+    'err.noCamera': 'Запись видеосообщений не поддерживается этим браузером.',
+    'err.cameraDenied': 'Доступ к камере запрещён.',
     'err.fileTooLarge': 'Файл слишком большой. Максимум — 100 МБ.',
 
     // --- Toasts ---
@@ -506,6 +529,27 @@ const DICT = {
     'privacy.blockedUsers': 'Blocked users',
     'privacy.terminateOthers': 'Terminate other sessions',
     'privacy.markAllRead': 'Mark all read',
+    'privacy.phone': 'Who can see my phone number',
+    'privacy.lastSeen': 'Who can see my last seen',
+    'privacy.everyone': 'Everyone',
+    'privacy.contacts': 'Contacts only',
+    'privacy.nobody': 'Nobody',
+    'privacy.visibilityHeader': 'Profile visibility',
+
+    'autoDelete.title': 'Auto-delete messages',
+    'autoDelete.off': 'Off',
+    'autoDelete.30s': '30 seconds',
+    'autoDelete.5m': '5 minutes',
+    'autoDelete.1h': '1 hour',
+    'autoDelete.1d': '1 day',
+    'autoDelete.1w': '1 week',
+    'autoDelete.hint': 'New messages will disappear after the set time.',
+    'autoDelete.system.set': 'Auto-delete in {timer}',
+    'autoDelete.system.off': 'Auto-delete disabled',
+
+    // --- Read receipts ---
+    'read.sent': 'Sent',
+    'read.read': 'Read',
 
     // --- Appearance ---
     'appearance.wallpaper': 'Chat wallpaper',
@@ -678,6 +722,8 @@ const DICT = {
     'err.geoDenied': 'Location permission was denied.',
     'err.noMic': 'Voice recording is not supported in this browser.',
     'err.micDenied': 'Microphone access was denied.',
+    'err.noCamera': 'Video message recording is not supported in this browser.',
+    'err.cameraDenied': 'Camera access was denied.',
     'err.fileTooLarge': 'File is too large. Maximum size is 100 MB.',
 
     // --- Toasts ---

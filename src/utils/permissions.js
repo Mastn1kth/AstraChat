@@ -1,6 +1,9 @@
-import { enableWebPushNotifications } from './push'
-
 export const PERMISSION_ONBOARDING_KEY = 'onda.permissions.onboarding.v1'
+
+async function enableWebPushNotifications() {
+  const push = await import('./push')
+  return push.enableWebPushNotifications()
+}
 
 export function hasCompletedPermissionOnboarding() {
   if (typeof window === 'undefined') return true

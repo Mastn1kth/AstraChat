@@ -57,6 +57,7 @@ import {
   formatBytes,
 } from '../utils/storage'
 import { findUsersByPhone } from '../api/client'
+import { createQrDataUrl } from '../utils/qrCode'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -301,10 +302,14 @@ export default function Sidebar({
   onSwitchAccount,
   onAddAccount,
   onRemoveAccount,
+  onLoadPrivacy,
+  onUpdatePrivacy,
 }) {
   const [menuView, setMenuView] = useState('main')
   const [savedAccounts, setSavedAccounts] = useState(() => readAccounts())
   const [encryptionInfo, setEncryptionInfo] = useState(null)
+  const [privacySettings, setPrivacySettings] = useState(null)
+  const [privacyBusy, setPrivacyBusy] = useState(false)
   const [contactSearch, setContactSearch] = useState('')
   const [importPhones, setImportPhones] = useState('')
   const [importResults, setImportResults] = useState(null)
@@ -433,7 +438,7 @@ export default function Sidebar({
       .some((value) => value.toLowerCase().includes(normalizedChatSearch))
     if (direct) return true
     // Full-history search runs locally over already-decrypted messages —
-    // the server cannot search E2EE content, but this device can.
+    // the server cannot search client-encrypted content, but this device can.
     return (allMessages?.[chat.id] || []).some(
       (message) =>
         !message.deleted &&
@@ -602,6 +607,34 @@ export default function Sidebar({
     await refreshSessions()
   }
 
+  async function openPrivacySettings() {
+    setMenuView('privacy')
+    if (onLoadPrivacy && !privacySettings) {
+      setPrivacyBusy(true)
+      try {
+        const result = await onLoadPrivacy()
+        setPrivacySettings(result)
+      } catch {
+        // non-fatal; defaults will be shown
+      } finally {
+        setPrivacyBusy(false)
+      }
+    }
+  }
+
+  async function savePrivacy(updates) {
+    if (!onUpdatePrivacy) return
+    setPrivacyBusy(true)
+    try {
+      const result = await onUpdatePrivacy(updates)
+      setPrivacySettings(result)
+    } catch (error) {
+      onUpdateSettings({ toast: error.message || 'Could not save privacy settings.' })
+    } finally {
+      setPrivacyBusy(false)
+    }
+  }
+
   async function refreshTotpStatus() {
     if (!onLoadTotpStatus) return
     setTotpState((current) => ({ ...current, busy: true, error: '' }))
@@ -671,8 +704,7 @@ export default function Sidebar({
     setTotpState((current) => ({ ...current, busy: true, error: '', setup: null, qrDataUrl: '', code: '' }))
     try {
       const setup = await onStartTotpSetup()
-      const QRCode = await import('qrcode')
-      const qrDataUrl = await QRCode.toDataURL(setup.otpauthUrl, {
+      const qrDataUrl = await createQrDataUrl(setup.otpauthUrl, {
         margin: 1,
         width: 220,
         color: { dark: '#1e1b4b', light: '#ffffff' },
@@ -1315,7 +1347,7 @@ export default function Sidebar({
           </label>
         </div>
         <div className="drawer-settings-list">
-          <button onClick={() => setMenuView('privacy')}>
+          <button onClick={openPrivacySettings}>
             <LockKeyhole size={18} /> {t('menu.privacy')}
           </button>
           <button onClick={openSessions}>
@@ -1365,9 +1397,45 @@ export default function Sidebar({
   }
 
   function renderPrivacyMenu() {
+    const phone = privacySettings?.privacyPhone || 'contacts'
+    const lastSeen = privacySettings?.privacyLastSeen || 'contacts'
+    const privacyOptions = [
+      { value: 'everyone', label: t('privacy.everyone') },
+      { value: 'contacts', label: t('privacy.contacts') },
+      { value: 'nobody', label: t('privacy.nobody') },
+    ]
     return (
       <>
         {renderMenuHeader(t('menu.privacy'), 'settings')}
+        <div className="drawer-settings-section">
+          <p className="drawer-settings-section-title">{t('privacy.visibilityHeader')}</p>
+          <div className="privacy-row">
+            <span className="privacy-row-label">{t('privacy.phone')}</span>
+            <select
+              className="privacy-select"
+              value={phone}
+              disabled={privacyBusy}
+              onChange={(e) => savePrivacy({ privacyPhone: e.target.value })}
+            >
+              {privacyOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="privacy-row">
+            <span className="privacy-row-label">{t('privacy.lastSeen')}</span>
+            <select
+              className="privacy-select"
+              value={lastSeen}
+              disabled={privacyBusy}
+              onChange={(e) => savePrivacy({ privacyLastSeen: e.target.value })}
+            >
+              {privacyOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
+        </div>
         <div className="drawer-settings-list">
           <button onClick={onExportEncryptionKey}>
             <Download size={18} /> {t('privacy.exportKey')}

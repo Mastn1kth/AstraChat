@@ -24,6 +24,12 @@ const statusText = {
   failed: 'Connection failed',
 }
 
+function activeStatus(call) {
+  if (call.mediaServer?.mode === 'sfu') return 'Routed group call'
+  if (call.mediaServer?.mode === 'mcu') return 'Mixed group call'
+  return statusText.active
+}
+
 function formatDuration(seconds) {
   const minutes = Math.floor(seconds / 60)
   return `${String(minutes).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
@@ -160,7 +166,7 @@ export default function CallModal({
                 {call.peer.avatar}
               </div>
               <h2>{call.peer.name}</h2>
-              <p>{call.error || statusText[call.status]}</p>
+              <p>{call.error || (call.status === 'active' ? activeStatus(call) : statusText[call.status])}</p>
             </div>
           )}
 

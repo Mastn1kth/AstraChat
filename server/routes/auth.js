@@ -74,7 +74,7 @@ router.post('/register', async (request, response) => {
      FROM users WHERE id = $1`,
     [userId],
   )
-  response.status(201).json({ user: publicUser(userResult.rows[0]) })
+  response.status(201).json({ user: publicUser(userResult.rows[0], { isSelf: true }) })
 })
 
 router.post('/phone/start', async (request, response) => {
@@ -212,7 +212,7 @@ router.post('/phone/verify', async (request, response) => {
      FROM users WHERE id = $1`,
     [userId],
   )
-  response.status(201).json({ user: publicUser(userResult.rows[0]), existing: false })
+  response.status(201).json({ user: publicUser(userResult.rows[0], { isSelf: true }), existing: false })
 })
 
 router.post('/qr/start', async (request, response) => {
@@ -261,7 +261,7 @@ router.get('/qr/status', async (request, response) => {
   }
   await db.query('DELETE FROM qr_tokens WHERE token = $1', [token])
   await createSession(response, user_id, request)
-  response.json({ status: 'confirmed', user: publicUser(userResult.rows[0]) })
+  response.json({ status: 'confirmed', user: publicUser(userResult.rows[0], { isSelf: true }) })
 })
 
 router.post('/qr/confirm', requireAuth, async (request, response) => {
@@ -342,7 +342,7 @@ router.post('/login', async (request, response) => {
 
   await clearFailedLogins(loginKey)
   await createSession(response, user.id, request)
-  response.json({ user: publicUser(user) })
+  response.json({ user: publicUser(user, { isSelf: true }) })
 })
 
 router.get('/me', async (request, response) => {
@@ -351,7 +351,7 @@ router.get('/me', async (request, response) => {
     response.status(401).json({ error: 'Not authenticated' })
     return
   }
-  response.json({ user: publicUser(user) })
+  response.json({ user: publicUser(user, { isSelf: true }) })
 })
 
 router.post('/logout', async (request, response) => {
@@ -423,7 +423,7 @@ router.post('/totp/verify', requireAuth, async (request, response) => {
     title: 'Two-factor authentication enabled',
     body: 'Authenticator app codes are now required when signing in.',
   })
-  response.json({ user: publicUser(result.rows[0]) })
+  response.json({ user: publicUser(result.rows[0], { isSelf: true }) })
 })
 
 router.delete('/totp', requireAuth, async (request, response) => {
@@ -457,7 +457,7 @@ router.delete('/totp', requireAuth, async (request, response) => {
     title: 'Two-factor authentication disabled',
     body: 'Authenticator app codes are no longer required when signing in.',
   })
-  response.json({ user: publicUser(result.rows[0]) })
+  response.json({ user: publicUser(result.rows[0], { isSelf: true }) })
 })
 
 // Cloud password (двухшаговая верификация)

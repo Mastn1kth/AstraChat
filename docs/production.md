@@ -5,11 +5,12 @@ This project no longer has to run production traffic on local PGlite or local me
 ## Runtime Services
 
 - PostgreSQL: set `DATABASE_URL`. In `NODE_ENV=production` the server refuses to start without it.
-- Redis/Valkey: set `REDIS_URL`. It is used for auth rate limits, online presence and WebSocket pub/sub between app replicas.
+- Redis/Valkey: set `REDIS_URL`. In production the server refuses to start without it. It is used for auth rate limits, session cache, online presence TTL keys and WebSocket pub/sub between app replicas, including typing events.
 - S3-compatible object storage: set `STORAGE_DRIVER=s3` and the `S3_*` variables. AWS S3, Cloudflare R2 and MinIO all work through the same adapter.
+- Media CDN: set `MEDIA_CDN_URL` to a CDN that forwards to the app, not to a public bucket. The app signs short-lived ciphertext URLs for client-encrypted media.
 - Web Push: set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT`. Browsers require HTTPS outside localhost.
 - Native push login codes: set `FCM_SERVICE_ACCOUNT_JSON` or `FCM_SERVICE_ACCOUNT_FILE`. Without SMS, phone login in production depends on FCM/APNs push delivery to the freshly installed app.
-- WebRTC calls: set `WEBRTC_STUN_URLS` and at least one TURN/TURNS server through `WEBRTC_TURN_URLS` or `WEBRTC_ICE_SERVERS`. In `NODE_ENV=production` the server refuses to start without TURN because STUN-only calls fail for many NAT/firewall pairs.
+- WebRTC calls: set `WEBRTC_STUN_URLS` and at least one TURN/TURNS server through `WEBRTC_TURN_URLS` or `WEBRTC_ICE_SERVERS`. In `NODE_ENV=production` the server refuses to start without TURN because STUN-only calls fail for many NAT/firewall pairs. For larger group calls, set `WEBRTC_GROUP_MEDIA_MODE=sfu` or `mcu` plus `WEBRTC_MEDIA_SERVER_URL`; this app signs join URLs for that external media server.
 - HTTPS/WSS: terminate TLS at a reverse proxy or load balancer. `deploy/nginx.conf` is a working nginx example for `/` and `/ws`.
 
 ## Local Production Stack
@@ -19,6 +20,11 @@ Copy the env example and fill secrets:
 ```bash
 cp .env.production.example .env.production
 ```
+
+If the goal is to avoid paid providers, follow
+[Free Production Mode](free-production.md): self-host PostgreSQL, Redis, MinIO
+and TURN; use Web Push plus Firebase Cloud Messaging instead of SMS; keep group
+calls on mesh unless you self-host an SFU.
 
 Generate `MESSAGE_ENCRYPTION_KEY`:
 
@@ -31,6 +37,16 @@ Generate VAPID keys for Web Push:
 ```bash
 node -e "import('web-push').then(({default:w})=>console.log(w.generateVAPIDKeys()))"
 ```
+
+Check the production env before starting containers:
+
+```bash
+npm run check:prod
+```
+
+The check validates required PostgreSQL, Redis, S3, push, cookie, TURN and
+SFU/MCU settings without starting the app. It exits with a non-zero status when
+required production values are missing.
 
 Configure Firebase Cloud Messaging for native login-code delivery:
 
@@ -57,10 +73,15 @@ WEBRTC_STUN_URLS=stun:stun.example.com:3478
 WEBRTC_TURN_URLS=turns:turn.example.com:5349
 WEBRTC_TURN_USERNAME=turn-user
 WEBRTC_TURN_CREDENTIAL=turn-secret
+WEBRTC_GROUP_MEDIA_MODE=sfu
+WEBRTC_MEDIA_SERVER_URL=https://sfu.example.com
+WEBRTC_MEDIA_SERVER_TOKEN_TTL_SECONDS=300
 ```
 
-For multiple providers, use `WEBRTC_ICE_SERVERS` as a JSON array. Group calls
-currently use browser mesh WebRTC, so keep groups small until an SFU is added.
+For multiple ICE providers, use `WEBRTC_ICE_SERVERS` as a JSON array. Group
+calls use browser mesh WebRTC unless `WEBRTC_GROUP_MEDIA_MODE` is switched to
+`sfu` or `mcu`. The external media server must implement the `/join` contract
+or adapt the signed token into its own room-join flow.
 
 Start the app with PostgreSQL, Redis and MinIO. Pass the env file to Compose
 so variables such as `POSTGRES_PASSWORD` and `S3_SECRET_ACCESS_KEY` are used
@@ -112,7 +133,13 @@ Store those backups outside the host that runs the app. A local backup folder on
 
 ## CDN
 
-Media is still served through authenticated API routes because files are encrypted and access-controlled. A CDN can sit in front of the app for static assets and API caching rules, but private media should not be made public at the bucket level.
+Uploaded media is stored in S3-compatible object storage. Do not make the bucket
+public.
+
+For client-encrypted media, `MEDIA_CDN_URL` enables short-lived signed URLs to
+`/api/media/:id/ciphertext`. A CDN can cache that response because it is still
+ciphertext and the URL expires. Server-encrypted-only media continues to use the
+authenticated `/api/media/:id` route.
 
 ## Limits Still Not Solved
 
@@ -122,5 +149,5 @@ This is an infrastructure baseline, not a full production operating model. Befor
 - centralized logs and alerts;
 - database migration review/rollback process;
 - secrets manager instead of plain env files;
-- SFU/MCU media infrastructure before large group calls;
-- security review for auth, uploads, WebRTC signaling and E2EE claims.
+- an actual SFU/MCU service and browser adapter before claiming large group-call capacity;
+- security review for auth, uploads, WebRTC signaling and encryption claims.

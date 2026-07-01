@@ -9,9 +9,9 @@ test.describe('Authentication', () => {
   test('legacy login with wrong password shows error', async ({ page }) => {
     await page.goto('/')
     await page.locator('button.astra-link').filter({ hasText: /Login with password|Вход по паролю/i }).click()
-    await page.locator('.astra-legacy-login input').nth(0).fill('nonexistent_user_xyz')
-    await page.locator('.astra-legacy-login input').nth(1).fill('wrongpassword')
-    await page.locator('.astra-legacy-login button.astra-link').filter({ hasText: /Password login|Войти по паролю/i }).click()
+    await page.getByPlaceholder(/Login or @username|Логин|@username/i).fill('nonexistent_user_xyz')
+    await page.getByPlaceholder(/Password|Пароль/i).fill('wrongpassword')
+    await page.locator('button.astra-cta').click()
     await expect(page.locator('.astra-error, .toast, [class*="error"]').first()).toBeVisible({ timeout: 6000 })
   })
 

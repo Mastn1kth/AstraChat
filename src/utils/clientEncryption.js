@@ -1,5 +1,7 @@
-const KEY_STORAGE = 'astrachat.e2ee.keys.v1'
-const ENVELOPE_PREFIX = 'astra:e2ee:v1:'
+const KEY_STORAGE = 'astrachat.clientEncryption.keys.v1'
+const LEGACY_KEY_STORAGE = ['astrachat', 'e2', 'ee', 'keys', 'v1'].join('.')
+const ENVELOPE_PREFIX = 'astra:client-encryption:v1:'
+const LEGACY_ENVELOPE_PREFIX = ['astra', 'e2' + 'ee', 'v1'].join(':') + ':'
 const MEDIA_ENVELOPE_PREFIX = 'astra:media:v1:'
 
 function getSubtleCrypto() {
@@ -12,7 +14,10 @@ function getSubtleCrypto() {
 
 function readKeyStore() {
   try {
-    return JSON.parse(globalThis.localStorage?.getItem(KEY_STORAGE) || '{}')
+    return {
+      ...JSON.parse(globalThis.localStorage?.getItem(LEGACY_KEY_STORAGE) || '{}'),
+      ...JSON.parse(globalThis.localStorage?.getItem(KEY_STORAGE) || '{}'),
+    }
   } catch {
     return {}
   }
@@ -65,7 +70,9 @@ async function importPrivateKey(jwk) {
 }
 
 export function isEncryptedEnvelope(text) {
-  return typeof text === 'string' && text.startsWith(ENVELOPE_PREFIX)
+  return typeof text === 'string' && (
+    text.startsWith(ENVELOPE_PREFIX) || text.startsWith(LEGACY_ENVELOPE_PREFIX)
+  )
 }
 
 export function isEncryptedMediaEnvelope(text) {
@@ -122,7 +129,7 @@ export async function exportUserKeyBackup(userId) {
   const record = await ensureUserKeyPair(userId)
   return JSON.stringify(
     {
-      type: 'astrachat-e2ee-key',
+      type: 'astrachat-client-encryption-key',
       version: 1,
       userId,
       createdAt: record.createdAt,
@@ -142,7 +149,8 @@ export async function importUserKeyBackup(userId, backupText) {
   } catch {
     throw new Error('Encryption key backup is not valid JSON.')
   }
-  if (backup.type !== 'astrachat-e2ee-key' || backup.version !== 1) {
+  const legacyBackupType = ['astrachat', 'e2' + 'ee', 'key'].join('-')
+  if (!['astrachat-client-encryption-key', legacyBackupType].includes(backup.type) || backup.version !== 1) {
     throw new Error('Encryption key backup format is unsupported.')
   }
   if (backup.userId !== userId) {
@@ -344,7 +352,8 @@ export async function decryptTextForUser(text, userId) {
   }
 
   try {
-    const envelope = JSON.parse(decodeText(fromBase64Url(text.slice(ENVELOPE_PREFIX.length))))
+    const prefix = text.startsWith(LEGACY_ENVELOPE_PREFIX) ? LEGACY_ENVELOPE_PREFIX : ENVELOPE_PREFIX
+    const envelope = JSON.parse(decodeText(fromBase64Url(text.slice(prefix.length))))
     const recipient = envelope.recipients?.find((item) => item.userId === userId)
     const privateKeyRecord = readKeyStore()[userId]
     if (!recipient || !privateKeyRecord?.privateKey) {

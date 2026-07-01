@@ -6,7 +6,7 @@ Short description:
 
 Long description:
 
-AstraChat is an independent Telegram-like messenger prototype. It starts with the real application screen, not a marketing landing page. The current MVP includes auth, sessions, profiles, private chats, messages, reactions, read status, media upload, realtime WebSocket events and WebRTC call signaling. The roadmap separates working features from mock/UI-only surfaces such as full channel management, group moderation, bots, mini apps, payments, stories and production-grade E2EE.
+AstraChat is an independent Telegram-like messenger prototype. It starts with the real application screen, not a marketing landing page. The current MVP includes auth, sessions, profiles, private chats, messages, reactions, read status, media upload, realtime WebSocket events and WebRTC call signaling. The roadmap separates working features from mock/UI-only surfaces such as full channel management, group moderation, bots, mini apps, payments and provider-specific production integrations.
 
 Suggested topics:
 

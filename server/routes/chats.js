@@ -11,6 +11,7 @@ import {
   chatSettingsSchema,
   inviteLinkSchema,
   joinInviteSchema,
+  markReadSchema,
   memberPermissionsSchema,
   memberRoleSchema,
   pinMessageSchema,
@@ -21,6 +22,7 @@ import {
   pollVoteSchema,
   reactionSchema,
   reviewJoinRequestSchema,
+  telegramImportSchema,
   topicSchema,
   updateTopicSchema,
   updateChatFolderSchema,
@@ -44,6 +46,34 @@ import { messageLimiter, apiLimiter } from '../limiters.js'
 
 const router = Router()
 
+// ── System message helper ─────────────────────────────────────────────────────
+
+async function insertSystemMessage(chatId, systemType, systemData = {}) {
+  const result = await db.query(
+    `INSERT INTO messages (id, chat_id, sender_id, is_system, system_type, system_data, sent_at, created_at)
+     VALUES (gen_random_uuid(), $1, NULL, TRUE, $2, $3, NOW(), NOW())
+     RETURNING id`,
+    [chatId, systemType, JSON.stringify(systemData)],
+  )
+  const msgId = result.rows[0]?.id
+  if (msgId) {
+    sendToChat(chatId, {
+      type: 'message:new',
+      message: {
+        id: msgId,
+        chatId,
+        isSystem: true,
+        systemType,
+        systemData,
+        sentAt: new Date().toISOString(),
+        senderId: null,
+        text: '',
+        readBy: [],
+      },
+    })
+  }
+}
+
 // ── System chat folders ───────────────────────────────────────────────────────
 
 const SYSTEM_FOLDERS = [
@@ -60,10 +90,20 @@ const SYSTEM_FOLDERS = [
 router.get('/api/chats', requireAuth, async (request, response) => {
   const result = await db.query(
     `SELECT c.id, c.type, c.title, c.created_at, c.pinned_message_id,
-            c.slow_mode_seconds, c.default_permissions, c.linked_group_id,
+            c.slow_mode_seconds, c.default_permissions, c.linked_group_id, c.auto_delete_seconds,
             cm.role, cm.permissions,
             cus.pinned, cus.pinned_at, cus.muted_until, cus.archived, cus.archived_at,
-            cus.push_mode
+            cus.push_mode,
+            cm.last_read_message_id,
+            (SELECT COUNT(*) FROM messages m2
+             WHERE m2.chat_id = c.id
+               AND m2.sender_id != cm.user_id
+               AND m2.deleted_at IS NULL
+               AND m2.sent_at IS NOT NULL
+               AND m2.is_system = FALSE
+               AND (cm.last_read_message_id IS NULL
+                    OR m2.sent_at > (SELECT sent_at FROM messages WHERE id = cm.last_read_message_id LIMIT 1))
+            ) AS unread_count
      FROM chats c
      JOIN chat_members cm ON cm.chat_id = c.id
      LEFT JOIN chat_user_settings cus
@@ -99,6 +139,7 @@ router.get('/api/chats', requireAuth, async (request, response) => {
         linkedGroupId: chat.linked_group_id || null,
         slowModeSeconds: Number(chat.slow_mode_seconds || 0),
         permissions: publicChatPermissions(chat),
+        unreadCount: Number(chat.unread_count || 0),
         members: members.rows.map((member) => ({
           ...publicUser(member),
           role: member.role,
@@ -215,6 +256,23 @@ router.patch('/api/chats/:chatId/settings', requireAuth, async (request, respons
     mutedUntil = input.muted ? (input.mutedUntil || INDEFINITE_MUTE_UNTIL) : null
   }
 
+  if (Object.prototype.hasOwnProperty.call(input, 'autoDeleteSeconds')) {
+    const seconds = input.autoDeleteSeconds
+    if (seconds !== null && (seconds < 0 || !Number.isFinite(seconds))) {
+      response.status(400).json({ error: 'autoDeleteSeconds must be a non-negative integer or null' })
+      return
+    }
+    await db.query(
+      'UPDATE chats SET auto_delete_seconds = $1 WHERE id = $2',
+      [seconds, request.params.chatId],
+    )
+    await sendToChatExcept(request.params.chatId, request.user.id, {
+      type: 'chat:auto-delete-changed',
+      chatId: request.params.chatId,
+      autoDeleteSeconds: seconds,
+    })
+  }
+
   const result = await db.query(
     `UPDATE chat_user_settings
      SET pinned = $1,
@@ -238,7 +296,11 @@ router.patch('/api/chats/:chatId/settings', requireAuth, async (request, respons
     ],
   )
 
-  const settings = publicChatSettings(result.rows[0])
+  const chatRow = await db.query('SELECT auto_delete_seconds FROM chats WHERE id = $1 LIMIT 1', [request.params.chatId])
+  const settings = publicChatSettings({
+    ...result.rows[0],
+    auto_delete_seconds: chatRow.rows[0]?.auto_delete_seconds ?? null,
+  })
   await sendToUser(request.user.id, {
     type: 'chat:settings',
     chatId: request.params.chatId,
@@ -1433,7 +1495,31 @@ router.get('/api/chats/:chatId/messages', requireAuth, apiLimiter, async (reques
   const hasMore = result.rows.length > limit
   const pageRows = hasMore ? result.rows.slice(0, limit) : result.rows
   pageRows.reverse()
-  const messages = await publicMessagesFromRows(request.params.chatId, pageRows, request.user.id)
+  const publicMessages = await publicMessagesFromRows(request.params.chatId, pageRows, request.user.id)
+  const msgIds = publicMessages.map((m) => m.id)
+  let readsByMsgId = {}
+  if (msgIds.length) {
+    const readsRes = await db.query(
+      `SELECT mr.message_id, u.id AS user_id, u.name
+       FROM message_reads mr
+       JOIN users u ON u.id = mr.user_id
+       WHERE mr.message_id = ANY($1::uuid[])
+       ORDER BY mr.read_at ASC`,
+      [msgIds],
+    )
+    for (const row of readsRes.rows) {
+      if (!readsByMsgId[row.message_id]) readsByMsgId[row.message_id] = []
+      readsByMsgId[row.message_id].push({ userId: row.user_id, name: row.name })
+    }
+  }
+  const messages = publicMessages.map((m) => {
+    const readBy = readsByMsgId[m.id] || []
+    return {
+      ...m,
+      readBy,
+      status: readBy.length > 0 ? 'read' : (m.status || 'sent'),
+    }
+  })
   response.json({ messages, hasMore })
 })
 
@@ -1595,6 +1681,12 @@ router.post('/api/chats/:chatId/messages', requireAuth, messageLimiter, async (r
     }
   }
 
+  const autoDeleteSeconds = Number(member.auto_delete_seconds || 0)
+  const disappearsAt = input.disappearsAt
+    || (autoDeleteSeconds > 0 && !scheduledAt
+      ? new Date(Date.now() + autoDeleteSeconds * 1000).toISOString()
+      : null)
+
   const encrypted = encryptMessage(input.text)
   const messageId = randomUUID()
   const sentAt = scheduledAt ? null : new Date().toISOString()
@@ -1611,8 +1703,8 @@ router.post('/api/chats/:chatId/messages', requireAuth, messageLimiter, async (r
       `INSERT INTO messages
         (id, chat_id, sender_id, media_id, reply_to_id, forwarded_from_message_id,
          forwarded_from_chat_id, topic_id, ciphertext, iv, auth_tag, encryption_version,
-         search_text, silent, scheduled_at, sent_at, link_preview)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+         search_text, silent, scheduled_at, sent_at, link_preview, disappears_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
       [
         messageId,
         request.params.chatId,
@@ -1631,6 +1723,7 @@ router.post('/api/chats/:chatId/messages', requireAuth, messageLimiter, async (r
         scheduledAt,
         sentAt,
         input.linkPreview ? JSON.stringify(input.linkPreview) : null,
+        disappearsAt,
       ],
     )
     if (input.poll) {
@@ -1705,7 +1798,9 @@ router.post('/api/chats/:chatId/messages', requireAuth, messageLimiter, async (r
     silent: input.silent,
     scheduledAt,
     sentAt,
+    disappearsAt: disappearsAt || null,
     reactions: {},
+    readBy: [],
     status: 'sent',
     media: media
       ? {
@@ -1809,6 +1904,59 @@ router.post('/api/chats/:chatId/messages', requireAuth, messageLimiter, async (r
   }
 
   response.status(201).json({ message: publicMessage })
+})
+
+// ── Telegram history import ───────────────────────────────────────────────────
+
+const TELEGRAM_IMPORT_CHUNK_SIZE = 500
+
+router.post('/api/chats/:chatId/import-telegram', requireAuth, async (request, response) => {
+  const member = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!member) { response.status(404).json({ error: 'Chat not found' }); return }
+
+  const input = parseBody(telegramImportSchema, request.body)
+
+  let imported = 0
+  let skipped = 0
+  const rowsToInsert = []
+
+  for (const raw of input.messages) {
+    const text = String(raw.text || '').trim()
+    if (!text) { skipped += 1; continue }
+    const sentAtDate = new Date(raw.date)
+    if (Number.isNaN(sentAtDate.getTime())) { skipped += 1; continue }
+    const fromName = String(raw.from || '').trim().slice(0, 255) || null
+    rowsToInsert.push({ text, sentAt: sentAtDate.toISOString(), fromName })
+  }
+
+  for (let offset = 0; offset < rowsToInsert.length; offset += TELEGRAM_IMPORT_CHUNK_SIZE) {
+    const chunk = rowsToInsert.slice(offset, offset + TELEGRAM_IMPORT_CHUNK_SIZE)
+    await db.transaction(async (tx) => {
+      for (const row of chunk) {
+        const encrypted = encryptMessage(row.text)
+        await tx.query(
+          `INSERT INTO messages
+            (id, chat_id, sender_id, ciphertext, iv, auth_tag, encryption_version,
+             search_text, sent_at, imported_from_name)
+           VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [
+            request.params.chatId,
+            request.user.id,
+            encrypted.ciphertext,
+            encrypted.iv,
+            encrypted.authTag,
+            encrypted.version,
+            normalizeSearchText(row.text),
+            row.sentAt,
+            row.fromName,
+          ],
+        )
+        imported += 1
+      }
+    })
+  }
+
+  response.status(201).json({ imported, skipped })
 })
 
 // ── Scheduled messages ────────────────────────────────────────────────────────
@@ -2221,6 +2369,54 @@ router.patch('/api/chats/:chatId/pinned-message', requireAuth, async (request, r
   }
   await sendToChat(request.params.chatId, payload)
   response.json(payload)
+})
+
+// Mark messages as read up to a given message
+router.post('/api/chats/:chatId/read', requireAuth, async (request, response) => {
+  const input = parseBody(markReadSchema, request.body)
+  const { upToMessageId } = input
+
+  const member = await requireChatMemberRow(request.params.chatId, request.user.id)
+  if (!member) return response.status(403).json({ error: 'not a member' })
+
+  const messagesToMark = await db.query(
+    `SELECT id FROM messages
+     WHERE chat_id = $1
+       AND sender_id != $2
+       AND deleted_at IS NULL
+       AND (disappears_at IS NULL OR disappears_at > NOW())
+       AND sent_at IS NOT NULL
+       AND sent_at <= (SELECT sent_at FROM messages WHERE id = $3 AND chat_id = $1 LIMIT 1)
+       AND NOT EXISTS (SELECT 1 FROM message_reads WHERE message_id = messages.id AND user_id = $2)`,
+    [request.params.chatId, request.user.id, upToMessageId],
+  )
+
+  const count = messagesToMark.rows.length
+  if (count === 0) return response.json({ ok: true, count: 0 })
+
+  const messageIds = messagesToMark.rows.map((r) => r.id)
+  await db.query(
+    `INSERT INTO message_reads (message_id, user_id, read_at)
+     SELECT unnest($1::uuid[]), $2, NOW()
+     ON CONFLICT DO NOTHING`,
+    [messageIds, request.user.id],
+  )
+
+  await db.query(
+    `UPDATE chat_members SET last_read_message_id = $1 WHERE chat_id = $2 AND user_id = $3`,
+    [input.upToMessageId, request.params.chatId, request.user.id],
+  )
+
+  await sendToChatExcept(request.params.chatId, request.user.id, {
+    type: 'chat:read',
+    chatId: request.params.chatId,
+    userId: request.user.id,
+    userName: request.user.name,
+    upToMessageId,
+    readAt: new Date().toISOString(),
+  })
+
+  return response.json({ ok: true, count: messageIds.length })
 })
 
 router.get('/api/chats/:chatId/messages/:messageId/read-by', requireAuth, async (request, response) => {

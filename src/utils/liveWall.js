@@ -102,7 +102,7 @@ export function sampleLibraryWords(count, seed = Date.now()) {
 }
 
 // Matrix mode: every word from every message the client can see, no filtering.
-// This stays strictly local — E2EE means only this browser can read these chats.
+// This stays strictly local because only this browser has the local message keys.
 export function extractAllChatWords(messagesByChat) {
   const words = []
   const seen = new Set()

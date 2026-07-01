@@ -83,6 +83,7 @@ export default function AppShell({
   onMuteChat,
   onToggleMute,
   onSetChatPushMode,
+  onSetChatAutoDelete,
   onArchiveChat,
   onCreateFolder,
   onUpdateFolder,
@@ -107,6 +108,8 @@ export default function AppShell({
   onMarkSecurityAlertRead,
   onMarkAllSecurityAlertsRead,
   onLoadBlockedContacts,
+  onLoadPrivacy,
+  onUpdatePrivacy,
   onAddContact,
   onRemoveContact,
   onBlockUser,
@@ -139,6 +142,7 @@ export default function AppShell({
   onGlobalSearchSelectChat,
   onGlobalSearchJumpMessage,
   onScheduleSend,
+  onStoryReplySent,
   scheduledCounts,
 }) {
   const hasChat = selectedChat && selectedContact
@@ -441,6 +445,8 @@ export default function AppShell({
         onRemoveContact={onRemoveContact}
         onUnblockUser={onUnblockUser}
         onOpenStoryViewer={(groups, idx, onDeleted) => setStoryViewer({ groups, idx, onDeleted })}
+        onLoadPrivacy={onLoadPrivacy}
+        onUpdatePrivacy={onUpdatePrivacy}
       />
 
       <main className="chat-area" data-chat-bg={(selectedChat?.id && getChatWallpaper(selectedChat.id)) || settings.chatBackground || 'default'}>
@@ -624,6 +630,8 @@ export default function AppShell({
           onBlockUser={onBlockUser}
           onUnblockUser={onUnblockUser}
           onReportUser={(userId) => onReportUser(userId, { chatId: selectedChat.id })}
+          onSetAutoDelete={(seconds) => onSetChatAutoDelete?.(selectedChat.id, seconds)}
+          onToast={(message) => onUpdateSettings({ toast: message })}
         />
       )}
 
@@ -687,6 +695,7 @@ export default function AppShell({
           initialGroupIndex={storyViewer.idx}
           currentUserId={user?.id}
           onClose={() => setStoryViewer(null)}
+          onReplySent={onStoryReplySent}
           onDeleted={(storyId, userId) => {
             storyViewer.onDeleted?.(storyId, userId)
             setStoryViewer(null)

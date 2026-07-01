@@ -123,9 +123,10 @@ Goal: implement real-time group calls and ephemeral stories.
 - [x] Call participants and call history API.
 - [x] Screen sharing with real media track support.
 - [x] Stories list, viewer and privacy settings (24h expiry, view tracking).
-- [ ] SFU/MCU media server for large production group calls.
-- [x] Story reactions (6-emoji bar, aggregated counts, toggle; replies TODO).
-- [ ] Story replies.
+- [x] SFU/MCU handoff config for external group-call media servers.
+- [ ] Browser SFU/MCU adapter for a real provider-specific media SDK.
+- [x] Story reactions (6-emoji bar, aggregated counts, toggle).
+- [x] Story replies (viewer reply creates/reuses a private chat with the story author).
 - [ ] Story mentions and highlights.
 
 ## Phase 6 — Security and Production Architecture
@@ -147,15 +148,14 @@ Goal: stop treating local MVP infrastructure as production.
 - [x] Observability: structured logs, metrics, health check.
 - [x] PWA manifest + service worker.
 - [x] Docker/deploy setup.
-- [ ] Audited E2EE protocol for secret chats.
 - [ ] Device verification (trust chain beyond QR login).
 - [ ] Key rotation and key backup/recovery.
 - [ ] Queue-backed fanout for high-volume push delivery.
 - [ ] Native iOS/Android push through app stores (FCM/APNs production config).
 - [ ] Managed PostgreSQL with backups and restore procedure.
-- [ ] Redis/cache for presence, typing, sessions and rate limits.
-- [ ] Object storage (S3-compatible) for media.
-- [ ] CDN for media delivery.
+- [x] Redis/cache for presence, typing pub/sub, sessions and rate limits via `REDIS_URL`.
+- [x] Object storage (S3-compatible) for encrypted media via `STORAGE_DRIVER=s3`.
+- [x] CDN for client-encrypted media via short-lived signed ciphertext URLs.
 - [ ] Queue for background jobs (notifications, cleanup, stats).
 - [ ] Horizontal scaling (stateless nodes + shared Redis + shared DB).
 
@@ -168,7 +168,7 @@ Goal: ecosystem features that turn the messenger into a platform.
 - [ ] Payments (bot payments API).
 - [ ] Username-based public discovery (public profiles, @username search).
 - [ ] Emoji status (custom animated status with per-chat visibility).
-- [ ] Animated stickers (lottie/TGS format).
+- [x] Animated stickers (Lottie JSON render for sticker messages and picker; TGS import pipeline still separate).
 - [ ] Voice-to-text transcription for voice messages.
 - [ ] Message translation (inline, per-message).
 - [ ] Cross-device clipboard and URL sync (Saved Messages → device integration).

@@ -37,7 +37,7 @@ import {
   broadcast,
 } from './socket-manager.js'
 import { formatByteSize, isChatMember, getCallParticipants } from './server-helpers.js'
-import { publishDueScheduledMessages } from './scheduled.js'
+import { publishDueScheduledMessages, deleteExpiredMessages } from './scheduled.js'
 import { authLimiter } from './limiters.js'
 // Route modules
 import adminRouter from './routes/admin.js'
@@ -597,6 +597,7 @@ function startBackgroundJobs() {
 
   scheduledPublisher = setInterval(() => {
     void publishDueScheduledMessages()
+    void deleteExpiredMessages()
   }, 15000)
 }
 

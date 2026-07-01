@@ -43,7 +43,7 @@ Assumptions:
 - Production uses HTTPS/WSS and strong deployment secrets.
 - `MESSAGE_ENCRYPTION_KEY`, database credentials, Redis credentials and S3
   credentials are operator secrets.
-- The current client-side encryption helpers are not a full E2EE protocol.
+- The current client-side encryption helpers are not a full audited messaging protocol.
 - A compromised server can change delivered JavaScript and public keys, so the
   current model does not protect against a malicious server operator.
 
@@ -71,7 +71,7 @@ Cryptography and key management:
 - Server at-rest encryption protects database/media snapshots when the app key is
   not also compromised.
 - Browser encryption envelopes reduce plaintext exposure on the server, but they
-  have no device verification, no forward secrecy, no key rotation and no
+  have no device verification, no ratchet-based secrecy, no key rotation and no
   audited recovery.
 - Exported key backups include private key material and must be treated as
   sensitive secrets.
@@ -98,7 +98,7 @@ Out of scope for the current MVP:
 
 - Protection against malicious browser extensions or compromised user devices.
 - Claims against a malicious server delivering modified JavaScript.
-- Nation-state-resistant E2EE.
+- Nation-state-resistant cryptographic guarantees.
 - Full anti-spam automation and content moderation.
 
 ## Severity Calibration

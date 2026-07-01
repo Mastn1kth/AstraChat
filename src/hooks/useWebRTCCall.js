@@ -51,6 +51,7 @@ export default function useWebRTCCall({ sendSignal, currentUser }) {
   const pendingOffersRef = useRef(new Map())
   const pendingCandidatesRef = useRef(new Map())
   const iceServersRef = useRef(fallbackIceServers)
+  const iceRestartedRef = useRef(new Set())
   const closeTimerRef = useRef()
 
   const remoteStream = useMemo(() => Object.values(remoteStreams)[0] || null, [remoteStreams])
@@ -104,6 +105,7 @@ export default function useWebRTCCall({ sendSignal, currentUser }) {
     localStreamRef.current = null
     peersRef.current.forEach((peer) => peer.close())
     peersRef.current.clear()
+    iceRestartedRef.current.clear()
     pendingOffersRef.current.clear()
     pendingCandidatesRef.current.clear()
     setLocalStream(null)
@@ -189,6 +191,45 @@ export default function useWebRTCCall({ sendSignal, currentUser }) {
         candidate: event.candidate.toJSON(),
       })
     })
+    async function restartIceOnce() {
+      const current = callRef.current
+      if (!current?.id || !peersRef.current.has(userId)) return
+      if (iceRestartedRef.current.has(userId)) {
+        patchParticipant(userId, { state: 'disconnected' })
+        closeAfterStatus('failed', 'Call connection failed. Check network or TURN server settings.')
+        return
+      }
+
+      iceRestartedRef.current.add(userId)
+      patchParticipant(userId, { state: 'disconnected' })
+      patchCall({ status: 'reconnecting', error: 'Connection dropped. Trying to reconnect...' })
+      try {
+        peer.restartIce?.()
+        const offer = await peer.createOffer({ iceRestart: true })
+        await peer.setLocalDescription(offer)
+        sendSignal({
+          type: 'call:offer',
+          callId: current.id,
+          targetUserId: userId,
+          description: peer.localDescription,
+        })
+      } catch {
+        closeAfterStatus('failed', 'Call reconnection failed.')
+      }
+    }
+
+    peer.addEventListener('iceconnectionstatechange', () => {
+      if (peer.iceConnectionState === 'connected' || peer.iceConnectionState === 'completed') {
+        iceRestartedRef.current.delete(userId)
+        patchParticipant(userId, { state: 'connected' })
+      }
+      if (peer.iceConnectionState === 'disconnected') {
+        patchParticipant(userId, { state: 'disconnected' })
+      }
+      if (peer.iceConnectionState === 'failed') {
+        void restartIceOnce()
+      }
+    })
     peer.addEventListener('track', (event) => {
       const streamFromPeer = event.streams[0]
       if (streamFromPeer) {
@@ -207,11 +248,11 @@ export default function useWebRTCCall({ sendSignal, currentUser }) {
         patchCall({ status: 'active', connectedAt: callRef.current?.connectedAt || Date.now(), error: '' })
       }
       if (peer.connectionState === 'failed') {
-        patchParticipant(userId, { state: 'disconnected' })
+        void restartIceOnce()
       }
     })
     return peer
-  }, [patchCall, patchParticipant, sendSignal])
+  }, [closeAfterStatus, patchCall, patchParticipant, sendSignal])
 
   const createOfferFor = useCallback(async (userId) => {
     const current = callRef.current
@@ -287,6 +328,7 @@ export default function useWebRTCCall({ sendSignal, currentUser }) {
         ...preparingCall,
         id: createdCall.id,
         status: 'ringing',
+        mediaServer: createdCall.mediaServer || null,
         participants: uniqueParticipants(createdCall.participants, currentUserId),
       }
       replaceCall(activeCall)
@@ -484,6 +526,7 @@ export default function useWebRTCCall({ sendSignal, currentUser }) {
         direction: 'incoming',
         mode: (payload.participants || []).length > 2 ? 'group' : 'private',
         peer: payload.from,
+        mediaServer: payload.mediaServer || null,
         participants: uniqueParticipants(payload.participants, currentUserId),
         status: 'ringing',
         muted: false,

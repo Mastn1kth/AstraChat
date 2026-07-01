@@ -6,8 +6,32 @@ import ChatItem from './ChatItem'
 import Composer from './Composer'
 import IconButton from './IconButton'
 import MessageBubble from './MessageBubble'
+import RichMessage from './RichMessage'
+import { stickerPacks } from '../utils/richMessages'
 
 describe('React components', () => {
+  it('renders Lottie stickers with an animation container', () => {
+    const html = renderToStaticMarkup(
+      <RichMessage rich={{
+        type: 'sticker',
+        title: 'Animated wave',
+        emoji: '👋',
+        lottieUrl: '/stickers/wave.json',
+      }}
+      />,
+    )
+
+    expect(html).toContain('rich-sticker animated')
+    expect(html).toContain('data-lottie-src="/stickers/wave.json"')
+    expect(html).toContain('Animated wave')
+  })
+
+  it('ships at least one built-in Lottie sticker', () => {
+    const stickers = stickerPacks.flatMap((pack) => pack.stickers)
+
+    expect(stickers.some((sticker) => sticker.lottieUrl)).toBe(true)
+  })
+
   it('renders the auth screen entry step with primary actions', () => {
     const html = renderToStaticMarkup(
       <AuthScreen

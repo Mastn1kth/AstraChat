@@ -371,7 +371,122 @@ describe('API routes', () => {
     assert.equal(upload.status, 401)
   })
 
+  it('serves client-encrypted media ciphertext through signed CDN URLs', async () => {
+    const { user, cookie } = await registerUser(baseUrl, 'media_cdn_user')
+    const ciphertext = Buffer.from('client encrypted bytes', 'utf8')
+    const form = new FormData()
+    form.append('file', new Blob([ciphertext], { type: 'application/octet-stream' }), 'encrypted.bin')
+    form.append('clientEncrypted', 'true')
+    form.append('kind', 'file')
+    form.append('mimeType', 'application/octet-stream')
+    form.append('plainSize', String(ciphertext.length))
+    form.append('originalSize', String(ciphertext.length))
+    form.append('originalName', 'encrypted.bin')
+    form.append('envelope', 'astra:media:v1:test-envelope')
+
+    const upload = await fetch(`${baseUrl}/api/media`, {
+      method: 'POST',
+      headers: { Cookie: cookie },
+      body: form,
+    })
+    assert.equal(upload.status, 201)
+    const uploadBody = await upload.json()
+    const mediaId = uploadBody.media.id
+    const { createMediaAccessToken } = await import('./media-cdn.js')
+    const expires = Math.floor(Date.now() / 1000) + 60
+    const token = createMediaAccessToken({ mediaId, userId: user.id, expires })
+
+    const denied = await fetch(`${baseUrl}/api/media/${mediaId}/ciphertext?userId=wrong&expires=${expires}&token=${token}`)
+    assert.equal(denied.status, 403)
+
+    const raw = await fetch(`${baseUrl}/api/media/${mediaId}/ciphertext?userId=${encodeURIComponent(user.id)}&expires=${expires}&token=${token}`)
+    assert.equal(raw.status, 200)
+    assert.equal(Buffer.from(await raw.arrayBuffer()).toString('utf8'), ciphertext.toString('utf8'))
+  })
+
   // ── WebSocket ──────────────────────────────────────────────
+
+  it('sends story replies into a private chat', async () => {
+    const author = await registerUser(baseUrl, 'story_reply_author')
+    const viewer = await registerUser(baseUrl, 'story_reply_viewer')
+
+    const createdStory = await postJson(baseUrl, '/api/stories', author.cookie, {
+      text: 'Launch day',
+      bgColor: '#0891b2',
+    })
+    assert.equal(createdStory.response.status, 201)
+    const storyId = createdStory.body.story.id
+
+    const reply = await postJson(baseUrl, `/api/stories/${storyId}/reply`, viewer.cookie, {
+      text: 'Looks good',
+    })
+    assert.equal(reply.response.status, 201)
+    assert.equal(reply.body.ok, true)
+    assert.equal(reply.body.createdChat, true)
+    assert.ok(reply.body.chatId)
+    assert.equal(reply.body.message.text, 'Looks good')
+    assert.equal(reply.body.message.linkPreview.title, 'Story reply')
+    assert.equal(reply.body.message.linkPreview.description, 'Launch day')
+
+    const messages = await fetch(`${baseUrl}/api/chats/${reply.body.chatId}/messages`, {
+      headers: { Cookie: author.cookie },
+    })
+    const messagesBody = await messages.json()
+    assert.equal(messages.status, 200)
+    assert.equal(messagesBody.messages.at(-1).text, 'Looks good')
+    assert.equal(messagesBody.messages.at(-1).senderId, viewer.user.id)
+  })
+
+  it('WebSocket: delivers story replies to the story author', async () => {
+    const author = await registerUser(baseUrl, 'story_ws_author')
+    const viewer = await registerUser(baseUrl, 'story_ws_viewer')
+
+    const createdStory = await postJson(baseUrl, '/api/stories', author.cookie, {
+      text: 'Live launch',
+      bgColor: '#0891b2',
+    })
+    assert.equal(createdStory.response.status, 201)
+    const storyId = createdStory.body.story.id
+    const wsUrl = `ws://127.0.0.1:${listener.address().port}/ws`
+    const { default: WebSocket } = await import('ws')
+
+    await new Promise((resolve, reject) => {
+      const ws = new WebSocket(wsUrl, { headers: { Cookie: author.cookie } })
+      const timer = setTimeout(() => { ws.close(); reject(new Error('No story reply message:new received')) }, 4000)
+
+      ws.on('message', async (data) => {
+        const msg = JSON.parse(String(data))
+        if (msg.type === 'session:ready') {
+          await postJson(baseUrl, `/api/stories/${storyId}/reply`, viewer.cookie, {
+            text: 'Watching live',
+          })
+          return
+        }
+        if (msg.type === 'message:new' && msg.message?.text === 'Watching live') {
+          clearTimeout(timer)
+          ws.close()
+          assert.equal(msg.message.senderId, viewer.user.id)
+          assert.ok(msg.message.chatId)
+          resolve()
+        }
+      })
+      ws.on('error', (err) => { clearTimeout(timer); reject(err) })
+    })
+  })
+
+  it('returns Lottie metadata in sticker packs', async () => {
+    const { cookie } = await registerUser(baseUrl, 'sticker_lottie_user')
+
+    const response = await fetch(`${baseUrl}/api/stickers/packs`, {
+      headers: { Cookie: cookie },
+    })
+    const body = await response.json()
+    const stickers = body.packs.flatMap((pack) => pack.stickers)
+    const wave = stickers.find((sticker) => sticker.packId === 'vibes' && sticker.id === 'wave')
+
+    assert.equal(response.status, 200)
+    assert.equal(wave?.lottieUrl, '/stickers/wave.json')
+  })
 
   it('WebSocket: accepts authenticated connection and sends initial workspace', async () => {
     const { cookie } = await registerUser(baseUrl, 'ws_auth_user')
@@ -500,5 +615,87 @@ describe('API routes', () => {
     })
     assert.equal(rejectedMessage.response.status, 403)
     assert.equal(rejectedMessage.body.error, 'Topic is closed')
+  })
+
+  it('returns and updates privacy settings', async () => {
+    const { cookie } = await registerUser(baseUrl, 'privacy_user')
+
+    const get = await fetch(`${baseUrl}/api/users/me/privacy`, { headers: { Cookie: cookie } })
+    assert.equal(get.status, 200)
+    const { privacyPhone, privacyLastSeen } = await get.json()
+    assert.equal(privacyPhone, 'contacts')
+    assert.equal(privacyLastSeen, 'contacts')
+
+    const patch = await patchJson(baseUrl, '/api/users/me/privacy', cookie, {
+      privacyPhone: 'nobody',
+      privacyLastSeen: 'everyone',
+    })
+    assert.equal(patch.response.status, 200)
+    assert.equal(patch.body.privacyPhone, 'nobody')
+    assert.equal(patch.body.privacyLastSeen, 'everyone')
+
+    const rejects = await patchJson(baseUrl, '/api/users/me/privacy', cookie, {
+      privacyPhone: 'invalid_value',
+    })
+    assert.equal(rejects.response.status, 400)
+  })
+
+  it('marks messages as read and emits chat:read event', async () => {
+    const sender = await registerUser(baseUrl, 'read_sender')
+    const reader = await registerUser(baseUrl, 'read_reader')
+
+    const chat = await postJson(baseUrl, '/api/chats', sender.cookie, {
+      memberIds: [reader.user.id],
+    })
+    assert.equal(chat.response.status, 201)
+    const chatId = chat.body.chat.id
+
+    const msg = await postJson(baseUrl, `/api/chats/${chatId}/messages`, sender.cookie, {
+      text: 'Read me',
+      searchText: 'Read me',
+    })
+    assert.equal(msg.response.status, 201)
+    const messageId = msg.body.message.id
+
+    const markRead = await postJson(baseUrl, `/api/chats/${chatId}/read`, reader.cookie, {
+      upToMessageId: messageId,
+    })
+    assert.equal(markRead.response.status, 200)
+    assert.ok(markRead.body.ok)
+
+    // Idempotent: second call should return count 0
+    const again = await postJson(baseUrl, `/api/chats/${chatId}/read`, reader.cookie, {
+      upToMessageId: messageId,
+    })
+    assert.equal(again.response.status, 200)
+    assert.equal(again.body.count, 0)
+  })
+
+  it('sets chat auto-delete timer and rejects invalid values', async () => {
+    const owner = await registerUser(baseUrl, 'autodel_owner')
+    const member = await registerUser(baseUrl, 'autodel_member')
+
+    const chat = await postJson(baseUrl, '/api/chats', owner.cookie, {
+      memberIds: [member.user.id],
+    })
+    assert.equal(chat.response.status, 201)
+    const chatId = chat.body.chat.id
+
+    const set = await patchJson(baseUrl, `/api/chats/${chatId}/settings`, owner.cookie, {
+      autoDeleteSeconds: 300,
+    })
+    assert.equal(set.response.status, 200)
+    assert.equal(set.body.settings.autoDeleteSeconds, 300)
+
+    const turn_off = await patchJson(baseUrl, `/api/chats/${chatId}/settings`, owner.cookie, {
+      autoDeleteSeconds: null,
+    })
+    assert.equal(turn_off.response.status, 200)
+    assert.equal(turn_off.body.settings.autoDeleteSeconds, null)
+
+    const invalid = await patchJson(baseUrl, `/api/chats/${chatId}/settings`, owner.cookie, {
+      autoDeleteSeconds: -5,
+    })
+    assert.equal(invalid.response.status, 400)
   })
 })

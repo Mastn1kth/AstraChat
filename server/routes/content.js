@@ -2,9 +2,52 @@ import { Router } from 'express'
 import { randomUUID } from 'node:crypto'
 import { db } from '../db.js'
 import { requireAuth } from '../auth.js'
+import { encryptMessage } from '../crypto.js'
 import { storiesLimiter } from '../limiters.js'
+import { sendToChatExcept, sendToUser } from '../socket-manager.js'
+import { sendOfflineMessagePushes } from '../push-service.js'
+import { parseBody, storyReplySchema } from '../validation.js'
+import {
+  ensureChatSettings,
+  hasBlockBetween,
+  normalizeSearchText,
+  publicChatSettings,
+} from '../server-helpers.js'
 
 const router = Router()
+
+async function findOrCreatePrivateChat(tx, firstUserId, secondUserId) {
+  const existing = await tx.query(
+    `SELECT c.id
+     FROM chats c
+     JOIN chat_members mine ON mine.chat_id = c.id AND mine.user_id = $1
+     JOIN chat_members theirs ON theirs.chat_id = c.id AND theirs.user_id = $2
+     WHERE c.type = 'private'
+       AND (SELECT COUNT(*) FROM chat_members cm WHERE cm.chat_id = c.id) = 2
+     LIMIT 1`,
+    [firstUserId, secondUserId],
+  )
+  if (existing.rows[0]) return { chatId: existing.rows[0].id, created: false }
+
+  const chatId = randomUUID()
+  await tx.query(
+    'INSERT INTO chats (id, type, title, created_by) VALUES ($1, $2, $3, $4)',
+    [chatId, 'private', '', firstUserId],
+  )
+  for (const userId of [firstUserId, secondUserId]) {
+    await tx.query(
+      'INSERT INTO chat_members (chat_id, user_id, role) VALUES ($1, $2, $3)',
+      [chatId, userId, userId === firstUserId ? 'owner' : 'member'],
+    )
+    await tx.query(
+      `INSERT INTO chat_user_settings (chat_id, user_id)
+       VALUES ($1, $2)
+       ON CONFLICT (chat_id, user_id) DO NOTHING`,
+      [chatId, userId],
+    )
+  }
+  return { chatId, created: true }
+}
 
 // ── Cloud key backup ──────────────────────────────────────────────────────────
 // Stores an opaque passphrase-encrypted blob; the server cannot read keys.
@@ -55,6 +98,7 @@ function publicStickerPack(pack, items = [], installed = false) {
       packId: item.pack_id,
       emoji: item.emoji,
       title: item.title,
+      lottieUrl: item.lottie_url || '',
     })),
   }
 }
@@ -68,7 +112,7 @@ router.get('/api/stickers/packs', requireAuth, async (request, response) => {
     [request.user.id],
   )
   const itemsResult = await db.query(
-    'SELECT pack_id, id, emoji, title FROM sticker_pack_items ORDER BY pack_id, sort_order',
+    'SELECT pack_id, id, emoji, title, lottie_url FROM sticker_pack_items ORDER BY pack_id, sort_order',
   )
   const itemsByPack = new Map()
   for (const item of itemsResult.rows) {
@@ -96,7 +140,7 @@ router.get('/api/stickers/packs/installed', requireAuth, async (request, respons
   }
   const packIds = result.rows.map((r) => r.id)
   const itemsResult = await db.query(
-    `SELECT pack_id, id, emoji, title FROM sticker_pack_items
+    `SELECT pack_id, id, emoji, title, lottie_url FROM sticker_pack_items
      WHERE pack_id = ANY($1)
      ORDER BY pack_id, sort_order`,
     [packIds],
@@ -410,6 +454,130 @@ router.post('/api/stories/:storyId/react', requireAuth, async (request, response
   )
   const reactions = Object.fromEntries(aggResult.rows.map((r) => [r.emoji, r.count]))
   response.json({ ok: true, reactions, myReaction: emoji || null })
+})
+
+router.post('/api/stories/:storyId/reply', requireAuth, async (request, response) => {
+  const input = parseBody(storyReplySchema, request.body)
+  const storyResult = await db.query(
+    `SELECT s.id, s.user_id, s.text, s.expires_at, u.name, u.username
+     FROM stories s
+     JOIN users u ON u.id = s.user_id
+     WHERE s.id = $1 AND s.expires_at > NOW()
+     LIMIT 1`,
+    [request.params.storyId],
+  )
+  const story = storyResult.rows[0]
+  if (!story) {
+    response.status(404).json({ error: 'Story not found' })
+    return
+  }
+  if (story.user_id === request.user.id) {
+    response.status(400).json({ error: 'Cannot reply to your own story' })
+    return
+  }
+  if (await hasBlockBetween(request.user.id, story.user_id)) {
+    response.status(403).json({ error: 'This user is not available' })
+    return
+  }
+
+  const messageId = randomUUID()
+  const sentAt = new Date().toISOString()
+  const encrypted = encryptMessage(input.text)
+  const storyPreview = {
+    title: 'Story reply',
+    description: story.text || 'Story',
+    site: story.name || story.username || 'Story',
+  }
+  let chatId = null
+  let createdChat = false
+
+  await db.transaction(async (tx) => {
+    const chat = await findOrCreatePrivateChat(tx, request.user.id, story.user_id)
+    chatId = chat.chatId
+    createdChat = chat.created
+    await tx.query(
+      `INSERT INTO messages
+        (id, chat_id, sender_id, ciphertext, iv, auth_tag, encryption_version,
+         search_text, sent_at, link_preview)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        messageId,
+        chatId,
+        request.user.id,
+        encrypted.ciphertext,
+        encrypted.iv,
+        encrypted.authTag,
+        encrypted.version,
+        normalizeSearchText(`${input.text} story ${story.text || ''}`),
+        sentAt,
+        JSON.stringify(storyPreview),
+      ],
+    )
+    await tx.query(
+      'UPDATE chat_members SET last_message_at = NOW() WHERE chat_id = $1 AND user_id = $2',
+      [chatId, request.user.id],
+    )
+    await tx.query(
+      `INSERT INTO story_views (story_id, viewer_id)
+       VALUES ($1, $2)
+       ON CONFLICT DO NOTHING`,
+      [story.id, request.user.id],
+    )
+  })
+
+  const publicMessage = {
+    id: messageId,
+    chatId,
+    senderId: request.user.id,
+    text: input.text,
+    createdAt: sentAt,
+    topicId: null,
+    replyToId: null,
+    forwarded: false,
+    forwardedFromMessageId: null,
+    forwardedFromChatId: null,
+    silent: false,
+    scheduledAt: null,
+    sentAt,
+    reactions: {},
+    status: 'sent',
+    media: null,
+    poll: null,
+    linkPreview: storyPreview,
+  }
+
+  const recipientDeliveries = await sendToChatExcept(chatId, request.user.id, {
+    type: 'message:new',
+    message: publicMessage,
+  })
+  if (recipientDeliveries > 0) publicMessage.status = 'delivered'
+  await sendToUser(request.user.id, {
+    type: 'message:delivered',
+    chatId,
+    messageId,
+    delivered: recipientDeliveries > 0,
+  })
+  await sendOfflineMessagePushes({
+    chatId,
+    sender: request.user,
+    message: publicMessage,
+    searchText: input.text,
+  })
+
+  const settings = await ensureChatSettings(chatId, request.user.id)
+  response.status(201).json({
+    ok: true,
+    chatId,
+    createdChat,
+    chat: {
+      id: chatId,
+      type: 'private',
+      title: '',
+      memberIds: [request.user.id, story.user_id],
+      settings: publicChatSettings(settings),
+    },
+    message: publicMessage,
+  })
 })
 
 export default router

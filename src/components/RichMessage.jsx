@@ -1,9 +1,22 @@
 import { MapPin, Phone, UserRound } from 'lucide-react'
+import LottieAnimation from './LottieAnimation'
 
 export default function RichMessage({ rich }) {
   if (!rich) return null
 
   if (rich.type === 'sticker') {
+    if (rich.lottieUrl || rich.lottieData) {
+      return (
+        <div className="rich-sticker animated" style={{ '--rich-tone': rich.tone || '#7c3aed' }}>
+          <LottieAnimation
+            src={rich.lottieUrl}
+            animationData={rich.lottieData}
+            label={rich.title || 'Animated sticker'}
+          />
+          <strong>{rich.title || 'Sticker'}</strong>
+        </div>
+      )
+    }
     return (
       <div className="rich-sticker" style={{ '--rich-tone': rich.tone || '#7c3aed' }}>
         <span>{rich.emoji || '🙂'}</span>

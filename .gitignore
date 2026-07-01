@@ -12,6 +12,7 @@ dist
 dist-ssr
 *.local
 server-data*
+data/
 e2e-data/
 playwright-report/
 test-results/

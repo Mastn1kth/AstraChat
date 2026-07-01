@@ -5,6 +5,46 @@ import { sendToChatExcept, sendToUser } from './socket-manager.js'
 import { sendOfflineMessagePushes } from './push-service.js'
 
 let publishingScheduled = false
+let deletingExpired = false
+
+export async function deleteExpiredMessages() {
+  if (deletingExpired) return
+  deletingExpired = true
+  try {
+    const expired = await db.query(
+      `SELECT id, chat_id
+       FROM messages
+       WHERE disappears_at IS NOT NULL
+         AND disappears_at <= NOW()
+         AND deleted_at IS NULL
+       ORDER BY disappears_at ASC
+       LIMIT 100`,
+    )
+    for (const row of expired.rows) {
+      try {
+        const result = await db.query(
+          `UPDATE messages
+           SET deleted_at = NOW(), ciphertext = '', iv = '', auth_tag = ''
+           WHERE id = $1 AND deleted_at IS NULL
+           RETURNING id, chat_id`,
+          [row.id],
+        )
+        if (result.rows[0]) {
+          await sendToChatExcept(row.chat_id, '', {
+            type: 'message:deleted',
+            chatId: row.chat_id,
+            messageId: row.id,
+            disappearedAt: new Date().toISOString(),
+          })
+        }
+      } catch (error) {
+        logger.error({ msgId: row.id, err: error.message }, '[scheduled] expire message failed')
+      }
+    }
+  } finally {
+    deletingExpired = false
+  }
+}
 
 export async function publishScheduledMessage(messageId) {
   const result = await db.query(

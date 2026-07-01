@@ -839,6 +839,114 @@ export const migrations = [
     `,
     downSql: `DROP TABLE IF EXISTS story_reactions;`,
   },
+  {
+    id: '20260618_lottie_stickers',
+    sql: `
+      ALTER TABLE sticker_pack_items
+        ADD COLUMN IF NOT EXISTS lottie_url TEXT NOT NULL DEFAULT '';
+
+      UPDATE sticker_pack_items
+      SET lottie_url = '/stickers/wave.json'
+      WHERE pack_id = 'vibes' AND id = 'wave';
+    `,
+    downSql: `
+      ALTER TABLE sticker_pack_items
+        DROP COLUMN IF EXISTS lottie_url;
+    `,
+  },
+  {
+    id: '20260630_privacy_and_disappearing',
+    sql: `
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS privacy_phone TEXT NOT NULL DEFAULT 'contacts',
+        ADD COLUMN IF NOT EXISTS privacy_last_seen TEXT NOT NULL DEFAULT 'contacts';
+
+      ALTER TABLE users DROP CONSTRAINT IF EXISTS users_privacy_phone_check;
+      ALTER TABLE users
+        ADD CONSTRAINT users_privacy_phone_check
+        CHECK (privacy_phone IN ('everyone', 'contacts', 'nobody'));
+
+      ALTER TABLE users DROP CONSTRAINT IF EXISTS users_privacy_last_seen_check;
+      ALTER TABLE users
+        ADD CONSTRAINT users_privacy_last_seen_check
+        CHECK (privacy_last_seen IN ('everyone', 'contacts', 'nobody'));
+
+      ALTER TABLE chats
+        ADD COLUMN IF NOT EXISTS auto_delete_seconds INTEGER;
+
+      ALTER TABLE messages
+        ADD COLUMN IF NOT EXISTS disappears_at TIMESTAMPTZ;
+
+      CREATE INDEX IF NOT EXISTS messages_disappears_idx
+        ON messages(disappears_at)
+        WHERE disappears_at IS NOT NULL;
+    `,
+    downSql: `
+      DROP INDEX IF EXISTS messages_disappears_idx;
+
+      ALTER TABLE messages
+        DROP COLUMN IF EXISTS disappears_at;
+
+      ALTER TABLE chats
+        DROP COLUMN IF EXISTS auto_delete_seconds;
+
+      ALTER TABLE users DROP CONSTRAINT IF EXISTS users_privacy_last_seen_check;
+      ALTER TABLE users DROP CONSTRAINT IF EXISTS users_privacy_phone_check;
+      ALTER TABLE users
+        DROP COLUMN IF EXISTS privacy_phone,
+        DROP COLUMN IF EXISTS privacy_last_seen;
+    `,
+  },
+  {
+    id: '20260630_message_reads',
+    sql: `
+      CREATE TABLE IF NOT EXISTS message_reads (
+        message_id UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (message_id, user_id)
+      );
+      CREATE INDEX IF NOT EXISTS message_reads_message_idx ON message_reads(message_id);
+      CREATE INDEX IF NOT EXISTS message_reads_user_idx ON message_reads(user_id, read_at DESC);
+    `,
+    downSql: `DROP TABLE IF EXISTS message_reads;`,
+  },
+  {
+    id: '20260630_unread_and_system',
+    sql: `
+      ALTER TABLE chat_members
+        ADD COLUMN IF NOT EXISTS last_read_message_id UUID REFERENCES messages(id) ON DELETE SET NULL;
+      ALTER TABLE messages
+        ADD COLUMN IF NOT EXISTS is_system BOOLEAN NOT NULL DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS system_type TEXT,
+        ADD COLUMN IF NOT EXISTS system_data JSONB;
+      CREATE INDEX IF NOT EXISTS messages_system_idx ON messages(chat_id, is_system) WHERE is_system = TRUE;
+    `,
+    downSql: `
+      ALTER TABLE chat_members DROP COLUMN IF EXISTS last_read_message_id;
+      ALTER TABLE messages DROP COLUMN IF EXISTS is_system, DROP COLUMN IF EXISTS system_type, DROP COLUMN IF EXISTS system_data;
+    `,
+  },
+  {
+    id: '20260701_video_note_media_kind',
+    sql: `
+      ALTER TABLE media_files DROP CONSTRAINT IF EXISTS media_files_kind_check;
+      ALTER TABLE media_files
+        ADD CONSTRAINT media_files_kind_check
+        CHECK (kind IN ('image', 'video', 'voice', 'audio', 'video_note', 'file'));
+    `,
+    downSql: `
+      ALTER TABLE media_files DROP CONSTRAINT IF EXISTS media_files_kind_check;
+      ALTER TABLE media_files
+        ADD CONSTRAINT media_files_kind_check
+        CHECK (kind IN ('image', 'video', 'voice', 'audio', 'file'));
+    `,
+  },
+  {
+    id: '20260701_telegram_import',
+    sql: `ALTER TABLE messages ADD COLUMN IF NOT EXISTS imported_from_name TEXT;`,
+    downSql: `ALTER TABLE messages DROP COLUMN IF EXISTS imported_from_name;`,
+  },
 ]
 
 async function getAppliedMigrationIds(database) {

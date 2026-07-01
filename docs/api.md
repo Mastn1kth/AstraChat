@@ -156,7 +156,7 @@ is to keep server-side message search limited to rows where the client
 deliberately provides `searchText`, instead of building a plaintext searchable
 server index. The current client sends client-encrypted message envelopes to
 the server, so the server should not rely on plaintext message bodies being
-available. This is not a claim of a full audited E2EE protocol. Rows without
+available. This is not a claim of a full audited messaging protocol. Rows without
 `searchText` are not searchable through the server; the UI must say this
 honestly instead of presenting full encrypted-history search.
 

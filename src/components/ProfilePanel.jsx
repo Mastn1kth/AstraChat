@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useConfirm } from '../hooks/useConfirm'
 import {
   Archive,
@@ -18,6 +18,7 @@ import {
   Plus,
   RefreshCw,
   Shield,
+  Timer,
   Trash2,
   Users,
   Pin,
@@ -27,7 +28,7 @@ import Avatar from './Avatar'
 import FocusSchedule from './FocusSchedule'
 import { formatMessageTime } from '../utils/formatters'
 import { t } from '../i18n'
-import { getChannelStats, getChatAdminLog, getChatBans, unbanChatMember, getChatInvites, createChatInvite, revokeChatInvite, getChatJoinRequests, reviewChatJoinRequest, getChatMedia, getChatDiscussion, setChatDiscussion } from '../api/client'
+import { getChannelStats, getChatAdminLog, getChatBans, unbanChatMember, getChatInvites, createChatInvite, revokeChatInvite, getChatJoinRequests, reviewChatJoinRequest, getChatMedia, getChatDiscussion, setChatDiscussion, importTelegramHistory } from '../api/client'
 import { getChatWallpaper, setChatWallpaper } from '../utils/chatWallpapers'
 
 const WALLPAPERS = ['default', 'plain', 'lavender', 'mint', 'peach', 'night']
@@ -70,6 +71,44 @@ function callStatusLabel(call) {
   return call.status
 }
 
+const AUTO_DELETE_OPTIONS = [
+  { value: 0, label: () => t('autoDelete.off') },
+  { value: 30, label: () => t('autoDelete.30s') },
+  { value: 300, label: () => t('autoDelete.5m') },
+  { value: 3600, label: () => t('autoDelete.1h') },
+  { value: 86400, label: () => t('autoDelete.1d') },
+  { value: 604800, label: () => t('autoDelete.1w') },
+]
+
+function AutoDeleteButton({ currentSeconds, onSetAutoDelete }) {
+  const [open, setOpen] = useState(false)
+  const current = AUTO_DELETE_OPTIONS.find((o) => o.value === (currentSeconds || 0)) || AUTO_DELETE_OPTIONS[0]
+  return (
+    <div className="auto-delete-wrap">
+      <button onClick={() => setOpen((v) => !v)} className={open ? 'active' : ''}>
+        <Timer size={17} /> {t('autoDelete.title')}: <em>{current.label()}</em>
+      </button>
+      {open && (
+        <div className="auto-delete-dropdown">
+          {AUTO_DELETE_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              className={opt.value === (currentSeconds || 0) ? 'active' : ''}
+              onClick={() => {
+                onSetAutoDelete(opt.value || null)
+                setOpen(false)
+              }}
+            >
+              {opt.value === (currentSeconds || 0) && <Check size={14} />}
+              {opt.label()}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function ProfilePanel({
   contact,
   chat,
@@ -91,6 +130,8 @@ export default function ProfilePanel({
   onBlockUser,
   onUnblockUser,
   onReportUser,
+  onSetAutoDelete,
+  onToast,
 }) {
   const [sharedTab, setSharedTab] = useState('media')
   const [serverMedia, setServerMedia] = useState({ chatId: null, items: null, hasMore: false, nextBefore: null, loading: false })
@@ -110,7 +151,61 @@ export default function ProfilePanel({
   const [joinRequests, setJoinRequests] = useState(null)
   const [joinRequestsLoading, setJoinRequestsLoading] = useState(false)
   const [chatWallpaper, setChatWallpaperState] = useState(() => getChatWallpaper(chat?.id) || 'default')
+  const [importingHistory, setImportingHistory] = useState(false)
+  const telegramFileInputRef = useRef(null)
   const { confirm, dialog } = useConfirm()
+
+  function extractTelegramMessageText(rawText) {
+    if (Array.isArray(rawText)) {
+      return rawText
+        .map((part) => (typeof part === 'string' ? part : part?.text || ''))
+        .join('')
+    }
+    return typeof rawText === 'string' ? rawText : ''
+  }
+
+  async function handleTelegramFileSelected(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file || !chat?.backend) return
+
+    try {
+      const raw = await file.text()
+      const data = JSON.parse(raw)
+      const messages = (Array.isArray(data.messages) ? data.messages : [])
+        .filter((msg) => msg.type === 'message' && msg.text)
+        .map((msg) => ({
+          date: msg.date,
+          from: msg.from,
+          text: extractTelegramMessageText(msg.text),
+        }))
+        .filter((msg) => msg.text.trim())
+
+      if (!messages.length) {
+        onToast?.('No text messages found in this export.')
+        return
+      }
+
+      setImportingHistory(true)
+      onToast?.(`Importing ${messages.length} messages...`)
+
+      const chunkSize = 500
+      let imported = 0
+      let skipped = 0
+      for (let i = 0; i < messages.length; i += chunkSize) {
+        const chunk = messages.slice(i, i + chunkSize)
+        const result = await importTelegramHistory(chat.id, chunk)
+        imported += result.imported || 0
+        skipped += result.skipped || 0
+      }
+
+      onToast?.(`Imported ${imported} messages${skipped ? `, skipped ${skipped}` : ''}.`)
+    } catch (error) {
+      onToast?.(error.message || 'Telegram import failed.')
+    } finally {
+      setImportingHistory(false)
+    }
+  }
 
   function handleWallpaperChange(preset) {
     setChatWallpaperState(preset)
@@ -717,6 +812,31 @@ export default function ProfilePanel({
           <button onClick={toggleChannelStats} className={channelStats ? 'active' : ''}>
             <Users size={17} /> {t('pp.statistics')}
           </button>
+        )}
+        {onSetAutoDelete && chat?.backend && (
+          <AutoDeleteButton
+            currentSeconds={chat.autoDeleteSeconds ?? null}
+            onSetAutoDelete={onSetAutoDelete}
+          />
+        )}
+        {chat?.backend && (
+          <>
+            <input
+              type="file"
+              accept=".json"
+              ref={telegramFileInputRef}
+              style={{ display: 'none' }}
+              onChange={handleTelegramFileSelected}
+            />
+            <button
+              type="button"
+              disabled={importingHistory}
+              onClick={() => telegramFileInputRef.current?.click()}
+            >
+              {importingHistory ? <Loader2 size={17} className="spin" /> : <FileText size={17} />}
+              {' '}Import Telegram history
+            </button>
+          </>
         )}
         {canModeratePrivateContact && (
           <>

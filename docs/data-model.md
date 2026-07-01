@@ -57,7 +57,7 @@
 - Messages are encrypted at rest with AES-256-GCM and a key outside the database.
 - Production must provide `MESSAGE_ENCRYPTION_KEY` and HTTPS/WSS.
 - The browser-side encryption helpers wrap message/media content keys for
-  recipients, but they do not provide audited secret chats, device verification,
-  multi-device key rotation or hardened key backup/recovery.
+  recipients, but they do not provide an audited messaging protocol, device
+  verification, multi-device key rotation or hardened key backup/recovery.
 - Public-key changes create warning events for the account owner and users who share chats with that account.
-- WebRTC media encryption uses DTLS-SRTP when real peer connections are connected. This backend currently implements signaling, not a claim of audited end-to-end call encryption.
+- WebRTC media encryption uses DTLS-SRTP when real peer connections are connected. This backend currently implements signaling, not a claim of an audited call-security protocol.

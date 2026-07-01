@@ -13,9 +13,9 @@ import {
   UserCircle2,
   Waves,
 } from 'lucide-react'
-import QRCodeLib from 'qrcode'
 import { useT, useLang, setLang, LANGUAGES } from '../i18n'
 import { startQrLogin, pollQrStatus } from '../api/client'
+import { createQrDataUrl } from '../utils/qrCode'
 
 function QrLoginPanel({ onBack, onSuccess }) {
   const t = useT()
@@ -39,7 +39,7 @@ function QrLoginPanel({ onBack, onSuccess }) {
         const { token: t } = await startQrLogin()
         if (cancelled) return
         const url = `${window.location.origin}/qr-login?token=${encodeURIComponent(t)}`
-        const dataUrl = await QRCodeLib.toDataURL(url, { width: 220, margin: 2, color: { dark: '#1a1a2e', light: '#ffffff' } })
+        const dataUrl = await createQrDataUrl(url, { width: 220, margin: 2, color: { dark: '#1a1a2e', light: '#ffffff' } })
         if (cancelled) return
         setToken(t)
         setQrDataUrl(dataUrl)

@@ -614,6 +614,13 @@ export function getChatMedia(chatId, { kinds, before, limit } = {}) {
   return request(`/api/chats/${encodeURIComponent(chatId)}/media${qs ? `?${qs}` : ''}`)
 }
 
+export function importTelegramHistory(chatId, messages) {
+  return request(`/api/chats/${encodeURIComponent(chatId)}/import-telegram`, {
+    method: 'POST',
+    body: JSON.stringify({ messages }),
+  })
+}
+
 export function getScheduledMessages(chatId) {
   return request(`/api/chats/${encodeURIComponent(chatId)}/scheduled-messages`)
 }
@@ -692,6 +699,13 @@ export function getMessageReadBy(chatId, messageId) {
   )
 }
 
+export function markMessagesRead(chatId, upToMessageId) {
+  return request(`/api/chats/${encodeURIComponent(chatId)}/read`, {
+    method: 'POST',
+    body: JSON.stringify({ upToMessageId }),
+  })
+}
+
 export function getStickerPacks() {
   return request('/api/stickers/packs')
 }
@@ -747,6 +761,13 @@ export function reactToStory(storyId, emoji) {
   })
 }
 
+export function replyToStory(storyId, text) {
+  return request(`/api/stories/${encodeURIComponent(storyId)}/reply`, {
+    method: 'POST',
+    body: JSON.stringify({ text }),
+  })
+}
+
 export function startQrLogin() {
   return request('/api/auth/qr/start', { method: 'POST' })
 }
@@ -761,4 +782,22 @@ export function confirmQrLogin(token) {
 
 export function findUsersByPhone(phones) {
   return request('/api/users/by-phone', { method: 'POST', body: JSON.stringify({ phones }) })
+}
+
+export function getPrivacySettings() {
+  return request('/api/users/me/privacy')
+}
+
+export function updatePrivacySettings(input) {
+  return request('/api/users/me/privacy', {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
+export function setChatAutoDelete(chatId, autoDeleteSeconds) {
+  return request(`/api/chats/${chatId}/settings`, {
+    method: 'PATCH',
+    body: JSON.stringify({ autoDeleteSeconds }),
+  })
 }

@@ -53,7 +53,7 @@ build-apk.bat release
 
 1. Play Console → Create app → загрузить `app-release.aab`
 2. Заполнить: описание, скриншоты (телефон + 7" планшет), иконку 512×512, feature graphic 1024×500
-3. Анкета Data safety: приложение передаёт сообщения (E2EE), хранит email/логин — указать честно
+3. Анкета Data safety: приложение передаёт сообщения и медиа с шифрованием приложения, хранит email/логин — указать честно
 4. Content rating, target audience, privacy policy URL (обязателен)
 
 ## iOS (App Store)

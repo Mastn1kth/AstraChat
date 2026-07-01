@@ -5,6 +5,7 @@ import { t } from '../i18n'
 import FormattedText from '../utils/textFormat'
 import { getLinkPreview } from '../api/client'
 import AudioMessagePlayer from './AudioMessagePlayer'
+import VideoNotePlayer from './VideoNotePlayer'
 import RichMessage from './RichMessage'
 import PollCard from './PollCard'
 
@@ -47,8 +48,8 @@ function useLinkPreview(url) {
 
 const reactions = ['\u{1F44D}', '\u{1F499}', '\u{1F602}', '\u{1F525}']
 
-function formatDisappearTimer(disappearsAt) {
-  const ms = new Date(disappearsAt).getTime() - Date.now()
+function formatDisappearTimer(disappearsAt, nowMs = Date.now()) {
+  const ms = new Date(disappearsAt).getTime() - nowMs
   if (ms <= 0) return 'Disappearing…'
   const secs = Math.floor(ms / 1000)
   if (secs < 60) return `Disappears in ${secs}s`
@@ -106,6 +107,31 @@ function LinkPreviewCard({ url, preview }) {
   )
 }
 
+function formatSystemMessage(msg) {
+  const d = msg.systemData || {}
+  switch (msg.systemType) {
+    case 'auto_delete_changed':
+      if (!d.autoDeleteSeconds) return t('autoDelete.system.off')
+      return t('autoDelete.system.set').replace('{timer}', formatDisappearTimer(
+        new Date(Date.now() + d.autoDeleteSeconds * 1000).toISOString()
+      ))
+    case 'member_added':
+      return d.name ? `${d.name} joined the chat` : 'A member joined'
+    case 'member_removed':
+      return d.name ? `${d.name} left the chat` : 'A member left'
+    default:
+      return msg.text || ''
+  }
+}
+
+function SystemMessage({ message }) {
+  return (
+    <div className="system-message">
+      <span className="system-message-text">{formatSystemMessage(message)}</span>
+    </div>
+  )
+}
+
 export default function MessageBubble({
   message,
   albumPosition,
@@ -142,6 +168,21 @@ export default function MessageBubble({
   const fetchedPreview = useLinkPreview(firstUrl)
   const linkPreview = message.linkPreview || fetchedPreview
 
+  // Live countdown ticker for disappearing messages
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    if (!message.disappearsAt || message.deleted) return undefined
+    const ms = new Date(message.disappearsAt).getTime() - Date.now()
+    if (ms <= 0) return undefined
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [message.disappearsAt, message.deleted])
+
+  // System messages render as a centered pill
+  if (message.isSystem) {
+    return <SystemMessage message={message} />
+  }
+
   return (
     <div className={`message-row ${isOwn ? 'own' : 'incoming'} ${selected ? 'selected' : ''} ${multiSelectMode ? 'multi-select-mode' : ''} ${multiSelected ? 'multi-selected' : ''} ${albumPosition?.previous ? 'album-continued' : ''} ${albumPosition?.next ? 'album-has-next' : ''}`}>
       {multiSelectMode && (
@@ -167,7 +208,7 @@ export default function MessageBubble({
         {message.disappearsAt && !message.deleted && (
           <div className="msg-timer-badge">
             <Timer size={11} />
-            {formatDisappearTimer(message.disappearsAt)}
+            {formatDisappearTimer(message.disappearsAt, now)}
           </div>
         )}
         {replyMessage && (
@@ -211,6 +252,8 @@ export default function MessageBubble({
         ) : message.media && !message.deleted && !message.media.decryptFailed && (
           message.media.kind === 'voice' || message.media.kind === 'audio' ? (
             <AudioMessagePlayer media={message.media} compact={message.media.kind === 'voice'} chatName={chatName} />
+          ) : message.media.kind === 'video_note' ? (
+            <VideoNotePlayer media={message.media} />
           ) : message.media.kind === 'file' ? (
             <button
               className="message-file"
@@ -267,6 +310,9 @@ export default function MessageBubble({
         ) : message.text ? (
           <>
             {message.forwarded && <small className="forwarded-label">Forwarded</small>}
+            {message.importedFromName && (
+              <span className="imported-message-label">{message.importedFromName} (Telegram)</span>
+            )}
             <span className="message-text">
               <FormattedText text={message.text} currentUsername={currentUser?.username} />
             </span>
@@ -279,6 +325,11 @@ export default function MessageBubble({
           {message.edited && <small>{t('msg.edited')}</small>}
           <time>{formatMessageTime(message.time)}</time>
           {isOwn && <StatusIcon status={message.status} />}
+          {isOwn && !message.deleted && contactType !== 'group' && (
+            <span className={`read-receipt${message.readBy?.length > 0 ? ' is-read' : ''}`}>
+              {message.readBy?.length > 0 ? '✓✓' : '✓'}
+            </span>
+          )}
           {isOwn && message.status === 'failed' && onRetry && (
             <button
               className="retry-button"
