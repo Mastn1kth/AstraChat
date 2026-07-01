@@ -1,4 +1,33 @@
 services:
+  # Horizontal scaling: this is a plain `docker compose` file (no swarm-mode
+  # `deploy:` keys), so replicas are created with the `--scale` flag, not
+  # `deploy.replicas` (that key only takes effect under `docker stack deploy`
+  # / swarm mode and is silently ignored by plain `docker compose up`).
+  #
+  # The single-replica default below keeps the documented
+  # `docker compose --env-file .env.production up --build` flow working
+  # as-is (direct host port 3001). To run multiple replicas, the fixed
+  # `ports: "3001:3001"` mapping must be dropped first (two containers can't
+  # both bind host port 3001) and traffic routed through the `nginx` edge
+  # profile instead, which load-balances across every replica via Docker's
+  # embedded DNS (see deploy/nginx.conf). The simplest way to do that without
+  # editing this file is a small override, e.g. `docker-compose.scale.yml`:
+  #
+  #   services:
+  #     app:
+  #       ports: []
+  #
+  #   docker compose --env-file .env.production --profile edge \
+  #     -f docker-compose.yml -f docker-compose.scale.yml \
+  #     up --build --scale app=3
+  #
+  # Redis is a hard requirement for multi-replica correctness: WS pub/sub,
+  # presence, session cache and rate limiting all live in Redis
+  # (server/redis.js, server/limiters.js), not in in-process memory, so any
+  # replica can serve any client — no sticky sessions needed. See
+  # docs/production.md "Horizontal scaling" for the full explanation and the
+  # PostgreSQL caveat (a managed/shared Postgres instance is required; PGlite
+  # must never run in more than one replica).
   app:
     build: .
     restart: unless-stopped
