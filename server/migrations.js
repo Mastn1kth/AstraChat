@@ -1028,6 +1028,28 @@ export const migrations = [
       DROP TABLE IF EXISTS job_queue;
     `,
   },
+  {
+    id: '20260703_session_sliding_expiration',
+    sql: `
+      ALTER TABLE sessions
+        ADD COLUMN IF NOT EXISTS last_extended_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    `,
+    downSql: `
+      ALTER TABLE sessions
+        DROP COLUMN IF EXISTS last_extended_at;
+    `,
+  },
+  {
+    id: '20260703_totp_replay_protection',
+    sql: `
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS totp_last_counter BIGINT;
+    `,
+    downSql: `
+      ALTER TABLE users
+        DROP COLUMN IF EXISTS totp_last_counter;
+    `,
+  },
 ]
 
 async function getAppliedMigrationIds(database) {

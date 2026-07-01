@@ -20,9 +20,24 @@ MVP-level.
   backups from older app versions can still be imported for compatibility,
   but new exports are never plaintext.
 - Active sessions can be listed and terminated.
+- Sessions use sliding expiration: each authenticated request extends a
+  session's expiry back out to a full `sessionTtlMs` (30 days), throttled to
+  at most once per hour per session (tracked via `sessions.last_extended_at`)
+  to avoid a DB write on every request. The session cookie's `maxAge` and the
+  Redis session cache TTL (`cacheSession`/`getCachedSessionUserId`) are kept
+  in sync with the extended expiry so neither rejects a session the other
+  still considers valid. A stolen token is still bounded by the fixed
+  `sessionTtlMs` window from its last use, not indefinitely renewable beyond
+  that per-extension window, and can still be revoked via session
+  listing/termination or password change.
 - Suspicious-login alerts are stored as security events when a new session uses
   a device/network combination not seen in recent active sessions.
 - Password change signs out other sessions.
+- TOTP codes have replay protection: the last accepted 30-second counter is
+  stored per user (`users.totp_last_counter`) and a code is rejected if its
+  counter is at or before the last accepted one, even if it still falls
+  within the +/-1 period verification window. This closes the window where a
+  captured/logged 6-digit code could be replayed for up to ~90 seconds.
 - Users can block other users. The backend enforces blocks for private chat
   creation, direct message sending, direct media upload and calls.
 - Users can report users/messages/chats into the `reports` table.
@@ -31,6 +46,15 @@ MVP-level.
 - Auth endpoints have rate limiting, backed by Redis when configured.
 - Production mode requires PostgreSQL, Redis, S3-compatible storage, VAPID keys,
   `MESSAGE_ENCRYPTION_KEY` and HTTPS/WSS-capable deployment.
+- Content-Security-Policy (`server/index.js`, via `helmet`) restricts
+  `connect-src` to `'self'` plus the ws(s):// equivalents of the configured
+  `ALLOWED_ORIGINS` (needed for the Capacitor mobile shell / separately
+  hosted frontends that set `VITE_API_BASE`), instead of allowing any
+  WebSocket host. `style-src` still keeps `'unsafe-inline'`: `lottie-web`
+  (used by `src/components/LottieAnimation.jsx`, SVG renderer) sets inline
+  `style` attributes directly on DOM nodes and has no inline-style-free
+  option; this is unrelated to React's `style` prop, which sets DOM
+  properties rather than CSP-relevant attributes.
 
 ## What must not be claimed yet
 

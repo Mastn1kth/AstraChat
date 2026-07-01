@@ -59,16 +59,39 @@ export function createTotpUri({ issuer = 'Onda', account, secret }) {
   return `otpauth://totp/${encodeURIComponent(label)}?${params.toString()}`
 }
 
-export function verifyTotpCode(secret, code, { window = 1, now = Date.now() } = {}) {
+// Generates the current TOTP code for `secret`. Mainly useful for tests;
+// normal verification flows should use `verifyTotpCode`.
+export function generateTotpCode(secret, { now = Date.now() } = {}) {
+  const secretBytes = base32Decode(secret)
+  const counter = Math.floor(now / 1000 / 30)
+  return createTotpCode(secretBytes, counter)
+}
+
+// Returns the matching TOTP counter value for `code` within the window, or
+// -1 if the code does not verify. Callers that need replay protection should
+// use `verifyTotpCode` (or check the returned counter against the last
+// accepted counter for the account themselves).
+export function matchTotpCounter(secret, code, { window = 1, now = Date.now() } = {}) {
   const normalizedCode = String(code || '').replace(/\s/g, '')
-  if (!/^\d{6}$/.test(normalizedCode)) return false
+  if (!/^\d{6}$/.test(normalizedCode)) return -1
   const secretBytes = base32Decode(secret)
   const counter = Math.floor(now / 1000 / 30)
   for (let offset = -window; offset <= window; offset += 1) {
     const expected = createTotpCode(secretBytes, counter + offset)
-    if (safeStringEqual(expected, normalizedCode)) return true
+    if (safeStringEqual(expected, normalizedCode)) return counter + offset
   }
-  return false
+  return -1
+}
+
+// Verifies a TOTP code and, when `lastCounter` is provided, enforces replay
+// protection: a code whose counter is less than or equal to `lastCounter`
+// (i.e. already used, or older than the last accepted code) is rejected even
+// if it otherwise matches within the time window.
+export function verifyTotpCode(secret, code, { window = 1, now = Date.now(), lastCounter = null } = {}) {
+  const matchedCounter = matchTotpCounter(secret, code, { window, now })
+  if (matchedCounter === -1) return false
+  if (lastCounter !== null && lastCounter !== undefined && matchedCounter <= Number(lastCounter)) return false
+  return true
 }
 
 function base32Encode(buffer) {

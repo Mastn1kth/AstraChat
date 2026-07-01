@@ -3,7 +3,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { config } from '../config.js'
 import { db, createSavedChat } from '../db.js'
 import { requireAuth, createSession, destroySession, getSessionUser } from '../auth.js'
-import { hashPassword, verifyPassword, createTotpSecret, createTotpUri, verifyTotpCode } from '../crypto.js'
+import { hashPassword, verifyPassword, createTotpSecret, createTotpUri } from '../crypto.js'
 import { clearFailedLogins, isLoginLocked, recordFailedLogin } from '../redis.js'
 import {
   parseBody,
@@ -24,6 +24,7 @@ import {
   openTotpSecret,
   loadOwnTotpState,
   createSecurityEvent,
+  verifyAndConsumeTotpCode,
 } from '../server-helpers.js'
 import { sendLoginCodePush, sendLoginCodePushToToken } from '../push-service.js'
 
@@ -321,7 +322,7 @@ router.post('/login', async (request, response) => {
     return
   }
 
-  if (user.totp_secret && !verifyTotpCode(openTotpSecret(user.totp_secret), input.totpCode)) {
+  if (user.totp_secret && !(await verifyAndConsumeTotpCode(user.id, openTotpSecret(user.totp_secret), input.totpCode))) {
     await recordFailedLogin(loginKey)
     response.status(401).json({ error: 'Invalid authentication code' })
     return
@@ -346,7 +347,7 @@ router.post('/login', async (request, response) => {
 })
 
 router.get('/me', async (request, response) => {
-  const user = await getSessionUser(request)
+  const user = await getSessionUser(request, response)
   if (!user) {
     response.status(401).json({ error: 'Not authenticated' })
     return
@@ -399,7 +400,7 @@ router.post('/totp/verify', requireAuth, async (request, response) => {
   }
 
   const secret = openTotpSecret(user.totp_pending_secret)
-  if (!verifyTotpCode(secret, input.code)) {
+  if (!(await verifyAndConsumeTotpCode(request.user.id, secret, input.code))) {
     response.status(400).json({ error: 'Invalid authentication code' })
     return
   }
@@ -433,7 +434,7 @@ router.delete('/totp', requireAuth, async (request, response) => {
     response.status(400).json({ error: 'Two-factor authentication is not enabled' })
     return
   }
-  if (!verifyTotpCode(openTotpSecret(user.totp_secret), input.code)) {
+  if (!(await verifyAndConsumeTotpCode(request.user.id, openTotpSecret(user.totp_secret), input.code))) {
     response.status(400).json({ error: 'Invalid authentication code' })
     return
   }

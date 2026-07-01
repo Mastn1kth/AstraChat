@@ -68,6 +68,15 @@ if (config.vapid.enabled) {
 
 app.disable('x-powered-by')
 if (config.trustProxy) app.set('trust proxy', config.trustProxy)
+
+// The frontend normally opens its WebSocket same-origin (`API_BASE` empty,
+// see src/api/client.js), but the Capacitor mobile shell and any separately
+// hosted frontend build with VITE_API_BASE set connect cross-origin to one
+// of the configured ALLOWED_ORIGINS instead (see docs/mobile-release.md).
+// Mirror those origins as ws(s):// equivalents rather than allowing any
+// WebSocket host.
+const allowedWsOrigins = config.allowedOrigins.map((origin) => origin.replace(/^http/, 'ws'))
+
 app.use(
   helmet({
     crossOriginResourcePolicy: false,
@@ -75,10 +84,16 @@ app.use(
       directives: {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
+        // lottie-web (used by src/components/LottieAnimation.jsx) renders
+        // its SVG animations by setting inline `style` attributes directly
+        // on DOM nodes, which is genuinely CSP-relevant (unlike React's
+        // `style` prop, which sets DOM properties, not attributes). There is
+        // no inline-style-free renderer option for it, so 'unsafe-inline'
+        // stays here for styleSrc.
         styleSrc: ["'self'", "'unsafe-inline'"],
         imgSrc: ["'self'", 'https:', 'data:', 'blob:'],
         mediaSrc: ["'self'", 'blob:'],
-        connectSrc: ["'self'", 'wss:', 'ws:'],
+        connectSrc: ["'self'", ...allowedWsOrigins],
         fontSrc: ["'self'", 'data:'],
         workerSrc: ["'self'", 'blob:'],
         frameSrc: ["'none'"],

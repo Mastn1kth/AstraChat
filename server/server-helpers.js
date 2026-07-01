@@ -5,7 +5,7 @@ import { pipeline } from 'node:stream/promises'
 import { db } from './db.js'
 import { config } from './config.js'
 import logger from './logger.js'
-import { decryptMessage, encryptMessage } from './crypto.js'
+import { decryptMessage, encryptMessage, matchTotpCounter } from './crypto.js'
 import { createMediaCdnUrl } from './media-cdn.js'
 import { getMediaObjectStream, saveMediaObjectStream } from './storage.js'
 import { socketsByUserId, state, sendToUser } from './socket-manager.js'
@@ -313,6 +313,26 @@ export function openTotpSecret(value) {
     // Older/local dev rows may contain a plain base32 secret.
   }
   return value
+}
+
+// Verifies a TOTP code for `userId` and, only if it verifies, atomically
+// advances the user's stored `totp_last_counter` so the same code (or an
+// older one within the window) cannot be replayed. Returns true only when
+// the code was valid AND the counter update succeeded (i.e. no concurrent
+// request already consumed an equal-or-newer counter).
+export async function verifyAndConsumeTotpCode(userId, secret, code, { window = 1, now = Date.now() } = {}) {
+  const matchedCounter = matchTotpCounter(secret, code, { window, now })
+  if (matchedCounter === -1) return false
+
+  const result = await db.query(
+    `UPDATE users
+     SET totp_last_counter = $1
+     WHERE id = $2
+       AND (totp_last_counter IS NULL OR totp_last_counter < $1)
+     RETURNING id`,
+    [matchedCounter, userId],
+  )
+  return Boolean(result.rows[0])
 }
 
 // ── Security events ───────────────────────────────────────────────────────────
