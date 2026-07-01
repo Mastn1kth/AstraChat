@@ -50,6 +50,12 @@ describe('production env check', () => {
     assert.match(result.failures.join('\n'), /TURN\/TURNS/)
   })
 
+  it('requires ALLOWED_ORIGINS to be set', () => {
+    const result = checkProductionEnv(validProductionEnv({ ALLOWED_ORIGINS: '' }))
+
+    assert.match(result.failures.join('\n'), /ALLOWED_ORIGINS is required/)
+  })
+
   it('requires TURN credentials when TURN is configured', () => {
     const result = checkProductionEnv(validProductionEnv({
       WEBRTC_TURN_USERNAME: '',

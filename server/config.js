@@ -88,6 +88,12 @@ function parseCsv(value) {
     .filter(Boolean)
 }
 
+const allowedOrigins = parseCsv(process.env.ALLOWED_ORIGINS)
+
+if (isProduction && !allowedOrigins.length) {
+  throw new Error('ALLOWED_ORIGINS is required in production')
+}
+
 function parseIceServers() {
   if (iceServersRaw) {
     try {
@@ -209,10 +215,7 @@ export const config = {
   },
   redisUrl,
   trustProxy: process.env.TRUST_PROXY || (isProduction ? '1' : ''),
-  allowedOrigins: (process.env.ALLOWED_ORIGINS || '')
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean),
+  allowedOrigins,
   port: Number(process.env.PORT || 3001),
   host: process.env.HOST || '127.0.0.1',
   isProduction,

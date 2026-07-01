@@ -155,7 +155,7 @@ export function checkProductionEnv(env) {
 
   const origins = parseCsv(env.ALLOWED_ORIGINS)
   if (!origins.length) {
-    warnings.push('ALLOWED_ORIGINS is empty; cross-origin native or hosted clients will be blocked')
+    failures.push('ALLOWED_ORIGINS is required in production')
   }
   for (const origin of origins) {
     if (

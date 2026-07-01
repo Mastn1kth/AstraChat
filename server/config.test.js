@@ -23,6 +23,7 @@ function productionEnv(dataDir, overrides = {}) {
     FCM_SERVICE_ACCOUNT_JSON: '{}',
     WEBRTC_TURN_URLS: 'turns:turn.example.com:5349',
     MESSAGE_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
+    ALLOWED_ORIGINS: 'https://onda.example.com',
     ...overrides,
   }
 }
@@ -51,6 +52,18 @@ describe('production config', () => {
 
       assert.notEqual(result.status, 0)
       assert.match(result.stderr, /REDIS_URL is required in production/)
+    } finally {
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('requires ALLOWED_ORIGINS in production', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'astrachat-config-test-'))
+    try {
+      const result = importConfig(productionEnv(dataDir, { ALLOWED_ORIGINS: '' }))
+
+      assert.notEqual(result.status, 0)
+      assert.match(result.stderr, /ALLOWED_ORIGINS is required in production/)
     } finally {
       await rm(dataDir, { recursive: true, force: true })
     }
