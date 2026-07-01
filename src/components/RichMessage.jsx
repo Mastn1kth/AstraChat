@@ -49,14 +49,17 @@ export default function RichMessage({ rich }) {
     )
   }
 
-  if (rich.type === 'location') {
+  if (rich.type === 'location' || rich.type === 'live_location') {
     const hasCoords = Number.isFinite(rich.latitude) && Number.isFinite(rich.longitude)
     const mapUrl = hasCoords
       ? `https://www.openstreetmap.org/?mlat=${rich.latitude}&mlon=${rich.longitude}#map=16/${rich.latitude}/${rich.longitude}`
       : ''
+    const live = rich.type === 'live_location'
+    const expiresAt = rich.expiresAt ? new Date(rich.expiresAt) : null
+    const active = live && expiresAt && expiresAt > new Date()
     return (
       <a
-        className="rich-location"
+        className={`rich-location ${live ? 'live' : ''}`}
         href={mapUrl || undefined}
         target="_blank"
         rel="noreferrer"
@@ -66,11 +69,14 @@ export default function RichMessage({ rich }) {
           <MapPin size={30} />
         </span>
         <span>
-          <strong>{rich.title || 'Shared location'}</strong>
+          <strong>{rich.title || (live ? 'Live location' : 'Shared location')}</strong>
           {hasCoords && (
             <small>
               {rich.latitude.toFixed(5)}, {rich.longitude.toFixed(5)}
             </small>
+          )}
+          {live && (
+            <small>{active ? 'Live now' : 'Live ended'}{rich.sequence ? ` · update ${rich.sequence}` : ''}</small>
           )}
         </span>
       </a>

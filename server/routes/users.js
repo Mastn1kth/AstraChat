@@ -34,7 +34,7 @@ router.get('/', requireAuth, apiLimiter, async (request, response) => {
   const search = String(request.query.search || '').trim()
   const result = await db.query(
     `SELECT id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
-            privacy_phone, privacy_last_seen,
+            privacy_phone, privacy_last_seen, privacy_avatar,
             EXISTS (
               SELECT 1 FROM user_contacts uc
               WHERE uc.owner_id = $1 AND uc.contact_user_id = users.id
@@ -84,7 +84,7 @@ router.post('/by-phone', requireAuth, apiLimiter, async (request, response) => {
   const placeholders = normalized.map((_, i) => `$${i + 2}`).join(', ')
   const result = await db.query(
     `SELECT id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
-            privacy_phone, privacy_last_seen,
+            privacy_phone, privacy_last_seen, privacy_avatar,
             EXISTS (
               SELECT 1 FROM user_contacts uc
               WHERE uc.owner_id = $1 AND uc.contact_user_id = users.id
@@ -115,7 +115,7 @@ router.patch('/me/encryption-key', requireAuth, async (request, response) => {
      SET encryption_public_key = $1, updated_at = NOW()
      WHERE id = $2
      RETURNING id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
-               totp_secret, totp_enabled_at, privacy_phone, privacy_last_seen`,
+               totp_secret, totp_enabled_at, privacy_phone, privacy_last_seen, privacy_avatar`,
     [keyValue, request.user.id],
   )
   if (previousKey && previousKey !== keyValue) {
@@ -158,7 +158,7 @@ router.patch('/me/profile', requireAuth, async (request, response) => {
        SET name = $1, username = $2, bio = $3, status = $4, avatar = $5, updated_at = NOW()
        WHERE id = $6
        RETURNING id, login, username, phone, name, bio, status, avatar, last_seen_at, encryption_public_key,
-                 totp_secret, totp_enabled_at, privacy_phone, privacy_last_seen`,
+                 totp_secret, totp_enabled_at, privacy_phone, privacy_last_seen, privacy_avatar`,
       [input.name, input.username.toLowerCase(), input.bio, input.status, initials(input.name), request.user.id],
     )
     response.json({ user: publicUser(result.rows[0], { isSelf: true }) })
@@ -223,11 +223,27 @@ router.delete('/me/avatar', requireAuth, async (request, response) => {
 
 router.get('/:userId/avatar', requireAuth, async (request, response) => {
   const result = await db.query(
-    'SELECT avatar_storage_name, avatar_mime, avatar_iv, avatar_auth_tag FROM users WHERE id = $1 LIMIT 1',
-    [request.params.userId],
+    `SELECT u.avatar_storage_name, u.avatar_mime, u.avatar_iv, u.avatar_auth_tag,
+            u.privacy_avatar,
+            EXISTS (
+              SELECT 1 FROM user_contacts uc
+              WHERE uc.owner_id = u.id AND uc.contact_user_id = $2
+            ) AS viewer_is_contact
+     FROM users u
+     WHERE u.id = $1
+     LIMIT 1`,
+    [request.params.userId, request.user.id],
   )
   const row = result.rows[0]
   if (!row || !row.avatar_storage_name) {
+    response.status(404).json({ error: 'No avatar' })
+    return
+  }
+  const privacyAvatar = row.privacy_avatar || 'contacts'
+  const canSeeAvatar = request.params.userId === request.user.id
+    || privacyAvatar === 'everyone'
+    || (privacyAvatar === 'contacts' && (row.viewer_is_contact === true || row.viewer_is_contact === 't'))
+  if (!canSeeAvatar) {
     response.status(404).json({ error: 'No avatar' })
     return
   }
@@ -308,13 +324,14 @@ router.delete('/:userId/block', requireAuth, async (request, response) => {
 
 router.get('/me/privacy', requireAuth, async (request, response) => {
   const result = await db.query(
-    'SELECT privacy_phone, privacy_last_seen FROM users WHERE id = $1 LIMIT 1',
+    'SELECT privacy_phone, privacy_last_seen, privacy_avatar FROM users WHERE id = $1 LIMIT 1',
     [request.user.id],
   )
   const row = result.rows[0] || {}
   response.json({
     privacyPhone: row.privacy_phone || 'contacts',
     privacyLastSeen: row.privacy_last_seen || 'contacts',
+    privacyAvatar: row.privacy_avatar || 'contacts',
   })
 })
 
@@ -330,6 +347,10 @@ router.patch('/me/privacy', requireAuth, async (request, response) => {
     values.push(input.privacyLastSeen)
     fields.push(`privacy_last_seen = $${values.length}`)
   }
+  if (input.privacyAvatar !== undefined) {
+    values.push(input.privacyAvatar)
+    fields.push(`privacy_avatar = $${values.length}`)
+  }
   if (!fields.length) {
     response.status(400).json({ error: 'No privacy fields to update' })
     return
@@ -339,13 +360,14 @@ router.patch('/me/privacy', requireAuth, async (request, response) => {
     `UPDATE users
      SET ${fields.join(', ')}, updated_at = NOW()
      WHERE id = $${values.length}
-     RETURNING privacy_phone, privacy_last_seen`,
+     RETURNING privacy_phone, privacy_last_seen, privacy_avatar`,
     values,
   )
   const row = result.rows[0] || {}
   response.json({
     privacyPhone: row.privacy_phone || 'contacts',
     privacyLastSeen: row.privacy_last_seen || 'contacts',
+    privacyAvatar: row.privacy_avatar || 'contacts',
   })
 })
 

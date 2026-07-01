@@ -242,6 +242,15 @@ export async function migrateDatabase() {
     ALTER TABLE users
       ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT '';
 
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS privacy_phone TEXT NOT NULL DEFAULT 'contacts';
+
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS privacy_last_seen TEXT NOT NULL DEFAULT 'contacts';
+
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS privacy_avatar TEXT NOT NULL DEFAULT 'contacts';
+
     ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_storage_name TEXT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_mime TEXT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_iv TEXT;

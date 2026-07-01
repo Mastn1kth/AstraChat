@@ -101,6 +101,7 @@ export function getRichSearchText(rich) {
   if (rich.type === 'sticker') return `sticker ${rich.title || rich.emoji || ''}`.trim()
   if (rich.type === 'gif') return `gif ${rich.title || ''}`.trim()
   if (rich.type === 'location') return `location ${rich.title || ''}`.trim()
+  if (rich.type === 'live_location') return `live location ${rich.title || ''}`.trim()
   if (rich.type === 'contact') return `contact ${rich.name || rich.username || ''}`.trim()
   if (rich.type === 'album') return rich.caption || 'album'
   return rich.caption || rich.text || rich.type || ''
@@ -117,6 +118,7 @@ export function getMessagePreview(message) {
   if (message.rich?.type === 'sticker') return `${message.rich.emoji || 'Sticker'} ${message.rich.title || 'Sticker'}`
   if (message.rich?.type === 'gif') return `GIF: ${message.rich.title || 'animation'}`
   if (message.rich?.type === 'location') return message.rich.title || 'Location'
+  if (message.rich?.type === 'live_location') return message.rich.title || 'Live location'
   if (message.rich?.type === 'contact') return `Contact: ${message.rich.name || message.rich.username || 'card'}`
   if (message.rich?.type === 'album') return message.rich.caption || 'Album'
   if (message.text) return message.text

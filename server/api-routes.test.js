@@ -411,10 +411,13 @@ describe('API routes', () => {
     const viewer = await registerUser(baseUrl, 'story_reply_viewer')
 
     const createdStory = await postJson(baseUrl, '/api/stories', author.cookie, {
-      text: 'Launch day',
+      text: 'Launch day @story_reply_viewer',
       bgColor: '#0891b2',
+      highlighted: true,
     })
     assert.equal(createdStory.response.status, 201)
+    assert.equal(createdStory.body.story.highlighted, true)
+    assert.deepEqual(createdStory.body.story.mentions, ['story_reply_viewer'])
     const storyId = createdStory.body.story.id
 
     const reply = await postJson(baseUrl, `/api/stories/${storyId}/reply`, viewer.cookie, {
@@ -426,7 +429,7 @@ describe('API routes', () => {
     assert.ok(reply.body.chatId)
     assert.equal(reply.body.message.text, 'Looks good')
     assert.equal(reply.body.message.linkPreview.title, 'Story reply')
-    assert.equal(reply.body.message.linkPreview.description, 'Launch day')
+    assert.equal(reply.body.message.linkPreview.description, 'Launch day @story_reply_viewer')
 
     const messages = await fetch(`${baseUrl}/api/chats/${reply.body.chatId}/messages`, {
       headers: { Cookie: author.cookie },
@@ -622,17 +625,20 @@ describe('API routes', () => {
 
     const get = await fetch(`${baseUrl}/api/users/me/privacy`, { headers: { Cookie: cookie } })
     assert.equal(get.status, 200)
-    const { privacyPhone, privacyLastSeen } = await get.json()
+    const { privacyPhone, privacyLastSeen, privacyAvatar } = await get.json()
     assert.equal(privacyPhone, 'contacts')
     assert.equal(privacyLastSeen, 'contacts')
+    assert.equal(privacyAvatar, 'contacts')
 
     const patch = await patchJson(baseUrl, '/api/users/me/privacy', cookie, {
       privacyPhone: 'nobody',
       privacyLastSeen: 'everyone',
+      privacyAvatar: 'nobody',
     })
     assert.equal(patch.response.status, 200)
     assert.equal(patch.body.privacyPhone, 'nobody')
     assert.equal(patch.body.privacyLastSeen, 'everyone')
+    assert.equal(patch.body.privacyAvatar, 'nobody')
 
     const rejects = await patchJson(baseUrl, '/api/users/me/privacy', cookie, {
       privacyPhone: 'invalid_value',

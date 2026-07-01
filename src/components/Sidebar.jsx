@@ -353,7 +353,7 @@ export default function Sidebar({
   const WALLPAPERS = ['default', 'plain', 'lavender', 'mint', 'peach', 'night']
   const inviteUsername = String(user.username || '').replace(/^@/, '')
   const inviteLink = inviteUsername
-    ? `${window.location.origin}/?add=${inviteUsername}`
+    ? `${window.location.origin}/u/${inviteUsername}`
     : ''
 
   useEffect(() => {
@@ -1028,6 +1028,13 @@ export default function Sidebar({
               onChange={(event) => onUpdateUser({ customStatus: event.target.value })}
             />
           </label>
+          <div className="status-presets" aria-label="Status presets">
+            {['💻 Working', '🎧 Focus', '☕ Coffee', '🌙 Away', '✈️ Traveling'].map((status) => (
+              <button type="button" key={status} onClick={() => onUpdateUser({ customStatus: status })}>
+                {status}
+              </button>
+            ))}
+          </div>
           <div className="drawer-invite">
             <span>Invite link</span>
             <div className="drawer-invite-row">
@@ -1399,6 +1406,7 @@ export default function Sidebar({
   function renderPrivacyMenu() {
     const phone = privacySettings?.privacyPhone || 'contacts'
     const lastSeen = privacySettings?.privacyLastSeen || 'contacts'
+    const avatar = privacySettings?.privacyAvatar || 'contacts'
     const privacyOptions = [
       { value: 'everyone', label: t('privacy.everyone') },
       { value: 'contacts', label: t('privacy.contacts') },
@@ -1429,6 +1437,19 @@ export default function Sidebar({
               value={lastSeen}
               disabled={privacyBusy}
               onChange={(e) => savePrivacy({ privacyLastSeen: e.target.value })}
+            >
+              {privacyOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="privacy-row">
+            <span className="privacy-row-label">{t('privacy.avatar')}</span>
+            <select
+              className="privacy-select"
+              value={avatar}
+              disabled={privacyBusy}
+              onChange={(e) => savePrivacy({ privacyAvatar: e.target.value })}
             >
               {privacyOptions.map((opt) => (
                 <option key={opt.value} value={opt.value}>{opt.label}</option>

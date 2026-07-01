@@ -948,6 +948,40 @@ export const migrations = [
     downSql: `ALTER TABLE messages DROP COLUMN IF EXISTS imported_from_name;`,
   },
   {
+    id: '20260701_avatar_privacy',
+    sql: `
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS privacy_avatar TEXT NOT NULL DEFAULT 'contacts';
+
+      ALTER TABLE users DROP CONSTRAINT IF EXISTS users_privacy_avatar_check;
+      ALTER TABLE users
+        ADD CONSTRAINT users_privacy_avatar_check
+        CHECK (privacy_avatar IN ('everyone', 'contacts', 'nobody'));
+    `,
+    downSql: `
+      ALTER TABLE users DROP CONSTRAINT IF EXISTS users_privacy_avatar_check;
+      ALTER TABLE users DROP COLUMN IF EXISTS privacy_avatar;
+    `,
+  },
+  {
+    id: '20260701_story_mentions_highlights',
+    sql: `
+      ALTER TABLE stories
+        ADD COLUMN IF NOT EXISTS mentions JSONB NOT NULL DEFAULT '[]'::jsonb,
+        ADD COLUMN IF NOT EXISTS is_highlight BOOLEAN NOT NULL DEFAULT FALSE;
+
+      CREATE INDEX IF NOT EXISTS stories_highlight_idx
+        ON stories(user_id, is_highlight, created_at DESC)
+        WHERE is_highlight = TRUE;
+    `,
+    downSql: `
+      DROP INDEX IF EXISTS stories_highlight_idx;
+      ALTER TABLE stories
+        DROP COLUMN IF EXISTS mentions,
+        DROP COLUMN IF EXISTS is_highlight;
+    `,
+  },
+  {
     id: '20260701_system_message_columns_nullable',
     sql: `
       ALTER TABLE messages ALTER COLUMN sender_id DROP NOT NULL;

@@ -13,6 +13,7 @@ export default function StoriesBar({ currentUser, onOpenViewer }) {
   const [composing, setComposing] = useState(false)
   const [storyText, setStoryText] = useState('')
   const [bgColor, setBgColor] = useState(BG_COLORS[0])
+  const [highlighted, setHighlighted] = useState(false)
   const [sending, setSending] = useState(false)
   const textRef = useRef(null)
 
@@ -29,8 +30,9 @@ export default function StoriesBar({ currentUser, onOpenViewer }) {
     if (!text || sending) return
     setSending(true)
     try {
-      await createStory({ text, bgColor })
+      await createStory({ text, bgColor, highlighted })
       setStoryText('')
+      setHighlighted(false)
       setComposing(false)
       const data = await getStories()
       setGroups(data.stories || [])
@@ -73,6 +75,14 @@ export default function StoriesBar({ currentUser, onOpenViewer }) {
           ))}
         </div>
         <div className="story-compose-actions">
+          <label className="story-highlight-toggle">
+            <input
+              type="checkbox"
+              checked={highlighted}
+              onChange={(event) => setHighlighted(event.target.checked)}
+            />
+            Highlight
+          </label>
           <button onClick={() => setComposing(false)} disabled={sending}>
             <X size={14} /> Cancel
           </button>

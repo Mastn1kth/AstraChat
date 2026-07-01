@@ -179,12 +179,16 @@ export function stringifyPublicKey(publicKey) {
 export function publicUser(user, { viewerIsContact = false, isSelf = false } = {}) {
   const privacyPhone = user.privacy_phone || 'contacts'
   const privacyLastSeen = user.privacy_last_seen || 'contacts'
+  const privacyAvatar = user.privacy_avatar || 'contacts'
   const canSeePhone = isSelf
     || privacyPhone === 'everyone'
     || (privacyPhone === 'contacts' && viewerIsContact)
   const canSeeLastSeen = isSelf
     || privacyLastSeen === 'everyone'
     || (privacyLastSeen === 'contacts' && viewerIsContact)
+  const canSeeAvatar = isSelf
+    || privacyAvatar === 'everyone'
+    || (privacyAvatar === 'contacts' && viewerIsContact)
   return {
     id: user.id,
     login: user.login,
@@ -193,7 +197,7 @@ export function publicUser(user, { viewerIsContact = false, isSelf = false } = {
     name: user.name,
     bio: user.bio,
     status: user.status || '',
-    avatar: user.avatar,
+    avatar: canSeeAvatar ? user.avatar : initials(user.name),
     encryptionPublicKey: parsePublicKey(user.encryption_public_key),
     totpEnabled: Boolean(user.totp_enabled_at || user.totp_secret),
     lastSeenAt: canSeeLastSeen ? (user.last_seen_at || null) : null,
@@ -206,6 +210,7 @@ export function publicUser(user, { viewerIsContact = false, isSelf = false } = {
     contactSince: user.contact_since || null,
     privacyPhone: isSelf ? privacyPhone : undefined,
     privacyLastSeen: isSelf ? privacyLastSeen : undefined,
+    privacyAvatar: isSelf ? privacyAvatar : undefined,
   }
 }
 

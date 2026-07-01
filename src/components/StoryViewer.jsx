@@ -187,7 +187,15 @@ export default function StoryViewer({
           {story.mediaUrl && story.mediaKind === 'image' && (
             <img className="story-image" src={story.mediaUrl} alt="" />
           )}
+          {story.highlighted && <span className="story-highlight-badge">Highlight</span>}
           {story.text && <p className="story-text">{story.text}</p>}
+          {story.mentions?.length > 0 && (
+            <div className="story-mentions">
+              {story.mentions.map((mention) => (
+                <span key={mention}>@{mention}</span>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Reaction bar */}

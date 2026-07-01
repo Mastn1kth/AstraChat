@@ -95,6 +95,7 @@ export const chatSettingsSchema = z.object({
 export const privacySchema = z.object({
   privacyPhone: z.enum(['everyone', 'contacts', 'nobody']).optional(),
   privacyLastSeen: z.enum(['everyone', 'contacts', 'nobody']).optional(),
+  privacyAvatar: z.enum(['everyone', 'contacts', 'nobody']).optional(),
 })
 
 export const chatFolderSchema = z.object({

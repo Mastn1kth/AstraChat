@@ -1057,6 +1057,27 @@ textarea:focus-visible {
   padding: 10px 11px;
 }
 
+.status-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.status-presets button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+}
+
+.status-presets button:hover {
+  border-color: var(--accent);
+}
+
 .drawer-search {
   display: flex;
   align-items: center;
@@ -3765,10 +3786,21 @@ textarea::placeholder {
 
 .story-compose-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
   padding: 8px 12px;
   background: var(--surface-2);
   justify-content: flex-end;
+}
+
+.story-highlight-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
 }
 
 .story-compose-actions button {
@@ -3906,6 +3938,33 @@ textarea::placeholder {
   word-break: break-word;
   margin: 0;
   padding: 0 8px;
+}
+
+.story-highlight-badge {
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 999px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  margin-bottom: 10px;
+  padding: 5px 9px;
+}
+
+.story-mentions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.story-mentions span {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 5px 8px;
 }
 
 .story-nav {

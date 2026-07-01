@@ -10,7 +10,7 @@ Staged plan from current MVP to a fully production-grade messenger.
 - [x] Ignore local database/runtime folders in git.
 - [x] Fix current lint errors.
 - [x] `.env` template for local development with VAPID keys.
-- [ ] Add a real git remote and push the first commit.
+- [x] Add a real git remote and push the current branch.
 - [ ] Add screenshots or a short demo GIF to README.
 
 ## Phase 1 — Stable MVP
@@ -66,7 +66,7 @@ Goal: replace remaining mock surfaces with real server-backed behavior.
 - [x] Favicon unread badge (canvas-drawn red circle with count).
 - [x] Disappearing messages (per-message `disappearsAt`, per-chat auto-delete timer, background cleanup job, live countdown badge).
 - [x] Message scheduling (send at specific time, scheduled list panel).
-- [x] Profile privacy settings (who sees phone / last seen — everyone/contacts/nobody). Avatar visibility not yet gated.
+- [x] Profile privacy settings (who sees phone / last seen / avatar — everyone/contacts/nobody).
 - [x] Read receipts (per-recipient `message_reads`, ✓/✓✓ checkmarks, persistent unread counts survive reload via `chat_members.last_read_message_id`).
 - [x] Message drafts (localStorage-backed per-chat draft save/restore in Composer).
 - [x] Round video messages ("video notes" — record via camera + `MediaRecorder`, circular playback, reuses the voice-message upload pipeline).
@@ -116,7 +116,7 @@ Goal: close the gap around expressive messaging.
 - [x] Location message (coordinates + map link).
 - [x] Contact card messages.
 - [x] Live waveform during voice recording (realtime amplitude bars via Web Audio API).
-- [ ] Live location sharing (sends GPS updates every N seconds).
+- [x] Live location sharing (sends GPS updates every N seconds).
 - [x] Chat background / wallpaper customization per chat (picker in ProfilePanel, stored in localStorage).
 
 ## Phase 5 — Calls and Stories
@@ -132,7 +132,7 @@ Goal: implement real-time group calls and ephemeral stories.
 - [ ] Browser SFU/MCU adapter for a real provider-specific media SDK.
 - [x] Story reactions (6-emoji bar, aggregated counts, toggle).
 - [x] Story replies (viewer reply creates/reuses a private chat with the story author).
-- [ ] Story mentions and highlights.
+- [x] Story mentions and highlights.
 
 ## Phase 6 — Security and Production Architecture
 
@@ -168,8 +168,8 @@ Goal: stop treating local MVP infrastructure as production.
 
 Goal: user-facing messenger features that extend the product without turning it into a bot, mini-app or payments platform.
 
-- [ ] Username-based public discovery (public profiles, @username search).
-- [ ] Emoji status (custom animated status with per-chat visibility).
+- [x] Username-based public discovery (`/u/:username` profile links + @username search).
+- [x] Emoji status (custom emoji/text status with quick presets).
 - [x] Animated stickers (Lottie JSON render for sticker messages and picker; TGS import pipeline still separate).
 - [ ] Voice-to-text transcription for voice messages.
 - [x] Message translation (inline, per-message — see Phase 2).

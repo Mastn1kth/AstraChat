@@ -108,6 +108,7 @@ export default function Composer({
   const [pollCreator, setPollCreator] = useState(null) // null | { question, options, multipleChoice }
   const [schedulePickerOpen, setSchedulePickerOpen] = useState(false)
   const [scheduleAt, setScheduleAt] = useState('')
+  const [liveLocationActive, setLiveLocationActive] = useState(false)
   const [mentionQuery, setMentionQuery] = useState(null) // null | { query, start, end }
   const [mentionIndex, setMentionIndex] = useState(0)
   const inputRef = useRef(null)
@@ -128,6 +129,7 @@ export default function Composer({
   const audioCtxRef = useRef(null)
   const waveAnimRef = useRef(null)
   const sendAbortRef = useRef(null)
+  const liveLocationRef = useRef({ watchId: null, stopTimer: null, lastSentAt: 0, sequence: 0 })
   const mountedRef = useRef(true)
 
   useEffect(() => {
@@ -263,6 +265,7 @@ export default function Composer({
       }
       videoNoteChunksRef.current = []
       sendAbortRef.current?.abort()
+      stopLiveLocationSharing()
     }
   }, [clearRecordingTimer, stopRecordStream, clearVideoNoteTimer, stopVideoNoteStream])
 
@@ -397,6 +400,63 @@ export default function Composer({
       },
       () => onAttach(t('err.geoDenied')),
       { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000 },
+    )
+  }
+
+  function stopLiveLocationSharing() {
+    const current = liveLocationRef.current
+    if (current.watchId !== null && navigator.geolocation) {
+      navigator.geolocation.clearWatch(current.watchId)
+    }
+    if (current.stopTimer) window.clearTimeout(current.stopTimer)
+    liveLocationRef.current = { watchId: null, stopTimer: null, lastSentAt: 0, sequence: 0 }
+    if (mountedRef.current) setLiveLocationActive(false)
+  }
+
+  function startLiveLocationSharing() {
+    if (!navigator.geolocation) {
+      onAttach(t('err.noGeo'))
+      return
+    }
+    if (liveLocationActive) {
+      stopLiveLocationSharing()
+      return
+    }
+    const startedAt = Date.now()
+    const durationMs = 15 * 60 * 1000
+    const minIntervalMs = 30 * 1000
+    const expiresAt = new Date(startedAt + durationMs).toISOString()
+    liveLocationRef.current = {
+      watchId: null,
+      stopTimer: window.setTimeout(stopLiveLocationSharing, durationMs),
+      lastSentAt: 0,
+      sequence: 0,
+    }
+    setLiveLocationActive(true)
+    liveLocationRef.current.watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        const current = liveLocationRef.current
+        const now = Date.now()
+        if (current.sequence > 0 && now - current.lastSentAt < minIntervalMs) return
+        current.lastSentAt = now
+        current.sequence += 1
+        sendRichAsset({
+          type: 'live_location',
+          title: 'Live location',
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+          expiresAt,
+          intervalSeconds: 30,
+          durationSeconds: Math.round(durationMs / 1000),
+          sequence: current.sequence,
+        })
+      },
+      () => {
+        stopLiveLocationSharing()
+        onAttach(t('err.geoDenied'))
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 10000 },
     )
   }
 
@@ -866,6 +926,9 @@ export default function Composer({
                   </button>
                   <button className="asset-choice rich-asset-choice" onClick={shareLocation}>
                     <MapPin size={17} /> Location
+                  </button>
+                  <button className="asset-choice rich-asset-choice" onClick={startLiveLocationSharing}>
+                    <MapPin size={17} /> {liveLocationActive ? 'Stop live location' : 'Live location'}
                   </button>
                   <button className="asset-choice rich-asset-choice" onClick={shareContactCard}>
                     <Contact size={17} /> Contact card

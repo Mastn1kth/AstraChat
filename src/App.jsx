@@ -199,6 +199,20 @@ function createId(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
+function extractInviteUsernameFromLocation() {
+  if (typeof window === 'undefined') return ''
+  const params = new URLSearchParams(window.location.search)
+  const add = params.get('add')
+  const pathMatch = /^\/u\/([^/?#]+)/i.exec(window.location.pathname)
+  const username = (add || pathMatch?.[1] || '').replace(/^@/, '').toLowerCase()
+  if (add || pathMatch) {
+    if (add) params.delete('add')
+    const query = params.toString()
+    window.history.replaceState({}, '', `/${query ? `?${query}` : ''}`)
+  }
+  return username
+}
+
 function normalizeChatFolders(payload = EMPTY_CHAT_FOLDERS) {
   return {
     systemFolders: payload.systemFolders?.length ? payload.systemFolders : SYSTEM_CHAT_FOLDERS,
@@ -589,17 +603,7 @@ function AppInner() {
   const [selectedMessageId, setSelectedMessageId] = useState('')
   const [toast, setToast] = useState('')
   const [permissionPromptOpen, setPermissionPromptOpen] = useState(false)
-  const [pendingInvite, setPendingInvite] = useState(() => {
-    if (typeof window === 'undefined') return ''
-    const params = new URLSearchParams(window.location.search)
-    const add = params.get('add')
-    if (add) {
-      params.delete('add')
-      const query = params.toString()
-      window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}`)
-    }
-    return add ? add.replace(/^@/, '').toLowerCase() : ''
-  })
+  const [pendingInvite, setPendingInvite] = useState(extractInviteUsernameFromLocation)
   const { confirm, dialog: confirmDialog } = useConfirm()
   const toastTimerRef = useRef()
   const selectedChatIdRef = useRef(selectedChatId)

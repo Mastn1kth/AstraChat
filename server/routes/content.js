@@ -10,6 +10,7 @@ import { parseBody, storyReplySchema } from '../validation.js'
 import {
   ensureChatSettings,
   hasBlockBetween,
+  isDatabaseTrue,
   normalizeSearchText,
   publicChatSettings,
 } from '../server-helpers.js'
@@ -258,7 +259,18 @@ router.delete('/api/custom-emoji/packs/:packId/install', requireAuth, async (req
 
 // ── Stories ───────────────────────────────────────────────────────────────────
 
+function parseStoryMentions(value) {
+  if (Array.isArray(value)) return value
+  try {
+    const parsed = JSON.parse(String(value || '[]'))
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
 function publicStory(story, viewerIds = [], viewedByMe = false, reactions = {}, myReaction = null) {
+  const mentions = parseStoryMentions(story.mentions)
   return {
     id: story.id,
     userId: story.user_id,
@@ -267,6 +279,8 @@ function publicStory(story, viewerIds = [], viewedByMe = false, reactions = {}, 
     mediaUrl: story.media_url || null,
     mediaKind: story.media_kind || null,
     privacy: story.privacy,
+    mentions: mentions.filter(Boolean),
+    highlighted: isDatabaseTrue(story.is_highlight),
     expiresAt: story.expires_at,
     createdAt: story.created_at,
     viewCount: viewerIds.length,
@@ -276,13 +290,20 @@ function publicStory(story, viewerIds = [], viewedByMe = false, reactions = {}, 
   }
 }
 
+function extractStoryMentions(text) {
+  return [...new Set(String(text || '')
+    .match(/(^|[^\w])@([a-zA-Z0-9_]{3,32})/g)
+    ?.map((value) => value.replace(/^[^@]*@/, '').toLowerCase()) || [])]
+    .slice(0, 20)
+}
+
 router.get('/api/stories', requireAuth, async (request, response) => {
   const userId = request.user.id
   // Return own stories + stories of contacts + groups you belong to
   const result = await db.query(
     `SELECT s.*
      FROM stories s
-     WHERE s.expires_at > NOW()
+     WHERE (s.expires_at > NOW() OR s.is_highlight = TRUE)
        AND (
          s.user_id = $1
          OR s.user_id IN (
@@ -374,6 +395,8 @@ router.get('/api/stories', requireAuth, async (request, response) => {
 router.post('/api/stories', requireAuth, storiesLimiter, async (request, response) => {
   const text = String(request.body?.text || '').trim().slice(0, 1000)
   const bgColor = String(request.body?.bgColor || '#7c3aed').slice(0, 20)
+  const highlighted = request.body?.highlighted === true
+  const mentions = extractStoryMentions(text)
   const privacy = ['contacts', 'everyone', 'closeFriends'].includes(request.body?.privacy)
     ? request.body.privacy
     : 'contacts'
@@ -383,10 +406,10 @@ router.post('/api/stories', requireAuth, storiesLimiter, async (request, respons
   }
   const id = randomUUID()
   const result = await db.query(
-    `INSERT INTO stories (id, user_id, text, bg_color, privacy)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO stories (id, user_id, text, bg_color, privacy, mentions, is_highlight)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING *`,
-    [id, request.user.id, text, bgColor, privacy],
+    [id, request.user.id, text, bgColor, privacy, JSON.stringify(mentions), highlighted],
   )
   const story = publicStory(result.rows[0], [], false)
   response.status(201).json({ story })
@@ -406,7 +429,7 @@ router.delete('/api/stories/:storyId', requireAuth, async (request, response) =>
 
 router.post('/api/stories/:storyId/view', requireAuth, async (request, response) => {
   const storyResult = await db.query(
-    'SELECT id, user_id FROM stories WHERE id = $1 AND expires_at > NOW()',
+    'SELECT id, user_id FROM stories WHERE id = $1 AND (expires_at > NOW() OR is_highlight = TRUE)',
     [request.params.storyId],
   )
   if (!storyResult.rows.length) {
@@ -427,7 +450,7 @@ router.post('/api/stories/:storyId/view', requireAuth, async (request, response)
 router.post('/api/stories/:storyId/react', requireAuth, async (request, response) => {
   const emoji = String(request.body?.emoji || '').trim()
   const storyResult = await db.query(
-    'SELECT id, user_id FROM stories WHERE id = $1 AND expires_at > NOW()',
+    'SELECT id, user_id FROM stories WHERE id = $1 AND (expires_at > NOW() OR is_highlight = TRUE)',
     [request.params.storyId],
   )
   if (!storyResult.rows.length) {
@@ -462,7 +485,7 @@ router.post('/api/stories/:storyId/reply', requireAuth, async (request, response
     `SELECT s.id, s.user_id, s.text, s.expires_at, u.name, u.username
      FROM stories s
      JOIN users u ON u.id = s.user_id
-     WHERE s.id = $1 AND s.expires_at > NOW()
+     WHERE s.id = $1 AND (s.expires_at > NOW() OR s.is_highlight = TRUE)
      LIMIT 1`,
     [request.params.storyId],
   )
