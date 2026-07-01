@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Captions, Loader2, Pause, Play } from 'lucide-react'
 import { useGlobalAudio } from '../hooks/useGlobalAudio'
 import { isSpeechTranscriptionSupported, transcribeAudioUrl } from '../utils/speechTranscription'
-import { t } from '../i18n'
+import { t, getLang } from '../i18n'
 
 const SPEEDS = [1, 1.5, 2]
 const waveformCache = new Map()
@@ -33,6 +33,7 @@ export default function AudioMessagePlayer({ media, compact = false, chatName })
   const [speedIndex, setSpeedIndex] = useState(0)
   const [transcript, setTranscript] = useState(null)
   const [transcribing, setTranscribing] = useState(false)
+  const [transcribeStage, setTranscribeStage] = useState('')
   const [transcribeError, setTranscribeError] = useState(false)
 
   const handleTranscribe = async () => {
@@ -42,15 +43,30 @@ export default function AudioMessagePlayer({ media, compact = false, chatName })
       return
     }
     setTranscribeError(false)
+    setTranscribeStage('')
     setTranscribing(true)
     try {
-      const text = await transcribeAudioUrl(media.url)
+      const text = await transcribeAudioUrl(media.url, {
+        lang: getLang(),
+        onProgress: (info) => {
+          // transformers.js progress_callback events: 'initiate'/'download'/
+          // 'progress' while fetching model weights, 'done' once ready. Only
+          // the download phase is worth surfacing — model inference itself
+          // is fast (well under a second for typical voice message lengths).
+          if (info?.status === 'progress' || info?.status === 'download' || info?.status === 'initiate') {
+            setTranscribeStage('downloading')
+          } else if (info?.status === 'ready' || info?.status === 'done') {
+            setTranscribeStage('transcribing')
+          }
+        },
+      })
       setTranscript(text || '')
     } catch {
       setTranscribeError(true)
       setTimeout(() => setTranscribeError(false), 3000)
     } finally {
       setTranscribing(false)
+      setTranscribeStage('')
     }
   }
 
@@ -197,7 +213,9 @@ export default function AudioMessagePlayer({ media, compact = false, chatName })
             className="audio-transcribe"
             onClick={handleTranscribe}
             disabled={transcribing}
-            title={t('voice.transcribe')}
+            title={transcribing
+              ? t(transcribeStage === 'downloading' ? 'voice.transcribeDownloading' : 'voice.transcribeInProgress')
+              : t('voice.transcribe')}
             aria-label={t('voice.transcribe')}
           >
             {transcribing ? <Loader2 size={14} className="spin-icon" /> : <Captions size={14} />}
@@ -225,6 +243,12 @@ export default function AudioMessagePlayer({ media, compact = false, chatName })
           onEnded={() => setPlaying(false)}
         />
       </div>
+      {transcribing && (
+        <div className="translated-text-box translated-text-pending">
+          <Loader2 size={12} className="spin-icon" />
+          <span>{t(transcribeStage === 'downloading' ? 'voice.transcribeDownloading' : 'voice.transcribeInProgress')}</span>
+        </div>
+      )}
       {transcript !== null && (
         <div className="translated-text-box">
           <span className="translated-text-label">{t('voice.transcript')}</span>

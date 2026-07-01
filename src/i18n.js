@@ -390,11 +390,13 @@ const DICT = {
     'msg.translateFailed': 'Не удалось перевести',
 
     // --- Voice transcription ---
-    'voice.transcribe': 'Расшифровать голосовое сообщение (эксперимент, только Chrome/Edge/Android)',
+    'voice.transcribe': 'Расшифровать голосовое сообщение (распознавание речи выполняется локально, в браузере)',
     'voice.transcribeUnsupported': 'Расшифровка речи не поддерживается в этом браузере',
     'voice.transcript': 'Расшифровка',
     'voice.transcriptEmpty': 'Речь не распознана',
     'voice.transcribeFailed': 'Не удалось расшифровать голосовое сообщение',
+    'voice.transcribeDownloading': 'Загрузка модели распознавания речи…',
+    'voice.transcribeInProgress': 'Распознавание речи…',
 
     // --- Cloud key backup ---
     'cloudKey.save': 'Сохранить ключ в облако',
@@ -756,11 +758,13 @@ const DICT = {
     'msg.translateFailed': 'Translation failed',
 
     // --- Voice transcription ---
-    'voice.transcribe': 'Transcribe voice message (experimental, Chrome/Edge/Android only)',
+    'voice.transcribe': 'Transcribe voice message (speech recognition runs locally in your browser)',
     'voice.transcribeUnsupported': 'Speech transcription is not supported in this browser',
     'voice.transcript': 'Transcript',
     'voice.transcriptEmpty': 'No speech recognized',
     'voice.transcribeFailed': 'Could not transcribe the voice message',
+    'voice.transcribeDownloading': 'Downloading speech recognition model…',
+    'voice.transcribeInProgress': 'Transcribing…',
 
     // --- Cloud key backup ---
     'cloudKey.save': 'Save key to cloud',

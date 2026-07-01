@@ -171,7 +171,7 @@ Goal: user-facing messenger features that extend the product without turning it 
 - [x] Username-based public discovery (`/u/:username` profile links + @username search).
 - [x] Emoji status (custom emoji/text status with quick presets).
 - [x] Animated stickers (Lottie JSON render for sticker messages and picker; TGS import pipeline still separate).
-- [x] Voice-to-text transcription for voice messages (best-effort, Web Speech API — client-side, Chrome/Edge/Android; not supported in Firefox/Safari; replays decrypted audio into the mic-based recognizer since the API has no direct-file-transcription mode).
+- [x] Voice-to-text transcription for voice messages (real Whisper (`Xenova/whisper-tiny`, multilingual) inference via `@huggingface/transformers` running fully client-side in a Web Worker over WASM — no server round-trip, no account/API key, model weights cached by the browser after first download; consistent with the app's E2E-encryption model since decrypted audio never leaves the device. Supported anywhere with Worker + WebAssembly + Web Audio API, i.e. all modern evergreen browsers, not just Chrome/Edge/Android as the earlier SpeechRecognition-over-speaker approach required).
 - [x] Message translation (inline, per-message — see Phase 2).
 - [ ] Cross-device clipboard and URL sync (Saved Messages → device integration).
 

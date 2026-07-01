@@ -3028,6 +3028,14 @@ textarea::placeholder {
   font-size: 12px;
 }
 
+.translated-text-pending {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .spin-icon {
   animation: spin 1s linear infinite;
 }

@@ -31,6 +31,7 @@
     "@capacitor/ios": "^8.4.0",
     "@capacitor/push-notifications": "^8.1.1",
     "@electric-sql/pglite": "^0.5.1",
+    "@huggingface/transformers": "^4.2.0",
     "cookie-parser": "^1.4.7",
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",

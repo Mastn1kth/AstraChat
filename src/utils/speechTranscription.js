@@ -1,113 +1,164 @@
-// Client-side voice message transcription via the browser's native Web Speech
-// API (SpeechRecognition / webkitSpeechRecognition). No server changes, no
-// API keys, and plaintext audio never leaves the device.
+// Client-side voice message transcription via Whisper running fully
+// in-browser (WASM, through @huggingface/transformers — the actively
+// maintained successor package to the old @xenova/transformers name) inside
+// a dedicated Web Worker. This replaces the previous "over the air" hack
+// that played decrypted audio through the speaker while the browser's
+// SpeechRecognition API listened via the microphone: that approach worked
+// only in Chrome/Edge/Android, was noticeably lossy (speaker/mic round trip),
+// and needed live microphone access just to transcribe an already-decrypted
+// audio file already on the device.
 //
-// IMPORTANT CONSTRAINT: the Web Speech API's SpeechRecognition interface is
-// built to listen to the microphone (a live MediaStream from getUserMedia)
-// — it has no API for transcribing an arbitrary pre-recorded audio Blob/File
-// directly. There is no `recognition.transcribeBlob(...)` or equivalent in
-// any shipping browser. To transcribe an already-recorded (and, in Onda's
-// case, already-decrypted) voice message, the only way to feed it into
-// SpeechRecognition is to play the audio back out loud through the device's
-// speakers/output while recognition is listening on the microphone input —
-// effectively an "over-the-air" replay. This is inherently best-effort:
-// - Quality depends on speaker volume, microphone sensitivity, and ambient
-//   noise; results are noticeably worse than transcribing a live mic feed.
-// - It requires microphone permission even though the "input" is really
-//   another piece of audio already on the device.
-// - It only works in browsers that implement SpeechRecognition at all
-//   (Chrome/Edge desktop, Chrome on Android). Firefox and Safari/iOS do not
-//   implement this API.
-// This module implements exactly that best-effort approach and is exposed
-// as an explicit opt-in "Transcribe" action so users understand it is not
-// guaranteed to be accurate.
+// This module instead:
+// - decodes the (already client-side-decrypted) voice message audio to
+//   16kHz mono Float32 PCM using the Web Audio API,
+// - ships that PCM buffer to a Worker (src/workers/whisperWorker.js) that
+//   runs Whisper (whisper-tiny, multilingual) via transformers.js/WASM,
+// - never sends any audio or text over the network to our own backend —
+//   the only network activity is the one-time Whisper model weight download
+//   from the Hugging Face CDN, which the browser caches (Cache Storage) so
+//   subsequent transcriptions are fully offline. This mirrors the existing
+//   "nothing plaintext leaves the browser" stance used for message
+//   translation (src/utils/translate.js).
+//
+// Feature detection: requires Web Worker support, WebAssembly, and the Web
+// Audio API (OfflineAudioContext/AudioContext) to decode+resample audio.
+// These are supported in every modern evergreen browser (Chrome, Edge,
+// Firefox, Safari 14.1+), which is broader support than the old
+// SpeechRecognition-only approach (Firefox/Safari never implemented that
+// API at all).
+
+let worker = null
+let requestId = 0
+const pending = new Map()
 
 export function isSpeechTranscriptionSupported() {
   return typeof window !== 'undefined'
-    && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)
+    && typeof Worker !== 'undefined'
+    && typeof WebAssembly !== 'undefined'
+    && (typeof window.OfflineAudioContext !== 'undefined' || typeof window.AudioContext !== 'undefined')
 }
 
-function getRecognitionCtor() {
-  if (typeof window === 'undefined') return null
-  return window.SpeechRecognition || window.webkitSpeechRecognition || null
+function getWorker() {
+  if (worker) return worker
+  worker = new Worker(new URL('../workers/whisperWorker.js', import.meta.url), { type: 'module' })
+  worker.onmessage = (event) => {
+    const { id, type } = event.data || {}
+    const entry = pending.get(id)
+    if (!entry) return
+
+    if (type === 'progress') {
+      entry.onProgress?.(event.data.info)
+      return
+    }
+    if (type === 'result') {
+      pending.delete(id)
+      entry.resolve(event.data.text)
+      return
+    }
+    if (type === 'ready') {
+      pending.delete(id)
+      entry.resolve()
+      return
+    }
+    if (type === 'error') {
+      pending.delete(id)
+      entry.reject(new Error(event.data.message || 'Transcription failed'))
+    }
+  }
+  worker.onerror = (event) => {
+    // Worker-level failure (e.g. failed to even load the module, WASM
+    // instantiation error). Reject every in-flight request since we can't
+    // tell which one it was for, then reset so the next call gets a fresh
+    // worker instead of a permanently broken one.
+    const error = new Error(event?.message || 'Transcription worker failed to load')
+    pending.forEach((entry) => entry.reject(error))
+    pending.clear()
+    worker?.terminate()
+    worker = null
+  }
+  return worker
 }
 
-// Transcribes a decrypted voice message by playing it through an <audio>
-// element while a SpeechRecognition session listens for speech. Resolves
-// with the recognized text (may be an empty string if nothing was
-// recognized) or rejects with an Error on failure/unsupported browsers.
-export function transcribeAudioUrl(url, { lang } = {}) {
-  const Recognition = getRecognitionCtor()
-  if (!Recognition) {
-    return Promise.reject(new Error('SpeechRecognition is not supported in this browser'))
+function callWorker(message, { onProgress } = {}) {
+  return new Promise((resolve, reject) => {
+    const id = ++requestId
+    pending.set(id, { resolve, reject, onProgress })
+    try {
+      getWorker().postMessage({ id, ...message })
+    } catch (error) {
+      pending.delete(id)
+      reject(error instanceof Error ? error : new Error('Failed to reach transcription worker'))
+    }
+  })
+}
+
+// Decodes an audio URL (already-decrypted blob: URL or same-origin URL) into
+// 16kHz mono Float32 PCM samples, the input format Whisper/transformers.js
+// expects.
+async function decodeAudioTo16kMono(url) {
+  const response = await fetch(url, { credentials: 'same-origin' })
+  if (!response.ok) throw new Error('Failed to load audio for transcription')
+  const arrayBuffer = await response.arrayBuffer()
+
+  const AudioContextCtor = window.AudioContext || window.webkitAudioContext
+  const probeContext = new AudioContextCtor()
+  let decoded
+  try {
+    decoded = await probeContext.decodeAudioData(arrayBuffer.slice(0))
+  } finally {
+    await probeContext.close().catch(() => {})
+  }
+
+  const targetSampleRate = 16000
+  const OfflineCtor = window.OfflineAudioContext || window.webkitOfflineAudioContext
+  if (!OfflineCtor) {
+    // No offline resampling available: fall back to using the decoded
+    // buffer's first channel as-is. Whisper's feature extractor expects
+    // 16kHz input, so quality degrades if the source isn't already 16kHz,
+    // but this keeps the feature working rather than hard-failing.
+    return decoded.getChannelData(0).slice()
+  }
+
+  const offlineContext = new OfflineCtor(
+    1,
+    Math.ceil(decoded.duration * targetSampleRate),
+    targetSampleRate,
+  )
+  const source = offlineContext.createBufferSource()
+  source.buffer = decoded
+  source.connect(offlineContext.destination)
+  source.start(0)
+  const rendered = await offlineContext.startRendering()
+  return rendered.getChannelData(0).slice()
+}
+
+// Transcribes a decrypted voice message. Resolves with the recognized text
+// (may be an empty string if nothing was recognized) or rejects with an
+// Error on failure/unsupported browsers.
+export async function transcribeAudioUrl(url, { lang, onProgress } = {}) {
+  if (!isSpeechTranscriptionSupported()) {
+    return Promise.reject(new Error('Speech transcription is not supported in this browser'))
   }
   if (!url) {
     return Promise.reject(new Error('No audio URL to transcribe'))
   }
 
-  return new Promise((resolve, reject) => {
-    const recognition = new Recognition()
-    recognition.lang = lang || (typeof navigator !== 'undefined' ? navigator.language : 'en-US') || 'en-US'
-    recognition.interimResults = false
-    recognition.continuous = true
-    recognition.maxAlternatives = 1
+  const samples = await decodeAudioTo16kMono(url)
+  // Whisper language codes are plain ISO codes ('en', 'ru'); the app's i18n
+  // getLang() already returns exactly that, so pass it straight through.
+  const language = lang ? lang.split('-')[0] : undefined
 
-    const audio = new Audio(url)
-    let finished = false
-    const transcripts = []
+  return callWorker(
+    { type: 'transcribe', samples, language },
+    { onProgress },
+  )
+}
 
-    const cleanup = () => {
-      audio.removeEventListener('ended', onAudioEnded)
-      audio.removeEventListener('error', onAudioError)
-      audio.pause()
-    }
-
-    const finish = (err) => {
-      if (finished) return
-      finished = true
-      cleanup()
-      try { recognition.stop() } catch { /* ignore */ }
-      if (err) reject(err)
-      else resolve(transcripts.join(' ').trim())
-    }
-
-    recognition.onresult = (event) => {
-      for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        const result = event.results[i]
-        if (result.isFinal) transcripts.push(result[0].transcript)
-      }
-    }
-
-    recognition.onerror = (event) => {
-      // 'no-speech' just means silence was heard; treat as a normal end
-      // rather than a hard failure so short/quiet clips don't error out.
-      if (event.error === 'no-speech') return
-      finish(new Error(`Speech recognition error: ${event.error}`))
-    }
-
-    recognition.onend = () => finish()
-
-    function onAudioEnded() {
-      // Give recognition a brief moment to flush any trailing result.
-      setTimeout(() => finish(), 400)
-    }
-
-    function onAudioError() {
-      finish(new Error('Failed to play audio for transcription'))
-    }
-
-    audio.addEventListener('ended', onAudioEnded)
-    audio.addEventListener('error', onAudioError)
-
-    try {
-      recognition.start()
-    } catch (err) {
-      finish(err instanceof Error ? err : new Error('Failed to start speech recognition'))
-      return
-    }
-
-    audio.play().catch((err) => {
-      finish(err instanceof Error ? err : new Error('Failed to play audio for transcription'))
-    })
-  })
+// Pre-warms the worker/model so the first real transcription in a session
+// doesn't pay the full model-download+load latency. Safe to call speculatively
+// (e.g. once a voice message is visible); failures are swallowed by the
+// caller's own error handling on the next real transcribeAudioUrl call.
+export function warmupTranscription({ onProgress } = {}) {
+  if (!isSpeechTranscriptionSupported()) return Promise.resolve()
+  return callWorker({ type: 'warmup' }, { onProgress }).catch(() => {})
 }
