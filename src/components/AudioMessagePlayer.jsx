@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Loader2, Pause, Play } from 'lucide-react'
+import { Captions, Loader2, Pause, Play } from 'lucide-react'
 import { useGlobalAudio } from '../hooks/useGlobalAudio'
+import { isSpeechTranscriptionSupported, transcribeAudioUrl } from '../utils/speechTranscription'
+import { t } from '../i18n'
 
 const SPEEDS = [1, 1.5, 2]
 const waveformCache = new Map()
@@ -20,6 +22,8 @@ function formatTime(seconds) {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
 }
 
+const speechTranscriptionSupported = isSpeechTranscriptionSupported()
+
 export default function AudioMessagePlayer({ media, compact = false, chatName }) {
   const globalAudio = useGlobalAudio()
   const audioRef = useRef(null)
@@ -27,6 +31,28 @@ export default function AudioMessagePlayer({ media, compact = false, chatName })
   const [duration, setDuration] = useState((media.durationMs || 0) / 1000)
   const [currentTime, setCurrentTime] = useState(0)
   const [speedIndex, setSpeedIndex] = useState(0)
+  const [transcript, setTranscript] = useState(null)
+  const [transcribing, setTranscribing] = useState(false)
+  const [transcribeError, setTranscribeError] = useState(false)
+
+  const handleTranscribe = async () => {
+    if (transcribing) return
+    if (transcript !== null) {
+      setTranscript(null)
+      return
+    }
+    setTranscribeError(false)
+    setTranscribing(true)
+    try {
+      const text = await transcribeAudioUrl(media.url)
+      setTranscript(text || '')
+    } catch {
+      setTranscribeError(true)
+      setTimeout(() => setTranscribeError(false), 3000)
+    } finally {
+      setTranscribing(false)
+    }
+  }
 
   // Sync with global audio when this track is taken over by the mini-player
   const isGlobalTrack = globalAudio?.isTrackActive(media.url)
@@ -135,48 +161,81 @@ export default function AudioMessagePlayer({ media, compact = false, chatName })
   }
 
   return (
-    <div className={`audio-player ${compact ? 'compact' : ''} ${isGlobalTrack ? 'global-active' : ''}`} onClick={(event) => event.stopPropagation()}>
-      <button className="audio-play" onClick={toggle} aria-label={displayPlaying ? 'Pause audio' : 'Play audio'}>
-        {displayPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
-      </button>
-      <button
-        className={`audio-waveform ${waveformLoading ? 'loading' : ''}`}
-        onClick={seek}
-        aria-label={waveformLoading ? 'Analyzing audio waveform' : 'Seek audio'}
-        disabled={waveformLoading && !duration}
-      >
-        {waveform.map((height, index) => (
-          <span
-            key={index}
-            className={index <= activeBars ? 'active' : ''}
-            style={{ '--bar-height': `${height}%` }}
-          />
-        ))}
-        {waveformLoading && (
-          <b className="audio-waveform-spinner" aria-hidden="true">
-            <Loader2 size={16} />
-          </b>
+    <div className="audio-player-wrap" onClick={(event) => event.stopPropagation()}>
+      <div className={`audio-player ${compact ? 'compact' : ''} ${isGlobalTrack ? 'global-active' : ''}`}>
+        <button className="audio-play" onClick={toggle} aria-label={displayPlaying ? 'Pause audio' : 'Play audio'}>
+          {displayPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
+        </button>
+        <button
+          className={`audio-waveform ${waveformLoading ? 'loading' : ''}`}
+          onClick={seek}
+          aria-label={waveformLoading ? 'Analyzing audio waveform' : 'Seek audio'}
+          disabled={waveformLoading && !duration}
+        >
+          {waveform.map((height, index) => (
+            <span
+              key={index}
+              className={index <= activeBars ? 'active' : ''}
+              style={{ '--bar-height': `${height}%` }}
+            />
+          ))}
+          {waveformLoading && (
+            <b className="audio-waveform-spinner" aria-hidden="true">
+              <Loader2 size={16} />
+            </b>
+          )}
+        </button>
+        <span className="audio-time">{formatTime(displayDuration ? displayDuration - displayTime : 0)}</span>
+        <button
+          className="audio-speed"
+          onClick={isGlobalTrack && globalAudio ? globalAudio.cycleSpeed : () => setSpeedIndex((current) => (current + 1) % SPEEDS.length)}
+        >
+          {isGlobalTrack && globalAudio ? globalAudio.speed : SPEEDS[speedIndex]}x
+        </button>
+        {speechTranscriptionSupported ? (
+          <button
+            className="audio-transcribe"
+            onClick={handleTranscribe}
+            disabled={transcribing}
+            title={t('voice.transcribe')}
+            aria-label={t('voice.transcribe')}
+          >
+            {transcribing ? <Loader2 size={14} className="spin-icon" /> : <Captions size={14} />}
+          </button>
+        ) : (
+          <button
+            className="audio-transcribe disabled"
+            disabled
+            title={t('voice.transcribeUnsupported')}
+            aria-label={t('voice.transcribeUnsupported')}
+          >
+            <Captions size={14} />
+          </button>
         )}
-      </button>
-      <span className="audio-time">{formatTime(displayDuration ? displayDuration - displayTime : 0)}</span>
-      <button
-        className="audio-speed"
-        onClick={isGlobalTrack && globalAudio ? globalAudio.cycleSpeed : () => setSpeedIndex((current) => (current + 1) % SPEEDS.length)}
-      >
-        {isGlobalTrack && globalAudio ? globalAudio.speed : SPEEDS[speedIndex]}x
-      </button>
-      <audio
-        ref={audioRef}
-        src={media.url}
-        preload="metadata"
-        onLoadedMetadata={(event) => {
-          if (Number.isFinite(event.currentTarget.duration)) setDuration(event.currentTarget.duration)
-        }}
-        onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
-        onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
-        onEnded={() => setPlaying(false)}
-      />
+        <audio
+          ref={audioRef}
+          src={media.url}
+          preload="metadata"
+          onLoadedMetadata={(event) => {
+            if (Number.isFinite(event.currentTarget.duration)) setDuration(event.currentTarget.duration)
+          }}
+          onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
+          onEnded={() => setPlaying(false)}
+        />
+      </div>
+      {transcript !== null && (
+        <div className="translated-text-box">
+          <span className="translated-text-label">{t('voice.transcript')}</span>
+          <span className="translated-text-body">{transcript || t('voice.transcriptEmpty')}</span>
+        </div>
+      )}
+      {transcribeError && (
+        <div className="translated-text-box translated-text-error">
+          {t('voice.transcribeFailed')}
+        </div>
+      )}
     </div>
   )
 }

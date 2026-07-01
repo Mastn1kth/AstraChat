@@ -159,6 +159,7 @@ const DICT = {
     'menu.newChannel': 'Новый канал',
     'menu.myProfile': 'Мой профиль',
     'menu.contacts': 'Контакты',
+    'menu.sendToMyDevices': 'Отправить на мои устройства',
     'menu.archivedChats': 'Архив',
     'menu.folders': 'Папки',
     'menu.settings': 'Настройки',
@@ -174,6 +175,18 @@ const DICT = {
     'menu.logout': 'Выйти',
     'menu.desktopNotifications': 'Уведомления на рабочем столе',
     'menu.messageSound': 'Звук сообщений',
+
+    // --- Quick share ("send to my devices") ---
+    'quickShare.title': 'Отправить на мои устройства',
+    'quickShare.description': 'Вставьте ссылку или текст — он появится в «Избранном» на всех ваших устройствах.',
+    'quickShare.inputLabel': 'Ссылка или текст',
+    'quickShare.placeholder': 'Вставьте ссылку или текст…',
+    'quickShare.send': 'Отправить',
+    'quickShare.cancel': 'Отмена',
+    'quickShare.close': 'Закрыть',
+    'quickShare.sent': 'Отправлено в Избранное.',
+    'quickShare.failed': 'Не удалось отправить.',
+    'quickShare.unavailable': 'Избранное недоступно.',
 
     // --- Privacy menu ---
     'privacy.exportKey': 'Экспорт ключа шифрования',
@@ -376,6 +389,13 @@ const DICT = {
     'msg.translatedFrom': 'Переведено',
     'msg.translateFailed': 'Не удалось перевести',
 
+    // --- Voice transcription ---
+    'voice.transcribe': 'Расшифровать голосовое сообщение (эксперимент, только Chrome/Edge/Android)',
+    'voice.transcribeUnsupported': 'Расшифровка речи не поддерживается в этом браузере',
+    'voice.transcript': 'Расшифровка',
+    'voice.transcriptEmpty': 'Речь не распознана',
+    'voice.transcribeFailed': 'Не удалось расшифровать голосовое сообщение',
+
     // --- Cloud key backup ---
     'cloudKey.save': 'Сохранить ключ в облако',
     'cloudKey.restore': 'Восстановить ключ из облака',
@@ -505,6 +525,7 @@ const DICT = {
     'menu.newChannel': 'New channel',
     'menu.myProfile': 'My profile',
     'menu.contacts': 'Contacts',
+    'menu.sendToMyDevices': 'Send to my devices',
     'menu.archivedChats': 'Archived chats',
     'menu.folders': 'Folders',
     'menu.settings': 'Settings',
@@ -520,6 +541,18 @@ const DICT = {
     'menu.logout': 'Log out',
     'menu.desktopNotifications': 'Desktop notifications',
     'menu.messageSound': 'Message sound',
+
+    // --- Quick share ("send to my devices") ---
+    'quickShare.title': 'Send to my devices',
+    'quickShare.description': 'Paste a link or short text — it will appear in Saved Messages on all your devices.',
+    'quickShare.inputLabel': 'Link or text',
+    'quickShare.placeholder': 'Paste a link or text…',
+    'quickShare.send': 'Send',
+    'quickShare.cancel': 'Cancel',
+    'quickShare.close': 'Close',
+    'quickShare.sent': 'Sent to Saved Messages.',
+    'quickShare.failed': 'Could not send.',
+    'quickShare.unavailable': 'Saved Messages is unavailable.',
 
     // --- Privacy menu ---
     'privacy.exportKey': 'Export encryption key',
@@ -721,6 +754,13 @@ const DICT = {
     'msg.translating': 'Translating...',
     'msg.translatedFrom': 'Translated',
     'msg.translateFailed': 'Translation failed',
+
+    // --- Voice transcription ---
+    'voice.transcribe': 'Transcribe voice message (experimental, Chrome/Edge/Android only)',
+    'voice.transcribeUnsupported': 'Speech transcription is not supported in this browser',
+    'voice.transcript': 'Transcript',
+    'voice.transcriptEmpty': 'No speech recognized',
+    'voice.transcribeFailed': 'Could not transcribe the voice message',
 
     // --- Cloud key backup ---
     'cloudKey.save': 'Save key to cloud',
