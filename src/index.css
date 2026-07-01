@@ -2174,10 +2174,6 @@ textarea::placeholder {
   color: #c2410c;
 }
 
-.type-bot {
-  color: #4f46e5;
-}
-
 .chat-status-line {
   display: flex;
   min-width: 0;

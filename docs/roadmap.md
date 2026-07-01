@@ -164,19 +164,21 @@ Goal: stop treating local MVP infrastructure as production.
 - [ ] Queue for background jobs (notifications, cleanup, stats).
 - [ ] Horizontal scaling (stateless nodes + shared Redis + shared DB).
 
-## Phase 7 — Platform Extensions (Future)
+## Phase 7 — Future Product Extensions
 
-Goal: ecosystem features that turn the messenger into a platform.
+Goal: user-facing messenger features that extend the product without turning it into a bot/mini-app platform.
 
-- [ ] Bot API (webhook or long-polling, inline keyboards, command parsing).
-- [ ] Mini apps (WebView-based, JS bridge to messenger context).
-- [ ] Payments (bot payments API).
 - [ ] Username-based public discovery (public profiles, @username search).
 - [ ] Emoji status (custom animated status with per-chat visibility).
 - [x] Animated stickers (Lottie JSON render for sticker messages and picker; TGS import pipeline still separate).
 - [ ] Voice-to-text transcription for voice messages.
 - [x] Message translation (inline, per-message — see Phase 2).
 - [ ] Cross-device clipboard and URL sync (Saved Messages → device integration).
+
+## Explicitly Out of Scope
+
+- Bots, bot accounts, Bot API, inline bots, bot keyboards and bot payment flows.
+- Mini apps, WebView apps, JS bridges and mini-app permission flows.
 
 ---
 
