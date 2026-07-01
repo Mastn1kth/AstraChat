@@ -2167,6 +2167,87 @@ function AppInner() {
     window.setTimeout(() => updateMessageStatus(selectedChat.id, id, 'read'), 1500)
   }
 
+  // "Send to my devices" quick-share: an explicit, user-triggered handoff of a link/snippet
+  // to the user's own Saved Messages chat. Reuses the exact same send-message API/WS path as
+  // any other message, so it lands on every other active session/device in realtime via the
+  // existing sendToChat -> sendToUser fan-out on the server. No passive/background clipboard
+  // access is involved — the user must paste and submit explicitly each time.
+  async function sendToMyDevices(text, linkPreview) {
+    const trimmed = String(text || '').trim()
+    if (!trimmed) return false
+    const savedChat = state.chats.find((chat) => chat.serverType === 'saved')
+    if (!savedChat) {
+      showToast(t('quickShare.unavailable'))
+      return false
+    }
+
+    let payloadText = trimmed
+    if (savedChat.backend) {
+      try {
+        payloadText = await encryptTextForChat(trimmed, savedChat)
+      } catch (error) {
+        showToast(error.message || t('quickShare.failed'))
+        return false
+      }
+    }
+
+    const id = createId('quickshare')
+    const localMessage = {
+      id,
+      senderId: state.user.id,
+      text: trimmed,
+      time: new Date().toISOString(),
+      status: savedChat.backend ? 'sending' : 'read',
+      reactions: {},
+      linkPreview: linkPreview || null,
+    }
+
+    setState((current) => ({
+      ...current,
+      messages: {
+        ...current.messages,
+        [savedChat.id]: [...(current.messages[savedChat.id] || []), localMessage],
+      },
+    }))
+
+    if (!savedChat.backend) {
+      showToast(t('quickShare.sent'))
+      return true
+    }
+
+    try {
+      const { message } = await sendChatMessage(savedChat.id, {
+        text: payloadText,
+        searchText: trimmed,
+        linkPreview: linkPreview || undefined,
+      })
+      const normalizedMessage = await normalizeServerMessage(message, state.user.id)
+      setState((current) => ({
+        ...current,
+        messages: {
+          ...current.messages,
+          [savedChat.id]: (current.messages[savedChat.id] || []).map((item) =>
+            item.id === id ? normalizedMessage : item,
+          ),
+        },
+      }))
+      showToast(t('quickShare.sent'))
+      return true
+    } catch (error) {
+      setState((current) => ({
+        ...current,
+        messages: {
+          ...current.messages,
+          [savedChat.id]: (current.messages[savedChat.id] || []).map((item) =>
+            item.id === id ? { ...item, status: 'failed' } : item,
+          ),
+        },
+      }))
+      showToast(error.message || t('quickShare.failed'))
+      return false
+    }
+  }
+
   async function sendRichMessage(rich) {
     if (!selectedChat || editingMessage) return
 
@@ -3665,6 +3746,7 @@ function AppInner() {
         selectChat(chatId)
         window.setTimeout(() => jumpToMessage(messageId), 200)
       }}
+      onSendToMyDevices={sendToMyDevices}
     />
     </Suspense>
     {permissionPromptOpen && (

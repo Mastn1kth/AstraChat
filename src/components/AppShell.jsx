@@ -144,6 +144,7 @@ export default function AppShell({
   onScheduleSend,
   onStoryReplySent,
   scheduledCounts,
+  onSendToMyDevices,
 }) {
   const hasChat = selectedChat && selectedContact
   const liveWallEnabled = Boolean(settings.liveWall?.enabled)
@@ -447,6 +448,7 @@ export default function AppShell({
         onOpenStoryViewer={(groups, idx, onDeleted) => setStoryViewer({ groups, idx, onDeleted })}
         onLoadPrivacy={onLoadPrivacy}
         onUpdatePrivacy={onUpdatePrivacy}
+        onSendToMyDevices={onSendToMyDevices}
       />
 
       <main className="chat-area" data-chat-bg={(selectedChat?.id && getChatWallpaper(selectedChat.id)) || settings.chatBackground || 'default'}>

@@ -26,6 +26,7 @@ import {
   QrCode,
   RotateCcw,
   Search,
+  Send,
   Settings,
   ShieldCheck,
   Smartphone,
@@ -58,6 +59,7 @@ import {
 } from '../utils/storage'
 import { findUsersByPhone } from '../api/client'
 import { createQrDataUrl } from '../utils/qrCode'
+import { extractFirstUrl, fetchLinkPreview } from '../utils/linkPreview'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -243,6 +245,94 @@ function WallComposer({ onSend }) {
   )
 }
 
+function QuickShareModal({ onSend, onClose }) {
+  const [text, setText] = useState('')
+  const [preview, setPreview] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    const url = extractFirstUrl(text)
+    const timer = window.setTimeout(async () => {
+      if (!url) { setPreview(null); return }
+      const data = await fetchLinkPreview(url)
+      setPreview(data ? { ...data, url } : null)
+    }, url ? 400 : 0)
+    return () => window.clearTimeout(timer)
+  }, [text])
+
+  async function handleSubmit(event) {
+    event.preventDefault()
+    const trimmed = text.trim()
+    if (!trimmed || busy) return
+    setBusy(true)
+    setError('')
+    const ok = await onSend(trimmed, preview || undefined)
+    setBusy(false)
+    if (ok) onClose()
+    else setError(t('quickShare.failed'))
+  }
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true">
+      <form className="modal settings-modal quick-share-modal" onSubmit={handleSubmit}>
+        <header>
+          <div>
+            <strong>{t('quickShare.title')}</strong>
+            <p>{t('quickShare.description')}</p>
+          </div>
+          <button type="button" onClick={onClose} aria-label={t('quickShare.close')}>
+            <X size={20} />
+          </button>
+        </header>
+
+        <label className="field-block">
+          <span>{t('quickShare.inputLabel')}</span>
+          <textarea
+            className="quick-share-textarea"
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            placeholder={t('quickShare.placeholder')}
+            rows={4}
+            autoFocus
+          />
+        </label>
+
+        {preview && (
+          <div className="composer-link-preview quick-share-preview">
+            {preview.image && (
+              <img
+                className="composer-link-preview-img"
+                src={preview.image}
+                alt=""
+                onError={(e) => { e.currentTarget.style.display = 'none' }}
+              />
+            )}
+            <div className="composer-link-preview-body">
+              {preview.site && <span className="composer-link-preview-site">{preview.site}</span>}
+              {preview.title && <strong className="composer-link-preview-title">{preview.title}</strong>}
+              {preview.description && (
+                <span className="composer-link-preview-desc">{preview.description}</span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {error && <p className="quick-share-error">{error}</p>}
+
+        <div className="modal-actions">
+          <button type="button" onClick={onClose}>
+            {t('quickShare.cancel')}
+          </button>
+          <button className="primary-button" type="submit" disabled={busy || !text.trim()}>
+            <Send size={15} /> {busy ? '…' : t('quickShare.send')}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
 export default function Sidebar({
   chats,
   chatFolders,
@@ -304,8 +394,10 @@ export default function Sidebar({
   onRemoveAccount,
   onLoadPrivacy,
   onUpdatePrivacy,
+  onSendToMyDevices,
 }) {
   const [menuView, setMenuView] = useState('main')
+  const [quickShareOpen, setQuickShareOpen] = useState(false)
   const [savedAccounts, setSavedAccounts] = useState(() => readAccounts())
   const [encryptionInfo, setEncryptionInfo] = useState(null)
   const [privacySettings, setPrivacySettings] = useState(null)
@@ -917,6 +1009,16 @@ export default function Sidebar({
           <button onClick={() => setMenuView('contacts')}>
             <Users size={19} /> {t('menu.contacts')}
           </button>
+          {onSendToMyDevices && (
+            <button
+              onClick={() => {
+                setQuickShareOpen(true)
+                closeMenu()
+              }}
+            >
+              <Send size={19} /> {t('menu.sendToMyDevices')}
+            </button>
+          )}
           <button onClick={() => setMenuView('archive')}>
             <Archive size={19} /> {t('menu.archivedChats')}
           </button>
@@ -2147,6 +2249,12 @@ export default function Sidebar({
         onToggleFolderPin={(chatId) => onToggleFolderPin(selectedCustomFolder?.id, chatId)}
       />
     </aside>
+    {quickShareOpen && onSendToMyDevices && (
+      <QuickShareModal
+        onSend={onSendToMyDevices}
+        onClose={() => setQuickShareOpen(false)}
+      />
+    )}
     {dialog}
     </>
   )
