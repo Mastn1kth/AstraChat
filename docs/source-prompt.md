@@ -51,7 +51,7 @@
 - поиск по чатам;
 - фильтры/папки чатов;
 - список чатов с аватаром, названием, последним сообщением, временем, статусом доставки, счетчиком непрочитанных;
-- индикаторы pinned, muted, archived, verified, premium;
+- индикаторы pinned, muted, archived, verified;
 - выбранный чат подсвечивается;
 - справа область переписки;
 - адаптивный мобильный режим: список чатов и чат открываются отдельными экранами;
@@ -160,7 +160,6 @@
 - публичные ссылки на посты;
 - пересылка постов;
 - защита от копирования как настройка;
-- paid/subscription channel как опциональный сценарий;
 - модерация комментариев.
 
 Сообщения:
@@ -189,7 +188,6 @@
 - contact card;
 - poll;
 - quiz;
-- payment message как UI-сценарий;
 - service messages: user joined, user left, pinned message, changed photo, changed title;
 - reactions;
 - message read status;
@@ -222,7 +220,6 @@
 - recent GIFs;
 - отправка GIF;
 - реакции на основе emoji/custom emoji;
-- premium stickers/custom emoji как отдельный флаг, если будет Premium-модуль.
 
 Вложения и медиа:
 - кнопка attach;
@@ -285,20 +282,7 @@
 Вне продукта:
 - bot accounts, Bot API, inline bots, bot keyboards, bot callbacks и bot payment flows не реализуются и не планируются;
 - mini apps, WebView apps, JS bridge, mini-app permissions и mini-app меню не реализуются и не планируются.
-
-Платежи, Stars, Premium, подарки:
-- Premium-подписка как отдельный модуль;
-- premium badge;
-- premium reactions/custom emoji;
-- premium stickers;
-- повышенные лимиты как конфигурация;
-- подарки пользователям;
-- цифровые товары;
-- stars/internal balance;
-- история транзакций;
-- paid media как UI;
-- оплата через mock checkout.
-Если реальные платежи не подключены, сделать только UI и API-контракты.
+- платежи, Stars, Premium-монетизация, paid subscriptions, paid media, подарки, цифровые товары, internal balance, транзакции и checkout flows не реализуются и не планируются.
 
 Контакты:
 - список контактов;
@@ -320,7 +304,6 @@
 - bio;
 - phone;
 - online status;
-- premium badge;
 - настройка аватара;
 - несколько фото профиля как UI;
 - emoji status;
@@ -358,7 +341,6 @@
 - message bubble style;
 - wallpapers;
 - stickers and emoji;
-- premium;
 - help/FAQ;
 - logout.
 
@@ -471,10 +453,6 @@ Backend-архитектура:
 - Folder;
 - InviteLink;
 - Report;
-- Bot;
-- MiniApp;
-- Payment;
-- PremiumSubscription.
 
 UI/UX требования:
 - интерфейс похож по структуре на Telegram;
@@ -566,14 +544,12 @@ UI/UX требования:
 - видеозвонки;
 - real-time от других пользователей;
 - загрузка файлов;
-- платежи;
-- Premium;
 - push notifications;
 - stories;
 - импорт контактов.
 
 Важно:
-- если функция требует backend, WebRTC, платежей, шифрования или внешнего API, не врать, что она реально работает;
+- если функция требует backend, WebRTC, шифрования или внешнего API, не врать, что она реально работает;
 - сделать UI, состояние и архитектурную заготовку;
 - явно разделить реальные функции и mock-функции;
 - код должен быть расширяемым;

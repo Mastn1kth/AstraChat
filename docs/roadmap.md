@@ -166,7 +166,7 @@ Goal: stop treating local MVP infrastructure as production.
 
 ## Phase 7 — Future Product Extensions
 
-Goal: user-facing messenger features that extend the product without turning it into a bot/mini-app platform.
+Goal: user-facing messenger features that extend the product without turning it into a bot, mini-app or payments platform.
 
 - [ ] Username-based public discovery (public profiles, @username search).
 - [ ] Emoji status (custom animated status with per-chat visibility).
@@ -179,6 +179,7 @@ Goal: user-facing messenger features that extend the product without turning it 
 
 - Bots, bot accounts, Bot API, inline bots, bot keyboards and bot payment flows.
 - Mini apps, WebView apps, JS bridges and mini-app permission flows.
+- Payments, Stars, paid subscriptions, paid media, gifts, checkout flows and Premium monetization.
 
 ---
 
