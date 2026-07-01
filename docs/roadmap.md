@@ -71,7 +71,7 @@ Goal: replace remaining mock surfaces with real server-backed behavior.
 - [x] Message drafts (localStorage-backed per-chat draft save/restore in Composer).
 - [x] Round video messages ("video notes" — record via camera + `MediaRecorder`, circular playback, reuses the voice-message upload pipeline).
 - [x] Telegram chat history import (parse Telegram JSON export, encrypt and insert as regular messages with `imported_from_name` label).
-- [x] Inline message translation (client-side only via MyMemory API — preserves E2EE, no plaintext sent to any Onda backend).
+- [x] Inline message translation (client-side only via MyMemory API — no plaintext sent to the Onda backend; see docs/security.md for the actual encryption model).
 
 ## Phase 3 — Groups and Channels
 
