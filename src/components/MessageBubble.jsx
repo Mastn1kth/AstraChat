@@ -194,13 +194,18 @@ export default function MessageBubble({
   }
 
   // Live countdown ticker for disappearing messages
-  const [now, setNow] = useState(Date.now())
+  const [now, setNow] = useState(0)
   useEffect(() => {
     if (!message.disappearsAt || message.deleted) return undefined
     const ms = new Date(message.disappearsAt).getTime() - Date.now()
     if (ms <= 0) return undefined
-    const id = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(id)
+    const tick = () => setNow(Date.now())
+    const initialId = window.setTimeout(tick, 0)
+    const intervalId = window.setInterval(tick, 1000)
+    return () => {
+      window.clearTimeout(initialId)
+      window.clearInterval(intervalId)
+    }
   }, [message.disappearsAt, message.deleted])
 
   // System messages render as a centered pill
@@ -230,7 +235,7 @@ export default function MessageBubble({
         role="button"
         tabIndex={0}
       >
-        {message.disappearsAt && !message.deleted && (
+        {message.disappearsAt && !message.deleted && now > 0 && (
           <div className="msg-timer-badge">
             <Timer size={11} />
             {formatDisappearTimer(message.disappearsAt, now)}

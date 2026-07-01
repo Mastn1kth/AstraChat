@@ -1692,7 +1692,7 @@ function AppInner() {
       })
       .filter((chat) => chat.contact)
       .sort(byPinnedThenRecent)
-  }, [presence, state.chats, state.contacts, state.messages, typingByChat])
+  }, [presence, state.chats, state.contacts, state.messages, state.user.id, typingByChat])
 
   // Reflect total unread count in the browser tab title and favicon badge.
   useEffect(() => {

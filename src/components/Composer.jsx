@@ -35,8 +35,6 @@ import { getMessagePlainText } from '../utils/richMessages'
 import { extractFirstUrl, fetchLinkPreview } from '../utils/linkPreview'
 import { saveDraft, loadDraft, clearDraft as clearDraftUtil } from '../utils/drafts'
 
-const DRAFT_PREFIX = 'astrachat.draft.'
-
 function getSupportedAudioMimeType() {
   if (!window.MediaRecorder) return ''
   return [
@@ -90,15 +88,9 @@ export default function Composer({
   onTyping,
   currentUser,
 }) {
-  const draftKey = chatId ? `${DRAFT_PREFIX}${chatId}` : ''
   const [value, setValue] = useState(() => {
     if (editingMessage) return editingMessage.text || ''
-    if (!draftKey) return ''
-    try {
-      return globalThis.localStorage?.getItem(draftKey) || ''
-    } catch {
-      return ''
-    }
+    return loadDraft(chatId)
   })
   const [emojiOpen, setEmojiOpen] = useState(false)
   const [panelTab, setPanelTab] = useState('emoji')
@@ -157,13 +149,6 @@ export default function Composer({
   }, [attachments.length, onTyping, value])
 
   useEffect(() => () => onTyping(false), [onTyping])
-
-  // Restore draft when switching chats
-  useEffect(() => {
-    if (editingMessage) return
-    setValue(loadDraft(chatId))
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatId])
 
   useEffect(() => {
     if (!chatId || editingMessage) return

@@ -1,7 +1,7 @@
 import { db } from './db.js'
 import logger from './logger.js'
 import { MESSAGE_SELECT_COLUMNS, publicMessagesFromRows } from './server-helpers.js'
-import { sendToChatExcept, sendToUser } from './socket-manager.js'
+import { sendToChat, sendToChatExcept, sendToUser } from './socket-manager.js'
 import { sendOfflineMessagePushes } from './push-service.js'
 
 let publishingScheduled = false
@@ -30,7 +30,7 @@ export async function deleteExpiredMessages() {
           [row.id],
         )
         if (result.rows[0]) {
-          await sendToChatExcept(row.chat_id, '', {
+          await sendToChat(row.chat_id, {
             type: 'message:deleted',
             chatId: row.chat_id,
             messageId: row.id,
