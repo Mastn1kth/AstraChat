@@ -43,6 +43,7 @@ import { sendToUser, sendToChat, sendToChatExcept } from '../socket-manager.js'
 import { enqueueOfflineMessagePushes } from '../push-service.js'
 import { publishScheduledMessage } from '../scheduled.js'
 import { messageLimiter, apiLimiter } from '../limiters.js'
+import { scheduleMessageAbuseCheck, scheduleNewChatAbuseCheck } from '../abuse-detection.js'
 
 const router = Router()
 
@@ -195,6 +196,15 @@ router.post('/api/chats', requireAuth, async (request, response) => {
     return
   }
 
+  let wasExistingContact = true
+  if (input.type === 'private') {
+    const contactCheck = await db.query(
+      'SELECT 1 FROM user_contacts WHERE owner_id = $1 AND contact_user_id = $2 LIMIT 1',
+      [request.user.id, input.memberIds[0]],
+    )
+    wasExistingContact = contactCheck.rows.length > 0
+  }
+
   const chatId = randomUUID()
   await db.transaction(async (tx) => {
     await tx.query(
@@ -214,6 +224,13 @@ router.post('/api/chats', requireAuth, async (request, response) => {
       )
     }
   })
+  if (input.type === 'private') {
+    await scheduleNewChatAbuseCheck({
+      senderId: request.user.id,
+      targetUserId: input.memberIds[0],
+      wasExistingContact,
+    })
+  }
   response.status(201).json({
     chat: {
       id: chatId,
@@ -1856,6 +1873,15 @@ router.post('/api/chats/:chatId/messages', requireAuth, messageLimiter, async (r
     response.status(202).json({ message: publicMessage, scheduled: true })
     return
   }
+
+  // Fire-and-forget: enqueues an async abuse-pattern check (see
+  // abuse-detection.js) rather than evaluating heuristics inline, so
+  // detection latency never blocks the sender's request.
+  await scheduleMessageAbuseCheck({
+    senderId: request.user.id,
+    chatId: request.params.chatId,
+    text: input.text,
+  })
 
   const recipientDeliveries = await sendToChatExcept(request.params.chatId, request.user.id, {
     type: 'message:new',

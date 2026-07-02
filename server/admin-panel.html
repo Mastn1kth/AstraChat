@@ -215,7 +215,10 @@ async function loadReports() {
       ? '<button class="act" onclick="reviewReport(\'' + r.id + '\',\'reviewed\')">✓ Проверено</button> ' +
         '<button class="act danger" onclick="reviewReport(\'' + r.id + '\',\'dismissed\')">✕ Отклонить</button>'
       : '<button class="act" onclick="reviewReport(\'' + r.id + '\',\'open\')">↩ Открыть</button>'
-    return '<tr><td>' + esc(r.reporter || '—') + '</td><td>' + esc(r.target || '—') + '</td><td>' + esc(r.reason) +
+    const reporterLabel = r.source === 'auto'
+      ? '<span title="' + esc(r.heuristic || '') + '" style="background:#7c3aed;color:#fff;border-radius:4px;padding:1px 6px;font-size:11px;font-weight:600">AUTO</span>'
+      : esc(r.reporter || '—')
+    return '<tr><td>' + reporterLabel + '</td><td>' + esc(r.target || '—') + '</td><td>' + esc(r.reason) +
       '</td><td style="max-width:180px;white-space:pre-wrap">' + esc(r.details || '') +
       '</td><td style="' + statusClass + ';font-weight:600">' + esc(r.status) +
       '</td><td style="max-width:160px;white-space:pre-wrap;color:#aaa">' + esc(r.admin_note || '') +

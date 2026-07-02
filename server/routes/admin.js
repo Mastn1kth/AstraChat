@@ -211,6 +211,7 @@ router.get('/api/admin/reports', requireAdmin, async (request, response) => {
   }
   const result = await db.query(
     `SELECT r.id, r.reason, r.details, r.status, r.admin_note, r.created_at, r.reviewed_at,
+            r.source, r.heuristic,
             reporter.username AS reporter, target.username AS target,
             reviewer.username AS reviewed_by
      FROM reports r

@@ -40,6 +40,7 @@ import { formatByteSize, isChatMember, getCallParticipants } from './server-help
 import { publishDueScheduledMessages, deleteExpiredMessages } from './scheduled.js'
 import { startJobQueuePolling, stopJobQueuePolling } from './job-queue.js'
 import './push-service.js' // registers the push:deliver job handler as a side effect
+import './abuse-detection.js' // registers the abuse:check job handler as a side effect
 import { authLimiter } from './limiters.js'
 // Route modules
 import adminRouter from './routes/admin.js'

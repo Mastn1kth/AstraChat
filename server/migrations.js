@@ -1050,6 +1050,30 @@ export const migrations = [
         DROP COLUMN IF EXISTS totp_last_counter;
     `,
   },
+  {
+    id: '20260704_abuse_detection_reports_source',
+    sql: `
+      ALTER TABLE reports
+        ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'user',
+        ADD COLUMN IF NOT EXISTS heuristic TEXT;
+
+      ALTER TABLE reports
+        ALTER COLUMN reporter_id DROP NOT NULL;
+
+      CREATE INDEX IF NOT EXISTS reports_source_idx
+        ON reports(source, created_at DESC);
+    `,
+    downSql: `
+      DROP INDEX IF EXISTS reports_source_idx;
+
+      ALTER TABLE reports
+        ALTER COLUMN reporter_id SET NOT NULL;
+
+      ALTER TABLE reports
+        DROP COLUMN IF EXISTS heuristic,
+        DROP COLUMN IF EXISTS source;
+    `,
+  },
 ]
 
 async function getAppliedMigrationIds(database) {
