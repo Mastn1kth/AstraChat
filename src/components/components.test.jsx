@@ -8,6 +8,7 @@ import IconButton from './IconButton'
 import MessageBubble from './MessageBubble'
 import RichMessage from './RichMessage'
 import { stickerPacks } from '../utils/richMessages'
+import { LANGUAGES, DICT } from '../i18n'
 
 describe('React components', () => {
   it('renders Lottie stickers with an animation container', () => {
@@ -413,5 +414,33 @@ describe('React components', () => {
     )
 
     expect(html).not.toContain('composer-preview')
+  })
+})
+
+describe('i18n locales', () => {
+  it('LANGUAGES entries have matching DICT tables', () => {
+    for (const { id } of LANGUAGES) {
+      expect(DICT[id]).toBeTruthy()
+    }
+  })
+
+  it('every locale has the exact same key set as en', () => {
+    const enKeys = Object.keys(DICT.en).sort()
+
+    for (const { id } of LANGUAGES) {
+      const keys = Object.keys(DICT[id]).sort()
+      expect(keys).toEqual(enKeys)
+    }
+  })
+
+  it('every locale keeps the same {placeholder} tokens as en', () => {
+    const placeholderTokens = (str) => (str.match(/\{[a-zA-Z]+\}/g) || []).sort().join(',')
+
+    for (const { id } of LANGUAGES) {
+      if (id === 'en') continue
+      for (const key of Object.keys(DICT.en)) {
+        expect(placeholderTokens(DICT[id][key])).toBe(placeholderTokens(DICT.en[key]))
+      }
+    }
   })
 })

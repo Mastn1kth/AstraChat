@@ -408,8 +408,8 @@ export default function AuthScreen({
                   className={`astra-lang-card ${lang === item.id ? 'active' : ''}`}
                   onClick={() => setLang(item.id)}
                 >
-                  <span className="astra-lang-name">{item.id === 'ru' ? 'Русский' : 'English'}</span>
-                  <span className="astra-lang-eng">{item.id === 'ru' ? 'Russian' : 'English'}</span>
+                  <span className="astra-lang-name">{item.label}</span>
+                  <span className="astra-lang-eng">{item.englishName}</span>
                 </button>
               ))}
             </div>
