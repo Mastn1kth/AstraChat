@@ -155,14 +155,14 @@ Goal: stop treating local MVP infrastructure as production.
 - [x] Docker/deploy setup.
 - [ ] Device verification (trust chain beyond QR login).
 - [ ] Key rotation and key backup/recovery.
-- [ ] Queue-backed fanout for high-volume push delivery.
-- [ ] Native iOS/Android push through app stores (FCM/APNs production config).
-- [ ] Managed PostgreSQL with backups and restore procedure.
+- [x] Queue-backed fanout for high-volume push delivery (Postgres-backed `job_queue` table, `FOR UPDATE SKIP LOCKED` claim, exponential backoff, dead-letter status — see `server/job-queue.js`).
+- [ ] Native iOS/Android push through app stores (FCM/APNs production config — server-side FCM v1 client exists in `server/fcm.js`, but no real Firebase project/credentials are wired up yet).
+- [x] Managed PostgreSQL with backups and restore procedure (`pg_dump`/`pg_restore` via the admin backup endpoint and `deploy/backup-postgres.*` / `deploy/restore-postgres.*`).
 - [x] Redis/cache for presence, typing pub/sub, sessions and rate limits via `REDIS_URL`.
 - [x] Object storage (S3-compatible) for encrypted media via `STORAGE_DRIVER=s3`.
 - [x] CDN for client-encrypted media via short-lived signed ciphertext URLs.
-- [ ] Queue for background jobs (notifications, cleanup, stats).
-- [ ] Horizontal scaling (stateless nodes + shared Redis + shared DB).
+- [x] Queue for background jobs (notifications, cleanup, stats) — same `job_queue` table as push fanout above; push delivery is the first job type wired in.
+- [x] Horizontal scaling (stateless nodes + shared Redis + shared DB) — `docker compose --scale`, nginx upstream with DNS re-resolution, no sticky sessions needed since WS/presence/sessions/rate limits are all Redis-backed. PGlite must never run in more than one replica (single-writer); documented in `docs/production.md`.
 
 ## Phase 7 — Future Product Extensions
 
@@ -173,7 +173,7 @@ Goal: user-facing messenger features that extend the product without turning it 
 - [x] Animated stickers (Lottie JSON render for sticker messages and picker; TGS import pipeline still separate).
 - [x] Voice-to-text transcription for voice messages (real Whisper (`Xenova/whisper-tiny`, multilingual) inference via `@huggingface/transformers` running fully client-side in a Web Worker over WASM — no server round-trip, no account/API key, model weights cached by the browser after first download; consistent with the app's E2E-encryption model since decrypted audio never leaves the device. Supported anywhere with Worker + WebAssembly + Web Audio API, i.e. all modern evergreen browsers, not just Chrome/Edge/Android as the earlier SpeechRecognition-over-speaker approach required).
 - [x] Message translation (inline, per-message — see Phase 2).
-- [ ] Cross-device clipboard and URL sync (Saved Messages → device integration).
+- [x] Cross-device quick-share — explicit "send to my devices" action delivered via the existing Saved Messages path (deliberately not passive/background clipboard sync, which would be a privacy risk).
 
 ## Explicitly Out of Scope
 
