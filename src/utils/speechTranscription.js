@@ -31,11 +31,44 @@ let worker = null
 let requestId = 0
 const pending = new Map()
 
+// The WASM binary onnxruntime-web (via @huggingface/transformers) loads for
+// Whisper inference is a SIMD build with no non-SIMD fallback bundled — SIMD
+// support is a hard requirement, not an optimization, for this feature. SIMD
+// landed in Chrome 91 (2021) and Android's auto-updating System WebView is
+// effectively always past that bar regardless of the app's minSdkVersion.
+// WKWebView (iOS) only gained WASM SIMD in Safari/WebKit 16.4 (March 2023),
+// though — and this project's iOS deployment target is 15.0 — so a Capacitor
+// build running on iOS 15.0–16.3 would otherwise show a working-looking
+// Transcribe button that fails (WASM module compilation error) on first use.
+// Detect it up front with the same feature-probe bytes onnxruntime-web uses
+// internally (a minimal WASM module using a v128 SIMD instruction, checked
+// via WebAssembly.validate) so unsupported engines never see the button.
+const SIMD_TEST_MODULE = new Uint8Array([
+  0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 96, 0, 0, 3, 2, 1, 0, 10, 30, 1, 28, 0,
+  65, 0, 253, 15, 253, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  253, 186, 1, 26, 11,
+])
+
+function isWasmSimdSupported() {
+  // Environments where WebAssembly exists but doesn't implement `.validate`
+  // are not known to occur in practice (every real engine has had it since
+  // the WASM MVP) — treat that case as "can't tell, don't block" rather than
+  // failing closed, so this stays a targeted check for the real gap
+  // (pre-16.4 WKWebView) instead of a broader regression risk.
+  if (typeof WebAssembly.validate !== 'function') return true
+  try {
+    return WebAssembly.validate(SIMD_TEST_MODULE)
+  } catch {
+    return true
+  }
+}
+
 export function isSpeechTranscriptionSupported() {
   return typeof window !== 'undefined'
     && typeof Worker !== 'undefined'
     && typeof WebAssembly !== 'undefined'
     && (typeof window.OfflineAudioContext !== 'undefined' || typeof window.AudioContext !== 'undefined')
+    && isWasmSimdSupported()
 }
 
 function getWorker() {

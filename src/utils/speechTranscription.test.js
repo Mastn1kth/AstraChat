@@ -71,4 +71,23 @@ describe('isSpeechTranscriptionSupported', () => {
     globalThis.window = { OfflineAudioContext: function OfflineAudioContext() {} }
     expect(isSpeechTranscriptionSupported()).toBe(true)
   })
+
+  // Simulates a pre-16.4 WKWebView (iOS 15.0-16.3): WebAssembly exists but
+  // has no SIMD support, which is what the shipped ort-wasm-simd-threaded
+  // build requires. WebAssembly.validate is real in that environment (it's
+  // been part of WASM since the MVP), it just correctly reports the SIMD
+  // test module as invalid.
+  it('returns false when WebAssembly has no SIMD support', () => {
+    globalThis.Worker = function Worker() {}
+    globalThis.WebAssembly = { validate: () => false }
+    globalThis.window = { AudioContext: function AudioContext() {} }
+    expect(isSpeechTranscriptionSupported()).toBe(false)
+  })
+
+  it('returns true when WebAssembly.validate reports SIMD support', () => {
+    globalThis.Worker = function Worker() {}
+    globalThis.WebAssembly = { validate: () => true }
+    globalThis.window = { AudioContext: function AudioContext() {} }
+    expect(isSpeechTranscriptionSupported()).toBe(true)
+  })
 })

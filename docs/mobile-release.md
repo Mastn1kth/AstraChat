@@ -117,3 +117,51 @@ Web Push в Capacitor-оболочке не работает — приложе�
 Сервер сам выберет канал: Web Push (VAPID) для браузеров, FCM для мобильных
 токенов. Без настроенного FCM мобильная регистрация вернёт понятную ошибку,
 всё остальное работает как раньше.
+
+## Известное ограничение: расшифровка голосовых на iOS 15.0–16.3
+
+Расшифровка голосовых сообщений (Whisper, `src/utils/speechTranscription.js`,
+`src/workers/whisperWorker.js`) требует WebAssembly SIMD — WASM-бинарь, который
+грузит onnxruntime-web (через `@huggingface/transformers`), собран только в
+SIMD-варианте, без не-SIMD фолбэка. Chromium (Android System WebView, которая
+обновляется через Play Store независимо от `minSdkVersion` проекта) получил
+поддержку WASM SIMD ещё в версии 91 (2021) — на Android эта функция работает
+на практике на всех актуальных устройствах. Но WKWebView (iOS) получил
+поддержку WASM SIMD только в Safari/WebKit **16.4** (март 2023), а
+`IPHONEOS_DEPLOYMENT_TARGET` этого проекта — **15.0** (см.
+`ios/App/App.xcodeproj/project.pbxproj`). На iOS 15.0–16.3 попытка
+инициализировать WASM-модуль завершится ошибкой компиляции.
+
+Фикс — не полифилл (SIMD либо есть в движке, либо нет), а честный фичедетект:
+`isSpeechTranscriptionSupported()` теперь проверяет поддержку SIMD через
+`WebAssembly.validate()` с тем же тестовым модулем, что использует сам
+onnxruntime-web внутри себя, и на не поддерживающих SIMD движках кнопка
+«Расшифровать» просто не показывается (вместо зависающей/падающей кнопки).
+Пользователи iOS 15.0–16.3 в Capacitor-оболочке не увидят кнопку расшифровки;
+пользователи iOS 16.4+ и Android — увидят, и функция должна работать (см.
+оговорку про непроверенность на реальном устройстве ниже). Разница в
+источнике WASM-рантайма между платформами:
+
+- **Android** (не-Safari ветка `@huggingface/transformers`): WASM-бинарь
+  `ort-wasm-simd-threaded.asyncify.wasm` (~23.5МБ) собирается Vite прямо в
+  `dist/assets/` и упаковывается внутрь APK/AAB — грузится локально, без сети.
+- **iOS/WKWebView** (ветка `apis.IS_SAFARI` в `transformers.js` — детектится по
+  `navigator.vendor` содержащему `"Apple"` и UA без `Chrome`/`Android`, что
+  верно матчит WKWebView): WASM-рантайм НЕ упакован локально, а грузится в
+  рантайме с `cdn.jsdelivr.net`. Плюс на обеих платформах — одноразовая
+  загрузка весов модели (~150МБ, fp32) с `huggingface.co`.
+
+CSP тут не помеха ни для одного из хостов: упакованный `index.html` не
+содержит CSP-meta-тега, `helmet` CSP из `server/index.js` относится только к
+HTTP-ответам самого сервера (не к локально упакованным ассетам Capacitor), и
+`capacitor.config.json` не задаёт `server.allowNavigation` (который в любом
+случае ограничивает только top-level навигацию, а не `fetch`/`Worker`).
+
+**Не проверено на реальном устройстве/эмуляторе** — в текущем окружении нет
+доступного iOS-устройства/симулятора и нет Android-эмулятора/подключённого
+устройства (Android SDK установлен, но без образов эмулятора). Вывод основан
+на статическом анализе кода onnxruntime-web/transformers.js, официальных
+таблицах поддержки WebAssembly SIMD (caniuse) и архитектуры Capacitor
+(`androidScheme: 'https'`, отсутствие CSP meta-тега в `index.html`, отсутствие
+кастомных WebView-оверрайдов в `MainActivity.java`), а не на подтверждённом
+запуске на телефоне.
