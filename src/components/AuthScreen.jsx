@@ -344,9 +344,16 @@ export default function AuthScreen({
             {cloudPasswordHint && <p className="astra-hint">{t('auth.cloudHint')} <em>{cloudPasswordHint}</em></p>}
             <div className="astra-field">
               <LockKeyhole size={18} className="astra-field-icon" />
-              <input value={cloudPassword} onChange={(event) => setCloudPassword(event.target.value)} type="password" autoFocus placeholder={t('auth.cloudPlaceholder')} />
+              <input
+                value={cloudPassword}
+                onChange={(event) => setCloudPassword(event.target.value)}
+                type="password"
+                autoFocus
+                placeholder={t('auth.cloudPlaceholder')}
+                aria-label={t('auth.cloudPlaceholder')}
+              />
             </div>
-            {error && <p className="astra-error">{error}</p>}
+            {error && <p className="astra-error" role="alert">{error}</p>}
             <button className="astra-cta" type="submit" disabled={pending || !cloudPassword}>
               <span>{pending ? t('auth.checking') : t('auth.verify')}</span><ArrowRight size={18} />
             </button>
@@ -366,9 +373,16 @@ export default function AuthScreen({
             <div className="astra-form-title"><ShieldCheck size={20} /> {t('auth.totpTitle')}</div>
             <div className="astra-field">
               <ShieldCheck size={18} className="astra-field-icon" />
-              <input value={totpCode} onChange={(event) => setTotpCode(event.target.value.replace(/\D/g, '').slice(0, 6))} inputMode="numeric" autoFocus placeholder={t('auth.totpCode')} />
+              <input
+                value={totpCode}
+                onChange={(event) => setTotpCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                inputMode="numeric"
+                autoFocus
+                placeholder={t('auth.totpCode')}
+                aria-label={t('auth.totpCode')}
+              />
             </div>
-            {error && <p className="astra-error">{error}</p>}
+            {error && <p className="astra-error" role="alert">{error}</p>}
             <button className="astra-cta" type="submit" disabled={pending || totpCode.length !== 6}>
               <span>{pending ? t('auth.checking') : t('auth.verify')}</span><ArrowRight size={18} />
             </button>
@@ -426,6 +440,7 @@ export default function AuthScreen({
                 inputMode="tel"
                 autoComplete="tel"
                 placeholder={t('auth.phonePlaceholder')}
+                aria-label={t('auth.phonePlaceholder')}
                 minLength={4}
                 required
                 autoFocus
@@ -444,6 +459,7 @@ export default function AuthScreen({
                   autoFocus
                   autoComplete="username"
                   placeholder={t('auth.loginOrUsername')}
+                  aria-label={t('auth.loginOrUsername')}
                 />
               </div>
               <div className="astra-field">
@@ -454,6 +470,7 @@ export default function AuthScreen({
                   type="password"
                   autoComplete="current-password"
                   placeholder={t('auth.password')}
+                  aria-label={t('auth.password')}
                 />
               </div>
             </>
@@ -478,6 +495,7 @@ export default function AuthScreen({
                   inputMode="numeric"
                   autoComplete="one-time-code"
                   placeholder="000000"
+                  aria-label={t('auth.enterCode')}
                   maxLength={6}
                   required
                   autoFocus
@@ -499,6 +517,7 @@ export default function AuthScreen({
                   onChange={(event) => setName(event.target.value.slice(0, 64))}
                   autoComplete="name"
                   placeholder={t('auth.nickname')}
+                  aria-label={t('auth.nickname')}
                   required
                   autoFocus
                 />
@@ -510,6 +529,7 @@ export default function AuthScreen({
                   onChange={(event) => setUsername(cleanUsername(event.target.value))}
                   autoComplete="username"
                   placeholder={t('auth.usernamePlaceholder')}
+                  aria-label={t('auth.usernamePlaceholder')}
                   minLength={3}
                   required
                 />
@@ -522,6 +542,7 @@ export default function AuthScreen({
                   type="password"
                   autoComplete="new-password"
                   placeholder={t('auth.password')}
+                  aria-label={t('auth.password')}
                   minLength={10}
                   required
                 />
@@ -534,6 +555,7 @@ export default function AuthScreen({
                   type="password"
                   autoComplete="new-password"
                   placeholder={t('auth.confirmPassword')}
+                  aria-label={t('auth.confirmPassword')}
                   minLength={10}
                   required
                 />
@@ -541,7 +563,7 @@ export default function AuthScreen({
             </>
           )}
 
-          {(formError || error) && <p className="astra-error">{formError || error}</p>}
+          {(formError || error) && <p className="astra-error" role="alert">{formError || error}</p>}
 
           <button
             className="astra-cta"

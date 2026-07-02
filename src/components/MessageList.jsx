@@ -58,10 +58,10 @@ function MessageListRow({
   if (row.type === 'typing') {
     return (
       <div className="message-list-virtual-row" style={style} {...ariaAttributes}>
-        <div className="typing-row">
-          <span />
-          <span />
-          <span />
+        <div className="typing-row" role="status" aria-live="polite">
+          <span aria-hidden="true" />
+          <span aria-hidden="true" />
+          <span aria-hidden="true" />
           {typingLabel(contact, row.typingUsers)}
         </div>
       </div>

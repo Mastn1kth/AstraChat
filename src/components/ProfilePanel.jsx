@@ -611,7 +611,14 @@ export default function ProfilePanel({
 
   return (
     <>
-    <aside className="side-panel profile-panel">
+    <aside
+      className="side-panel profile-panel"
+      role="dialog"
+      aria-label={title}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') onClose()
+      }}
+    >
       <header>
         <strong>{title}</strong>
         <button onClick={onClose} aria-label="Close profile">
@@ -694,6 +701,7 @@ export default function ProfilePanel({
                 className="add-member-btn"
                 onClick={() => setAddingMember((v) => !v)}
                 title={t('pp.addMember')}
+                aria-label={t('pp.addMember')}
               >
                 <Plus size={15} />
               </button>
@@ -762,6 +770,7 @@ export default function ProfilePanel({
                         className="remove-member-btn"
                         onClick={() => handleRemoveMember(m.id)}
                         title={t('pp.removeMember')}
+                        aria-label={`${t('pp.removeMember')}: ${m.name}`}
                       >
                         <Trash2 size={14} />
                       </button>
@@ -935,7 +944,7 @@ export default function ProfilePanel({
           <div className="group-members-header">
             <strong><Users size={15} /> Discussion group</strong>
             {discussion === undefined && (
-              <button type="button" className="icon-btn" onClick={loadDiscussion} title="Load discussion group">
+              <button type="button" className="icon-btn" onClick={loadDiscussion} title="Load discussion group" aria-label="Load discussion group">
                 <RefreshCw size={14} />
               </button>
             )}
@@ -1029,6 +1038,7 @@ export default function ProfilePanel({
                       className="invite-copy-btn"
                       onClick={() => copyInviteLink(link)}
                       title={t('pp.copyLink')}
+                      aria-label={t('pp.copyLink')}
                     >
                       {copiedInviteId === link.id ? <Check size={14} /> : <Copy size={14} />}
                     </button>
@@ -1036,6 +1046,7 @@ export default function ProfilePanel({
                       className="remove-member-btn"
                       onClick={() => handleRevokeInvite(link.id)}
                       title={t('pp.revokeLink')}
+                      aria-label={t('pp.revokeLink')}
                     >
                       <Trash2 size={14} />
                     </button>
@@ -1083,6 +1094,7 @@ export default function ProfilePanel({
                     <button
                       className="join-approve-btn"
                       title="Approve"
+                      aria-label={`Approve join request from ${req.user?.name || req.userId}`}
                       onClick={() => handleJoinRequest(req.userId, true)}
                     >
                       <Check size={14} />
@@ -1090,6 +1102,7 @@ export default function ProfilePanel({
                     <button
                       className="remove-member-btn"
                       title="Decline"
+                      aria-label={`Decline join request from ${req.user?.name || req.userId}`}
                       onClick={() => handleJoinRequest(req.userId, false)}
                     >
                       <X size={14} />

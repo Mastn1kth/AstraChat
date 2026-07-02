@@ -1,6 +1,8 @@
 import { Hash, Users, X } from 'lucide-react'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 
 export default function CreateSpaceModal({ mode, onCreate, onClose }) {
+  const trapRef = useFocusTrap(onClose)
   const isGroup = mode === 'group'
   const title = isGroup ? 'Create group' : 'Create channel'
   const description = isGroup
@@ -23,11 +25,11 @@ export default function CreateSpaceModal({ mode, onCreate, onClose }) {
   }
 
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true">
-      <form className="modal settings-modal" onSubmit={handleSubmit}>
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="create-space-modal-title">
+      <form className="modal settings-modal" onSubmit={handleSubmit} ref={trapRef}>
         <header>
           <div>
-            <strong>{title}</strong>
+            <strong id="create-space-modal-title">{title}</strong>
             <p>{description}</p>
           </div>
           <button type="button" onClick={onClose} aria-label={`Close ${title}`}>

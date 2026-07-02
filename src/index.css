@@ -3772,6 +3772,11 @@ textarea::placeholder {
 
 .story-compose-input::placeholder { color: rgba(255,255,255,.7); }
 
+.story-compose-input:focus-visible {
+  outline: 2px solid rgba(255,255,255,.85);
+  outline-offset: 2px;
+}
+
 .story-compose-colors {
   display: flex;
   gap: 6px;

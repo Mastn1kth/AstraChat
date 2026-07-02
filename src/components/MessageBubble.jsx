@@ -394,7 +394,12 @@ export default function MessageBubble({
       {reactionEntries.length > 0 && (
         <div className={`reaction-strip ${isOwn ? 'align-right' : ''}`}>
           {reactionEntries.map(([emoji, count]) => (
-            <button key={emoji} onClick={() => onReact(emoji)}>
+            <button
+              key={emoji}
+              type="button"
+              onClick={() => onReact(emoji)}
+              aria-label={`React with ${emoji} (${count})`}
+            >
               {emoji} {count}
             </button>
           ))}
@@ -448,9 +453,9 @@ export default function MessageBubble({
           <button className="danger" onClick={onDelete}>
             <Trash2 size={15} /> {t('msg.delete')}
           </button>
-          <div className="quick-reactions">
+          <div className="quick-reactions" role="group" aria-label="Quick reactions">
             {reactions.map((emoji) => (
-              <button key={emoji} onClick={() => onReact(emoji)}>
+              <button key={emoji} type="button" onClick={() => onReact(emoji)} aria-label={`React with ${emoji}`}>
                 {emoji}
               </button>
             ))}

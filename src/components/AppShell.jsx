@@ -704,7 +704,11 @@ export default function AppShell({
           }}
         />
       )}
-      {toast && <div className="toast">{toast}</div>}
+      {toast && (
+        <div className="toast" role="status" aria-live="polite" aria-atomic="true">
+          {toast}
+        </div>
+      )}
       <MediaViewer
         key={openMedia?.media?.id || openMedia?.media?.url || 'media-viewer'}
         media={openMedia?.media}

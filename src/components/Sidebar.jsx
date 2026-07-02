@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useConfirm } from '../hooks/useConfirm'
+import { useFocusTrap } from '../hooks/useFocusTrap'
 import { t } from '../i18n'
 import {
   Archive,
@@ -144,6 +145,7 @@ function StorageMenu({ onBack, onResetState }) {
                     onClick={() => handleClearLocal(item.key)}
                     disabled={clearing === item.key}
                     title={t('storage.clear')}
+                    aria-label={`${t('storage.clear')}: ${item.key}`}
                   >
                     <X size={14} />
                   </button>
@@ -189,6 +191,7 @@ function StorageMenu({ onBack, onResetState }) {
                     onClick={() => handleClearCache(entry.cacheKey)}
                     disabled={clearing === entry.cacheKey}
                     title={t('storage.clear')}
+                    aria-label={t('storage.clear')}
                   >
                     {clearing === entry.cacheKey ? <LoaderCircle size={14} className="spin" /> : <X size={14} />}
                   </button>
@@ -211,7 +214,11 @@ function StorageMenu({ onBack, onResetState }) {
           <p className="drawer-empty">{t('storage.calculating')}</p>
         )}
       </div>
-      {clearedMsg && <div className="toast storage-toast">{clearedMsg}</div>}
+      {clearedMsg && (
+        <div className="toast storage-toast" role="status" aria-live="polite" aria-atomic="true">
+          {clearedMsg}
+        </div>
+      )}
     </>
   )
 }
@@ -246,6 +253,7 @@ function WallComposer({ onSend }) {
 }
 
 function QuickShareModal({ onSend, onClose }) {
+  const trapRef = useFocusTrap(onClose)
   const [text, setText] = useState('')
   const [preview, setPreview] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -274,11 +282,11 @@ function QuickShareModal({ onSend, onClose }) {
   }
 
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true">
-      <form className="modal settings-modal quick-share-modal" onSubmit={handleSubmit}>
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="quick-share-modal-title">
+      <form className="modal settings-modal quick-share-modal" onSubmit={handleSubmit} ref={trapRef}>
         <header>
           <div>
-            <strong>{t('quickShare.title')}</strong>
+            <strong id="quick-share-modal-title">{t('quickShare.title')}</strong>
             <p>{t('quickShare.description')}</p>
           </div>
           <button type="button" onClick={onClose} aria-label={t('quickShare.close')}>
@@ -1399,7 +1407,12 @@ export default function Sidebar({
                         <small>{folder.chats.length} chats</small>
                       </span>
                     </button>
-                    <button type="button" onClick={() => startEditFolder(folder)} title="Edit folder">
+                    <button
+                      type="button"
+                      onClick={() => startEditFolder(folder)}
+                      title="Edit folder"
+                      aria-label={`Edit folder ${folder.title}`}
+                    >
                       <Pencil size={15} />
                     </button>
                     <button
@@ -1407,6 +1420,7 @@ export default function Sidebar({
                       className="danger-folder-button"
                       onClick={() => deleteFolder(folder.id)}
                       title="Delete folder"
+                      aria-label={`Delete folder ${folder.title}`}
                     >
                       <Trash2 size={15} />
                     </button>
@@ -2140,6 +2154,7 @@ export default function Sidebar({
             className={selectedFolderId === folder.id ? 'active' : ''}
             onClick={() => onSelectFolder(folder.id)}
             title={folder.title}
+            aria-current={selectedFolderId === folder.id ? 'true' : undefined}
           >
             {folder.custom && <Folder size={14} />}
             <strong>{folder.title}</strong>
@@ -2155,6 +2170,7 @@ export default function Sidebar({
             if (!menuOpen) onToggleMenu()
           }}
           title="Create folder"
+          aria-label="Create folder"
         >
           <Plus size={16} />
         </button>
@@ -2182,7 +2198,12 @@ export default function Sidebar({
         >
           <Pencil size={18} />
         </IconButton>
-        <IconButton label="Menu" onClick={menuOpen ? closeMenu : openMainMenu} className={menuOpen ? 'is-active' : ''}>
+        <IconButton
+          label="Menu"
+          onClick={menuOpen ? closeMenu : openMainMenu}
+          className={menuOpen ? 'is-active' : ''}
+          aria-expanded={menuOpen}
+        >
           <Menu size={20} />
         </IconButton>
       </header>
@@ -2215,7 +2236,8 @@ export default function Sidebar({
 
       <div className="search-row">
         <label className="search-field">
-          <Search size={17} />
+          <Search size={17} aria-hidden="true" />
+          <span className="visually-hidden">{t('search.chats')}</span>
           <input
             value={search}
             onChange={(event) => onSearch(event.target.value)}

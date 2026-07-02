@@ -823,9 +823,17 @@ export default function Composer({
 
       {emojiOpen && (
         <div className="emoji-popover" ref={emojiPopoverRef}>
-          <div className="emoji-tabs">
+          <div className="emoji-tabs" role="tablist" aria-label="Attachment type">
             {['emoji', 'custom', 'sticker', 'gif', 'share'].map((tab) => (
-              <button key={tab} className={panelTab === tab ? 'active' : ''} onClick={() => setPanelTab(tab)}>
+              <button
+                key={tab}
+                type="button"
+                role="tab"
+                aria-selected={panelTab === tab}
+                aria-label={tab === 'emoji' ? 'Emoji' : tab === 'custom' ? 'Custom emoji' : tab === 'sticker' ? 'Stickers' : tab === 'gif' ? 'GIFs' : 'Share'}
+                className={panelTab === tab ? 'active' : ''}
+                onClick={() => setPanelTab(tab)}
+              >
                 {tab === 'emoji' ? '😀' : tab === 'custom' ? '⭐' : tab === 'sticker' ? '🎭' : tab === 'gif' ? 'GIF' : '📎'}
               </button>
             ))}
@@ -942,12 +950,12 @@ export default function Composer({
 
       {formatBarOpen && !recording && (
         <div className="format-bar">
-          <button type="button" title="Bold (Ctrl+B)" onClick={() => wrapSelection('**', '**')}><Bold size={15} /></button>
-          <button type="button" title="Italic (Ctrl+I)" onClick={() => wrapSelection('_', '_')}><Italic size={15} /></button>
-          <button type="button" title="Code (Ctrl+E)" onClick={() => wrapSelection('`', '`')}><Code size={15} /></button>
-          <button type="button" title="Spoiler (Ctrl+Shift+X)" onClick={() => wrapSelection('||', '||')}><Strikethrough size={15} /></button>
-          <button type="button" title="Quote (Ctrl+Shift+U)" onClick={() => wrapSelection('> ', '')}>
-            <span className="format-quote-icon">&ldquo;</span>
+          <button type="button" title="Bold (Ctrl+B)" aria-label="Bold" onClick={() => wrapSelection('**', '**')}><Bold size={15} /></button>
+          <button type="button" title="Italic (Ctrl+I)" aria-label="Italic" onClick={() => wrapSelection('_', '_')}><Italic size={15} /></button>
+          <button type="button" title="Code (Ctrl+E)" aria-label="Code" onClick={() => wrapSelection('`', '`')}><Code size={15} /></button>
+          <button type="button" title="Spoiler (Ctrl+Shift+X)" aria-label="Spoiler" onClick={() => wrapSelection('||', '||')}><Strikethrough size={15} /></button>
+          <button type="button" title="Quote (Ctrl+Shift+U)" aria-label="Quote" onClick={() => wrapSelection('> ', '')}>
+            <span className="format-quote-icon" aria-hidden="true">&ldquo;</span>
           </button>
           <span className="format-bar-hint">Ctrl+B · Ctrl+I · Ctrl+E</span>
         </div>
@@ -1030,10 +1038,12 @@ export default function Composer({
             }}
           />
           {mentionQuery && mentionSuggestions.length > 0 && (
-            <ul className="mention-popup">
+            <ul className="mention-popup" role="listbox" aria-label="Mention suggestions">
               {mentionSuggestions.map((m, i) => (
                 <li
                   key={m.id}
+                  role="option"
+                  aria-selected={i === mentionIndex}
                   className={i === mentionIndex ? 'active' : ''}
                   onMouseDown={(e) => { e.preventDefault(); insertMention(m) }}
                 >
@@ -1049,6 +1059,7 @@ export default function Composer({
             onChange={(event) => handleValueChange(event.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={t('composer.placeholder')}
+            aria-label={t('composer.placeholder')}
             rows={1}
           />
           {canSend ? (

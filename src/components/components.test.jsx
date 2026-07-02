@@ -101,6 +101,87 @@ describe('React components', () => {
     expect(html).toContain('icon-button')
   })
 
+  it('forwards extra props (e.g. aria-expanded) through IconButton', () => {
+    const html = renderToStaticMarkup(
+      <IconButton label="Menu" aria-expanded="true">
+        <Pin size={16} />
+      </IconButton>,
+    )
+
+    expect(html).toContain('aria-expanded="true"')
+  })
+
+  // ── Accessibility: keyboard-operable chat rows ─────────────
+
+  it('exposes ChatItem rows as keyboard-focusable buttons with a descriptive label', () => {
+    const html = renderToStaticMarkup(
+      <ChatItem
+        selected={false}
+        canPinInFolder={false}
+        onSelect={vi.fn()}
+        onTogglePin={vi.fn()}
+        onToggleMute={vi.fn()}
+        onArchive={vi.fn()}
+        onToggleFolderPin={vi.fn()}
+        chat={{
+          pinned: true,
+          muted: false,
+          archived: false,
+          unread: 2,
+          lastMessageText: 'Hey there',
+          lastMessageTime: '2026-06-08T10:00:00Z',
+          contact: {
+            id: 'contact-1',
+            type: 'private',
+            name: 'Dana',
+            avatar: 'D',
+            color: '#123456',
+            status: 'online',
+            lastSeen: 'online',
+          },
+        }}
+      />,
+    )
+
+    expect(html).toContain('role="button"')
+    expect(html).toContain('tabindex="0"')
+    expect(html).toContain('aria-label="Dana, pinned, 2 unread"')
+  })
+
+  it('gives ChatItem action buttons accessible names beyond the icon', () => {
+    const html = renderToStaticMarkup(
+      <ChatItem
+        selected={false}
+        canPinInFolder={false}
+        onSelect={vi.fn()}
+        onTogglePin={vi.fn()}
+        onToggleMute={vi.fn()}
+        onArchive={vi.fn()}
+        onToggleFolderPin={vi.fn()}
+        chat={{
+          pinned: false,
+          muted: false,
+          archived: false,
+          unread: 0,
+          lastMessageText: '',
+          lastMessageTime: '2026-06-08T10:00:00Z',
+          contact: {
+            id: 'contact-2',
+            type: 'private',
+            name: 'Eli',
+            avatar: 'E',
+            color: '#654321',
+            status: 'offline',
+            lastSeen: 'last seen recently',
+          },
+        }}
+      />,
+    )
+
+    // Pin/Mute/Archive icon-only buttons must carry aria-label, not just title.
+    expect(html.match(/aria-label="[^"]+"/g)?.length).toBeGreaterThanOrEqual(4)
+  })
+
   it('renders message states for deleted and selected messages', () => {
     const html = renderToStaticMarkup(
       <MessageBubble
