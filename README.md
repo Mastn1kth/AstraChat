@@ -41,7 +41,6 @@ AstraChat — современный мессенджер с акцентом н
 
 ## Документация
 
-- [Source prompt](docs/source-prompt.md) — оригинальный продуктовый промпт.
 - [Roadmap](docs/roadmap.md) — план от MVP до продакшн-мессенджера.
 - [Data model](docs/data-model.md) — модель данных и границы безопасности.
 - [Security posture](docs/security.md) — честные утверждения о безопасности.
